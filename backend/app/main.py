@@ -150,8 +150,11 @@ async def setup_ocr_backend(payload: Dict[str, Any]) -> Any:
 
     if stream:
         async def event_gen():
-            async for evt in stream_setup_ocr_engine(engine_id, settings, action=action):  # type: ignore
-                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            try:
+                async for evt in stream_setup_ocr_engine(engine_id, settings, action=action):  # type: ignore
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'percent': 100, 'stage': '执行异常', 'message': str(exc)}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -166,8 +169,11 @@ async def install_harness_cli(payload: Dict[str, Any]) -> Any:
 
     if stream:
         async def event_gen():
-            async for evt in stream_manage_cli_harness(cli_name, action=action):
-                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            try:
+                async for evt in stream_manage_cli_harness(cli_name, action=action):
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'percent': 100, 'stage': '执行异常', 'message': str(exc)}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -181,8 +187,11 @@ async def uninstall_harness_cli(payload: Dict[str, Any]) -> Any:
 
     if stream:
         async def event_gen():
-            async for evt in stream_manage_cli_harness(cli_name, action="uninstall"):
-                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            try:
+                async for evt in stream_manage_cli_harness(cli_name, action="uninstall"):
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'percent': 100, 'stage': '执行异常', 'message': str(exc)}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 

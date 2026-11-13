@@ -5,9 +5,11 @@ import base64
 import importlib.util
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -278,27 +280,34 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
 
 
 async def _run_silent_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 300) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd) if cwd else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        creationflags=WIN_NO_WINDOW,
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    out = (stdout or b"").decode("utf-8", errors="replace").strip()
-    return proc.returncode or 0, out
+    def _exec() -> tuple[int, str]:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=WIN_NO_WINDOW,
+            timeout=timeout,
+            check=False,
+        )
+        out = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        return proc.returncode, out
+
+    return await asyncio.to_thread(_exec)
 
 
 async def _start_silent_bg(cmd: List[str], cwd: Optional[Path] = None) -> int:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd) if cwd else None,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        creationflags=WIN_NO_WINDOW,
-    )
-    return proc.pid
+    def _spawn() -> int:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=WIN_NO_WINDOW,
+        )
+        return proc.pid
+
+    return await asyncio.to_thread(_spawn)
 
 
 async def _stream_silent_cmd(
@@ -310,15 +319,29 @@ async def _stream_silent_cmd(
     cwd: Optional[Path] = None,
     timeout: int = 600,
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Run a subprocess silently (no terminal window) while yielding real-time progress and logs."""
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
+    """Run a subprocess silently (loop-agnostic thread + Popen) while yielding real-time progress and logs."""
+    proc = subprocess.Popen(
+        cmd,
         cwd=str(cwd) if cwd else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         creationflags=WIN_NO_WINDOW,
     )
+    q: "queue.Queue[Optional[str]]" = queue.Queue()
     lines: List[str] = []
+
+    def _reader() -> None:
+        try:
+            assert proc.stdout is not None
+            for raw_line in iter(proc.stdout.readline, b""):
+                text = raw_line.decode("utf-8", errors="replace").strip()
+                if text:
+                    q.put(text)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
     pct = float(start_pct)
     started_at = time.monotonic()
     deadline = started_at + timeout
@@ -350,24 +373,19 @@ async def _stream_silent_cmd(
             return
 
         try:
-            raw_line = await asyncio.wait_for(
-                proc.stdout.readline(),  # type: ignore[union-attr]
-                timeout=min(1.2, remaining),
-            )
-            if not raw_line:
+            item = await asyncio.to_thread(q.get, True, min(1.0, remaining))
+            if item is None:
                 break
-            text = raw_line.decode("utf-8", errors="replace").strip()
-            if text:
-                lines.append(text)
-                pct = min(float(end_pct - 2), pct + 1.8)
-                yield {
-                    "type": "progress",
-                    "percent": int(round(pct)),
-                    "stage": stage_label,
-                    "message": text[:95],
-                    "log_line": text,
-                }
-        except asyncio.TimeoutError:
+            lines.append(item)
+            pct = min(float(end_pct - 2), pct + 1.8)
+            yield {
+                "type": "progress",
+                "percent": int(round(pct)),
+                "stage": stage_label,
+                "message": item[:95],
+                "log_line": item,
+            }
+        except queue.Empty:
             elapsed = int(time.monotonic() - started_at)
             pct = min(float(end_pct - 3), pct + 0.8)
             yield {
@@ -378,7 +396,7 @@ async def _stream_silent_cmd(
                 "log_line": "",
             }
 
-    rc = await proc.wait()
+    rc = await asyncio.to_thread(proc.wait)
     state["returncode"] = rc if rc is not None else 0
     state["output"] = "\n".join(lines)[-2000:]
 

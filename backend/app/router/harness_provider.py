@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -104,13 +106,27 @@ async def _stream_harness_cmd(
     stage_label: str,
     timeout: int = 300,
 ) -> AsyncIterator[Dict[str, Any]]:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         creationflags=WIN_NO_WINDOW,
     )
+    q: "queue.Queue[Optional[str]]" = queue.Queue()
     lines: List[str] = []
+
+    def _reader() -> None:
+        try:
+            assert proc.stdout is not None
+            for raw_line in iter(proc.stdout.readline, b""):
+                text = raw_line.decode("utf-8", errors="replace").strip()
+                if text:
+                    q.put(text)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
     pct = float(start_pct)
     started_at = time.monotonic()
     deadline = started_at + timeout
@@ -135,24 +151,19 @@ async def _stream_harness_cmd(
             return
 
         try:
-            raw_line = await asyncio.wait_for(
-                proc.stdout.readline(),  # type: ignore[union-attr]
-                timeout=min(1.2, remaining),
-            )
-            if not raw_line:
+            item = await asyncio.to_thread(q.get, True, min(1.0, remaining))
+            if item is None:
                 break
-            text = raw_line.decode("utf-8", errors="replace").strip()
-            if text:
-                lines.append(text)
-                pct = min(float(end_pct - 2), pct + 2.2)
-                yield {
-                    "type": "progress",
-                    "percent": int(round(pct)),
-                    "stage": stage_label,
-                    "message": text[:95],
-                    "log_line": text,
-                }
-        except asyncio.TimeoutError:
+            lines.append(item)
+            pct = min(float(end_pct - 2), pct + 2.2)
+            yield {
+                "type": "progress",
+                "percent": int(round(pct)),
+                "stage": stage_label,
+                "message": item[:95],
+                "log_line": item,
+            }
+        except queue.Empty:
             elapsed = int(time.monotonic() - started_at)
             pct = min(float(end_pct - 3), pct + 1.0)
             yield {
@@ -163,7 +174,7 @@ async def _stream_harness_cmd(
                 "log_line": "",
             }
 
-    rc = await proc.wait()
+    rc = await asyncio.to_thread(proc.wait)
     state["returncode"] = rc if rc is not None else 0
     state["output"] = "\n".join(lines)[-1500:]
 
@@ -446,19 +457,20 @@ async def run_cli_harness(
             tmp_path = tf.name
         try:
             cmd_str = tmpl.replace("{prompt_file}", f'"{tmp_path}"')
-            proc = await asyncio.create_subprocess_shell(
+            res = await asyncio.to_thread(
+                subprocess.run,
                 cmd_str,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=env,
                 creationflags=WIN_NO_WINDOW,
+                timeout=harness_config.timeout_seconds,
+                check=False,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=harness_config.timeout_seconds
-            )
-            out_text = stdout.decode("utf-8", errors="replace").strip()
-            if proc.returncode != 0 and not out_text:
-                raise RuntimeError(stderr.decode("utf-8", errors="replace"))
+            out_text = (res.stdout or b"").decode("utf-8", errors="replace").strip()
+            if res.returncode != 0 and not out_text:
+                raise RuntimeError((res.stderr or b"").decode("utf-8", errors="replace"))
             return out_text
         finally:
             try:
@@ -480,23 +492,22 @@ async def run_cli_harness(
     else:  # gemini
         cmd = [exe]
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    res = await asyncio.to_thread(
+        subprocess.run,
+        cmd,
+        input=combined_prompt.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=env,
         creationflags=WIN_NO_WINDOW,
-    )
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(input=combined_prompt.encode("utf-8")),
         timeout=harness_config.timeout_seconds,
+        check=False,
     )
 
-    out_text = stdout.decode("utf-8", errors="replace").strip()
-    err_text = stderr.decode("utf-8", errors="replace").strip()
-    if proc.returncode != 0 and not out_text:
-        raise RuntimeError(f"{preferred} CLI 执行失败 (code={proc.returncode}): {err_text[:400]}")
+    out_text = (res.stdout or b"").decode("utf-8", errors="replace").strip()
+    err_text = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+    if res.returncode != 0 and not out_text:
+        raise RuntimeError(f"{preferred} CLI 执行失败 (code={res.returncode}): {err_text[:400]}")
     if not out_text:
         raise RuntimeError(f"{preferred} CLI 未返回输出内容: {err_text[:200]}")
     return out_text
