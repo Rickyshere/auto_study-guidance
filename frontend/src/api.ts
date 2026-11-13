@@ -309,4 +309,59 @@ export const api = {
     }
     return finalPkg;
   },
+
+  getExportPdfUrl: (
+    projectId: string,
+    opts: {
+      doc_type: 'quiz' | 'study_guide' | 'cheatsheet';
+      paper_size: 'a4' | 'a3';
+      include_answers: boolean;
+    }
+  ) =>
+    `/api/projects/${encodeURIComponent(projectId)}/export-pdf?doc_type=${encodeURIComponent(
+      opts.doc_type
+    )}&paper_size=${encodeURIComponent(opts.paper_size)}&include_answers=${opts.include_answers}`,
+
+  exportPdf: async (
+    projectId: string,
+    opts: {
+      doc_type: 'quiz' | 'study_guide' | 'cheatsheet';
+      paper_size: 'a4' | 'a3';
+      include_answers: boolean;
+      fallbackFilename?: string;
+    }
+  ): Promise<void> => {
+    const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/export-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        doc_type: opts.doc_type,
+        paper_size: opts.paper_size,
+        include_answers: opts.include_answers,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(detail || `PDF 导出失败 (${res.status})`);
+    }
+    const blob = await res.blob();
+    let filename = opts.fallbackFilename || `study_export_${opts.paper_size}.pdf`;
+    const disp = res.headers.get('Content-Disposition') || '';
+    const utf8Match = disp.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+      try {
+        filename = decodeURIComponent(utf8Match[1]);
+      } catch {
+        // fallback to default filename
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  },
 };

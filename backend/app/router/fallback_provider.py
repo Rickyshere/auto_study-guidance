@@ -221,10 +221,47 @@ class HeuristicStudyEngine:
                         lines.append(f"> 图片文字提取：{asset.ocr_text[:200]}")
                     lines.append("")
 
-            if preset_id in ("self_study_guide", "sync_practice"):
+            if preset_id in ("self_study_guide", "sync_practice") or blueprint.deliverables.notes_style == "guided_learning":
+                ex_term = defs[0][0] if defs else (ch.key_terms[0] if ch.key_terms else ch.title)
+                ex_desc = defs[0][1][:160] if defs else (points[0][:160] if points else ch.summary_preview[:160])
                 lines.extend([
+                    f"### 典型例题与深度解析（第 {idx} 章）",
+                    "",
+                    f"**【例题 {idx}.1｜概念剖析与原理应用】** 结合本节内容，请准确解释 **{ex_term}** 的核心定义、解决的关键问题及其前提条件。",
+                    "",
+                    f"> **【审题思路】** 先定位关键词“{ex_term}”在《{ch.title}》（第 {ch.start_page}-{ch.end_page} 页）中的原始定义，再从“作用机制”与“易混边界”两方面分点作答。",
+                    f">",
+                    f"> **【详细解答】** 根据原文：{ex_desc}。在实际应用与解题中，必须明确其输入/约束关系，切忌脱离上下文直接套用结论。",
+                    f">",
+                    f"> **【易错点拨】** 切勿将 **{ex_term}** 与同章相邻概念混淆；作答时建议先给定义，再补充适用场景或公式条件。",
+                    "",
                     "### 易错点与思考提示",
                     f"- 请重点核对 **{ch.title}** 中各概念之间的因果关系与前提约束条件，切勿混淆相似术语。",
+                    "",
+                ])
+
+        if preset_id == "self_study_guide" or blueprint.deliverables.notes_style == "guided_learning":
+            lines.extend([
+                "## 综合典型例题精讲与解题示范",
+                "",
+                "以下综合例题覆盖所选章节的高频考点与推导链路，已包含完整审题思路与分步解析（导出 PDF 时将同步完整排版）：",
+                "",
+            ])
+            sample_chapters = selected_chapters[:4]
+            for ex_idx, ch in enumerate(sample_chapters, start=1):
+                c_defs = _extract_definitions(ch)
+                c_pts = _extract_sentences_and_points(ch)
+                k1 = c_defs[0][0] if c_defs else (ch.key_terms[0] if ch.key_terms else ch.title)
+                v1 = c_defs[0][1][:150] if c_defs else (c_pts[0][:150] if c_pts else ch.summary_preview[:150])
+                k2 = c_defs[1][0] if len(c_defs) > 1 else (ch.key_terms[1] if len(ch.key_terms) > 1 else "核心机制")
+                lines.extend([
+                    f"**【综合例 {ex_idx}｜{ch.title}（P{ch.start_page}-{ch.end_page}）】** 试辨析 **{k1}** 与 **{k2}** 的核心作用与内在联系，并说明考试/实践中的典型判别依据。",
+                    "",
+                    f"> **【题目分析】** 本题考查对《{ch.title}》核心概念的迁移理解，需紧扣教材定义而非死记术语名称。",
+                    f">",
+                    f"> **【规范解答】** ① **{k1}**：{v1}。② 与 **{k2}** 的配合关系：前者侧重核心变换/约束，后者负责协同提升整体性能或稳定训练过程，二者缺一不可。",
+                    f">",
+                    f"> **【易错提醒】** 解答对比题时常见失分点是只写优点不写局限/前提条件，请务必点明适用边界与原文出处（P{ch.start_page}-{ch.end_page}）。",
                     "",
                 ])
 

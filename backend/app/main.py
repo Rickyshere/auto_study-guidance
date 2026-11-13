@@ -6,10 +6,12 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECTS_DIR, get_project_dir, load_settings, save_settings
 from app.parsers import SUPPORTED_EXTENSIONS, parse_uploaded_file
@@ -51,6 +53,12 @@ from app.workflows import (
     negotiate_study_blueprint,
 )
 from app.workflows.demo_project import create_demo_courseware_project
+from app.workflows.generator import normalize_markdown_math
+from app.workflows.pdf_exporter import (
+    export_cheatsheet_pdf_bytes,
+    export_quiz_pdf_bytes,
+    export_study_guide_pdf_bytes,
+)
 
 app = FastAPI(
     title="Auto Study Guidance API",
@@ -94,7 +102,13 @@ def _save_blueprint(project_id: str, blueprint: StudyBlueprint) -> None:
 def _load_package(project_id: str) -> Optional[StudyPackage]:
     pkg_path = PROJECTS_DIR / project_id / "study_package.json"
     if pkg_path.exists():
-        return StudyPackage.model_validate_json(pkg_path.read_text(encoding="utf-8"))
+        pkg = StudyPackage.model_validate_json(pkg_path.read_text(encoding="utf-8"))
+        return pkg.model_copy(
+            update={
+                "study_notes_markdown": normalize_markdown_math(pkg.study_notes_markdown),
+                "cheatsheet_markdown": normalize_markdown_math(pkg.cheatsheet_markdown),
+            }
+        )
     return None
 
 
@@ -492,3 +506,93 @@ async def quick_generate_from_preset(project_id: str, req: QuickGenerateRequest)
     package = await generate_study_package(doc_ir, blueprint, router)
     _save_package(project_id, package)
     return package
+
+
+def _build_pdf_export_response(
+    project_id: str,
+    doc_type: str,
+    paper_size: str,
+    include_answers: bool,
+) -> Response:
+    doc_ir = _load_project_ir(project_id)
+    package = _load_package(project_id)
+    if not package:
+        raise HTTPException(status_code=404, detail="该项目尚未生成学习资料包，请先完成生成")
+
+    size = "a3" if paper_size.lower() == "a3" else "a4"
+    assets_dir = PROJECTS_DIR / project_id / "assets"
+    base_name = Path(doc_ir.filename).stem
+
+    if doc_type == "quiz":
+        if not package.quiz_paper.questions:
+            raise HTTPException(status_code=400, detail="当前方案未生成题库试题")
+        pdf_bytes = export_quiz_pdf_bytes(
+            doc_ir,
+            package,
+            paper_size=size,  # type: ignore[arg-type]
+            include_answers=include_answers,
+            assets_dir=assets_dir,
+        )
+        suffix = f"_{size.upper()}{'双栏密封线试卷' if size == 'a3' else '标准试卷'}{'_含答案解析' if include_answers else ''}.pdf"
+    elif doc_type == "cheatsheet":
+        pdf_bytes = export_cheatsheet_pdf_bytes(
+            doc_ir,
+            package,
+            paper_size=size,  # type: ignore[arg-type]
+            assets_dir=assets_dir,
+        )
+        suffix = f"_{size.upper()}考前速记表.pdf"
+    else:
+        pdf_bytes = export_study_guide_pdf_bytes(
+            doc_ir,
+            package,
+            paper_size=size,  # type: ignore[arg-type]
+            include_answers=include_answers,
+            assets_dir=assets_dir,
+        )
+        suffix = f"_{size.upper()}自学案印刷讲义_含例题解析.pdf"
+
+    filename = f"{base_name}{suffix}"
+    encoded_name = quote(filename)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"export.pdf\"; filename*=UTF-8''{encoded_name}"
+        },
+    )
+
+
+@app.get("/api/projects/{project_id}/export-pdf")
+async def export_project_pdf_get(
+    project_id: str,
+    doc_type: str = Query("quiz"),
+    paper_size: str = Query("a4"),
+    include_answers: bool = Query(True),
+) -> Response:
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers)
+
+
+@app.post("/api/projects/{project_id}/export-pdf")
+async def export_project_pdf_post(project_id: str, payload: Dict[str, Any]) -> Response:
+    doc_type = str(payload.get("doc_type") or "quiz")
+    paper_size = str(payload.get("paper_size") or "a4")
+    include_answers = bool(payload.get("include_answers", True))
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers)
+
+
+# Serve built frontend bundle on single port (8000) for standalone desktop EXE & production use
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if FRONTEND_DIST_DIR.exists() and (FRONTEND_DIST_DIR / "index.html").exists():
+    assets_sub = FRONTEND_DIST_DIR / "assets"
+    if assets_sub.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_sub)), name="frontend_assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> FileResponse:
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        candidate = FRONTEND_DIST_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")

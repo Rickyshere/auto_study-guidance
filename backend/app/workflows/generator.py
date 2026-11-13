@@ -16,6 +16,77 @@ from app.schemas import (
 
 ProgressCallback = Optional[Callable[[str, int, str], Awaitable[None]]]
 
+_LATEX_CMD_RE = re.compile(
+    r"\\(?:frac|dfrac|sigma|theta|eta|lambda|alpha|beta|gamma|delta|nabla|partial|sqrt|"
+    r"left|right|lfloor|rfloor|cdot|times|mathrm|text|infty|leftarrow|rightarrow|"
+    r"parallel|sum|int|log|exp|tanh|le|ge|neq|approx)"
+)
+
+
+def _replace_table_pipes_in_math(line: str) -> str:
+    if not line.lstrip().startswith("|"):
+        return line
+
+    def _fix_inline(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        inner = inner.replace(r"\|", r"\parallel ")
+        return f"${inner}$"
+
+    return re.sub(r"(?<!\$)\$(?!\$)([^\n$]+?)(?<!\$)\$(?!\$)", _fix_inline, line)
+
+
+def normalize_markdown_math(text: str) -> str:
+    """Normalize LaTeX delimiters for remark-math/rehype-katex and escape table math pipes."""
+    if not text:
+        return text
+
+    # Convert \[ ... \] display math to $$ ... $$
+    out = re.sub(
+        r"\\\[\s*([\s\S]*?)\s*\\\]",
+        lambda m: f"\n$$\n{m.group(1).strip()}\n$$\n",
+        text,
+    )
+    # Convert \( ... \) inline math to $...$ (trimmed inside $)
+    out = re.sub(
+        r"\\\(\s*([\s\S]*?)\s*\\\)",
+        lambda m: f"${m.group(1).strip()}$",
+        out,
+    )
+
+    # Fix already-unescaped parenthesized formulas that contain LaTeX commands / ^{ / _{
+    out_lines: List[str] = []
+    for line in out.splitlines():
+        if "`" not in line and "$" not in line and _LATEX_CMD_RE.search(line):
+            # Convert balanced (...) chunks containing LaTeX commands when not preceded by a word char or \
+            chars: List[str] = []
+            i = 0
+            n = len(line)
+            while i < n:
+                ch = line[i]
+                prev = line[i - 1] if i > 0 else ""
+                if ch == "(" and prev not in ("\\", "$") and not prev.isalnum():
+                    depth = 1
+                    j = i + 1
+                    while j < n and depth > 0:
+                        if line[j] == "(":
+                            depth += 1
+                        elif line[j] == ")":
+                            depth -= 1
+                        j += 1
+                    if depth == 0:
+                        inner = line[i + 1 : j - 1]
+                        if _LATEX_CMD_RE.search(inner) or "^{" in inner or "_{" in inner:
+                            chars.append(f"${inner.strip()}$")
+                            i = j
+                            continue
+                chars.append(ch)
+                i += 1
+            line = "".join(chars)
+        line = _replace_table_pipes_in_math(line)
+        out_lines.append(line)
+
+    return "\n".join(out_lines)
+
 
 def _collect_chapters_context(chapters: List[ChapterNode], max_chars: int = 24000) -> str:
     blocks: List[str] = []
@@ -63,12 +134,12 @@ async def generate_study_package(
         notes_sys = (
             "你是一位顶尖学科导师与教研专家。请严格依据提供的教材/课件原文内容，生成结构化学习笔记/导学案。\n"
             "要求：\n"
-            "1. 使用规范的 Markdown 排版（标题层级、对比表格、要点列表、LaTeX 公式使用 $...$ 或 $$...$$）。\n"
+            "1. 使用规范的 Markdown 排版（标题层级、对比表格、要点列表）；所有数学公式必须严格使用 `$...$`（行内）或 `$$...$$`（独立成行），切勿使用 `\\(...\\)` 或 `\\[...\\]`；表格内范数请写 `\\parallel W \\parallel`。\n"
             "2. 忠于原文，切勿编造教材中没有的结论；若原文附有配图 Markdown 链接，请在合适段落直接内联引用。\n"
             f"3. 严格贴合模板类型【{blueprint.preset_name}】（风格：{d.notes_style}，难度：{blueprint.target_difficulty}）。\n"
-            "   - 若为【自学案】：必须包含 学习目标与重难点、前置导读、核心概念精讲（带通俗类比）、典型例题与易错辨析。\n"
-            "   - 若为【随堂练习】：输出简明扼要的“当堂核心要点速览”。\n"
-            "   - 若为【同步练习】：输出“章节知识框架梳理与易错点清单”。\n"
+            "   - 若为【自学案】（或 guided_learning）：必须包含 学习目标与重难点、前置导读、核心概念精讲（带通俗类比）、不少于 4 道结构化的【典型例题与深度解析】（涵盖概念辨析/公式推导或计算/应用分析，每道例题均须严格包含：**【题目】**、**【思路引导】**、**【详细解答】**、**【易错点拨】**）、以及易错辨析清单与自学自检清单。\n"
+            "   - 若为【随堂练习】：输出简明扼要的“当堂核心要点速览”及 1-2 道课堂示范例题与解析。\n"
+            "   - 若为【同步练习】：输出“章节知识框架梳理、典型例题示范与易错点清单”。\n"
             "   - 若为【自测卷】：输出“考前核心考点复盘提纲”。"
         )
         notes_user = (
@@ -78,7 +149,9 @@ async def generate_study_package(
             f"教材/课件原文内容：\n{context_text}"
         )
         res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
-        study_notes_md = res_notes or HeuristicStudyEngine.generate_notes_from_ir(document_ir, blueprint)
+        study_notes_md = normalize_markdown_math(
+            res_notes or HeuristicStudyEngine.generate_notes_from_ir(document_ir, blueprint)
+        )
 
     # 2. Cheat Sheet
     cheatsheet_md = ""
@@ -87,13 +160,17 @@ async def generate_study_package(
             await progress_cb("cheatsheet", 45, "正在浓缩考前速记表 (Cheat Sheet)...")
         cs_sys = (
             "请根据以下教材/课件原文，提炼一份高密度、适合考前突击复盘的《考前速记表 (Cheat Sheet)》。\n"
-            "要求包含：1) 核心概念/公式速查 Markdown 表格；2) 易混概念对比；3) 考前必背 Checklist。"
+            "格式严格要求：所有行内/块级数学公式必须使用 `$...$` 或 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；"
+            "Markdown 表格内的范数请用 `\\parallel W \\parallel^2` 而非 `\\|W\\|^2`，并控制单元格文本紧凑以免表格过宽溢出。\n"
+            "内容要求包含：1) 核心概念/公式速查 Markdown 表格；2) 易混概念对比；3) 考前必背 Checklist。"
         )
         cs_user = (
             f"密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
         )
         res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
-        cheatsheet_md = res_cs or HeuristicStudyEngine.generate_cheatsheet_from_ir(document_ir, blueprint)
+        cheatsheet_md = normalize_markdown_math(
+            res_cs or HeuristicStudyEngine.generate_cheatsheet_from_ir(document_ir, blueprint)
+        )
 
     # 3. Quiz Paper
     quiz_paper: QuizPaper

@@ -276,3 +276,98 @@ def test_vram_ocr_dsh_and_ai_fill():
         assert bp["ai_feedback_message"]
     finally:
         client.delete(f"/api/projects/{pid}")
+
+
+def test_math_normalization_study_guide_examples_and_pdf_exports():
+    from app.workflows.generator import normalize_markdown_math
+
+    raw_sample = (
+        r"| 模块 | 公式 | 提示 |" + "\n"
+        r"|---|---|---|" + "\n"
+        r"| 感知机 | \(h^{(l)}=\sigma(W^{(l)}h^{(l-1)}+b^{(l)})\) | \(\eta\) 学习率 |" + "\n"
+        r"| L2 | \(L_{\text{total}}=L+\lambda\|W\|^2\) | 范数 |" + "\n"
+        r"| 裸公式 | (\frac{\partial L}{\partial W}=1) | 完成 |" + "\n"
+        r"\[H_{out}=\left\lfloor\frac{H-K+2P}{S}\right\rfloor+1\]"
+    )
+    norm = normalize_markdown_math(raw_sample)
+    assert r"\(" not in norm
+    assert r"\[" not in norm
+    assert "$h^{(l)}=\\sigma(W^{(l)}h^{(l-1)}+b^{(l)})$" in norm
+    assert r"\parallel W\parallel ^2" in norm
+    assert "$\\frac{\\partial L}{\\partial W}=1$" in norm
+    assert "$$" in norm
+
+    demo = client.post("/api/projects/demo")
+    assert demo.status_code == 200
+    pid = demo.json()["document_ir"]["project_id"]
+    try:
+        from app.router.fallback_provider import HeuristicStudyEngine
+        from app.schemas import DocumentIR, StudyBlueprint, StudyPackage
+
+        doc_ir = DocumentIR.model_validate(demo.json()["document_ir"])
+        bp = StudyBlueprint.model_validate(demo.json()["blueprint"])
+        heuristic_notes = HeuristicStudyEngine.generate_notes_from_ir(doc_ir, bp)
+        assert "典型例题" in heuristic_notes
+        assert "综合典型例题精讲" in heuristic_notes
+
+        # Generate offline deterministic package via heuristic settings to avoid external network flakiness in unit test
+        quiz_paper = HeuristicStudyEngine.generate_quiz_from_ir(doc_ir, bp)
+        cheatsheet = HeuristicStudyEngine.generate_cheatsheet_from_ir(doc_ir, bp)
+        mindmap = HeuristicStudyEngine.generate_mindmap_from_ir(doc_ir, bp)
+        pkg = StudyPackage(
+            project_id=pid,
+            blueprint_used=bp.model_copy(update={"confirmed": True}),
+            routing_trace={"notes_and_cheatsheet": "heuristic"},
+            study_notes_markdown=heuristic_notes,
+            cheatsheet_markdown=cheatsheet,
+            quiz_paper=quiz_paper,
+            mindmap_mermaid=mindmap,
+        )
+        from app.main import _save_package
+
+        _save_package(pid, pkg)
+
+        # 1. Quiz A4 PDF with answers
+        a4_res = client.post(
+            f"/api/projects/{pid}/export-pdf",
+            json={"doc_type": "quiz", "paper_size": "a4", "include_answers": True},
+        )
+        assert a4_res.status_code == 200
+        assert a4_res.headers["content-type"].startswith("application/pdf")
+        doc_a4 = fitz.open("pdf", a4_res.content)
+        assert len(doc_a4) >= 2
+        assert abs(doc_a4[0].rect.width - 595) < 5
+        a4_text = "\n".join(p.get_text() for p in doc_a4)
+        assert "单项选择题" in a4_text
+        assert "参考答案与教材溯源解析" in a4_text
+        doc_a4.close()
+
+        # 2. Quiz A3 two-column sealed PDF with answers
+        a3_res = client.get(
+            f"/api/projects/{pid}/export-pdf?doc_type=quiz&paper_size=a3&include_answers=true"
+        )
+        assert a3_res.status_code == 200
+        doc_a3 = fitz.open("pdf", a3_res.content)
+        assert len(doc_a3) >= 2
+        assert abs(doc_a3[0].rect.width - 1191) < 5
+        assert abs(doc_a3[0].rect.height - 842) < 5
+        a3_text = "\n".join(p.get_text() for p in doc_a3)
+        assert "第 1 栏" in a3_text
+        assert "参考答案与教材溯源解析" in a3_text
+        doc_a3.close()
+
+        # 3. Self-study guide PDF (A4 printable booklet with examples & solutions)
+        guide_res = client.post(
+            f"/api/projects/{pid}/export-pdf",
+            json={"doc_type": "study_guide", "paper_size": "a4", "include_answers": True},
+        )
+        assert guide_res.status_code == 200
+        doc_g = fitz.open("pdf", guide_res.content)
+        assert len(doc_g) >= 2
+        guide_text = "\n".join(p.get_text() for p in doc_g)
+        assert "正式印刷版自主导学讲义" in guide_text
+        assert "典型例题" in guide_text
+        assert "配套典型例题演练与完整解析" in guide_text
+        doc_g.close()
+    finally:
+        client.delete(f"/api/projects/{pid}")

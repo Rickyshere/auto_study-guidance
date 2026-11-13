@@ -20,8 +20,13 @@ import {
   ZoomOut,
   Copy,
   Layers,
+  FileText,
+  Columns2,
+  X,
 } from 'lucide-react';
+import { api } from '../api';
 import { DocumentIR, QuizQuestion, StudyPackage } from '../types';
+import { normalizeMathMarkdown } from '../utils/mathMarkdown';
 import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
 
 mermaid.initialize({
@@ -59,6 +64,34 @@ export const StudyStudio: React.FC<Props> = ({
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [exportingPdfKey, setExportingPdfKey] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [previewSpec, setPreviewSpec] = useState<{
+    docType: 'quiz' | 'study_guide' | 'cheatsheet';
+    paperSize: 'a4' | 'a3';
+    includeAnswers: boolean;
+  } | null>(null);
+
+  const handleExportPdf = async (
+    docType: 'quiz' | 'study_guide' | 'cheatsheet',
+    paperSize: 'a4' | 'a3',
+    includeAnswers = true
+  ) => {
+    const key = `${docType}-${paperSize}`;
+    setExportingPdfKey(key);
+    setPdfError(null);
+    try {
+      await api.exportPdf(studyPackage.project_id, {
+        doc_type: docType,
+        paper_size: paperSize,
+        include_answers: includeAnswers,
+      });
+    } catch (e: any) {
+      setPdfError(e?.message || 'PDF 导出失败');
+    } finally {
+      setExportingPdfKey(null);
+    }
+  };
 
   // Mermaid rendering state
   const mermaidRef = useRef<HTMLDivElement | null>(null);
@@ -210,10 +243,97 @@ export const StudyStudio: React.FC<Props> = ({
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+          {activeTab === 'quiz' && stage2HasQuiz && (
+            <>
+              <SpringButton
+                springLabel="导出A4试卷"
+                disabled={Boolean(exportingPdfKey)}
+                onClick={() => handleExportPdf('quiz', 'a4', true)}
+                maxShift={6}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  borderRadius: '999px',
+                  border: 'none',
+                  backgroundColor: '#007AFF',
+                  color: '#FFFFFF',
+                  padding: '7px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: exportingPdfKey ? 'wait' : 'pointer',
+                }}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>{exportingPdfKey === 'quiz-a4' ? '生成中...' : '导出 A4 试卷 PDF (附答案)'}</span>
+              </SpringButton>
+              <SpringButton
+                springLabel="导出A3试卷"
+                disabled={Boolean(exportingPdfKey)}
+                onClick={() => handleExportPdf('quiz', 'a3', true)}
+                maxShift={6}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  borderRadius: '999px',
+                  border: '1px solid rgba(0, 122, 255, 0.35)',
+                  backgroundColor: 'rgba(0, 122, 255, 0.08)',
+                  color: '#007AFF',
+                  padding: '7px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: exportingPdfKey ? 'wait' : 'pointer',
+                }}
+              >
+                <Columns2 className="w-3.5 h-3.5" />
+                <span>{exportingPdfKey === 'quiz-a3' ? '生成中...' : '导出 A3 双栏试卷 PDF (附答案)'}</span>
+              </SpringButton>
+            </>
+          )}
+          {activeTab === 'notes' && stage2HasNotes && (
+            <SpringButton
+              springLabel="导出自学案PDF"
+              disabled={Boolean(exportingPdfKey)}
+              onClick={() => handleExportPdf('study_guide', 'a4', true)}
+              maxShift={6}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                borderRadius: '999px',
+                border: 'none',
+                backgroundColor: '#007AFF',
+                color: '#FFFFFF',
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: exportingPdfKey ? 'wait' : 'pointer',
+              }}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>
+                {exportingPdfKey === 'study_guide-a4'
+                  ? '排版生成中...'
+                  : '导出自学案讲义 PDF (含例题解析)'}
+              </span>
+            </SpringButton>
+          )}
           <SpringButton
-            springLabel="打印PDF"
-            onClick={() => window.print()}
+            springLabel="印刷预览"
+            onClick={() =>
+              setPreviewSpec({
+                docType:
+                  activeTab === 'quiz'
+                    ? 'quiz'
+                    : activeTab === 'cheatsheet'
+                    ? 'cheatsheet'
+                    : 'study_guide',
+                paperSize: 'a4',
+                includeAnswers: true,
+              })
+            }
             maxShift={6}
             style={{
               display: 'inline-flex',
@@ -230,10 +350,36 @@ export const StudyStudio: React.FC<Props> = ({
             }}
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>打印 / 导出 PDF</span>
+            <span>印刷版式预览</span>
           </SpringButton>
         </div>
       </div>
+
+      {pdfError && (
+        <div
+          className="no-print"
+          style={{
+            marginBottom: '12px',
+            borderRadius: '10px',
+            backgroundColor: 'rgba(255, 59, 48, 0.08)',
+            border: '1px solid rgba(255, 59, 48, 0.25)',
+            color: '#C62828',
+            padding: '8px 12px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>PDF 导出异常：{pdfError}</span>
+          <button
+            onClick={() => setPdfError(null)}
+            style={{ fontSize: '11.5px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', color: '#C62828' }}
+          >
+            关闭
+          </button>
+        </div>
+      )}
 
       {/* Tab Content */}
       {activeTab === 'notes' && (
@@ -260,41 +406,89 @@ export const StudyStudio: React.FC<Props> = ({
                   className="no-print"
                   style={{
                     display: 'flex',
+                    flexWrap: 'wrap',
                     alignItems: 'center',
                     justifyContent: 'space-between',
+                    gap: '8px',
                     marginBottom: '12px',
                   }}
                 >
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#636366' }}>
                     <BookOpen className="w-3.5 h-3.5 inline mr-1.5 text-[#007AFF]" />
-                    结构化导学精要讲义 (65ch 最佳阅读宽度)
+                    结构化导学精要讲义 · 典型例题与解析
                   </span>
-                  <SpringButton
-                    springLabel="导出笔记"
-                    onClick={() =>
-                      downloadText(
-                        `${studyPackage.blueprint_used.blueprint_title}_精要笔记.md`,
-                        studyPackage.study_notes_markdown
-                      )
-                    }
-                    maxShift={5}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '5px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1C1C1E',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>导出 Markdown</span>
-                  </SpringButton>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
+                    <SpringButton
+                      springLabel="讲义A4PDF"
+                      disabled={Boolean(exportingPdfKey)}
+                      onClick={() => handleExportPdf('study_guide', 'a4', true)}
+                      maxShift={5}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        borderRadius: '999px',
+                        border: '1px solid rgba(0, 122, 255, 0.35)',
+                        backgroundColor: 'rgba(0, 122, 255, 0.08)',
+                        padding: '5px 11px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        color: '#007AFF',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>A4 讲义 PDF</span>
+                    </SpringButton>
+                    <SpringButton
+                      springLabel="讲义A3PDF"
+                      disabled={Boolean(exportingPdfKey)}
+                      onClick={() => handleExportPdf('study_guide', 'a3', true)}
+                      maxShift={5}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        borderRadius: '999px',
+                        border: '1px solid rgba(60, 60, 67, 0.14)',
+                        backgroundColor: '#FFFFFF',
+                        padding: '5px 11px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        color: '#1C1C1E',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Columns2 className="w-3.5 h-3.5" />
+                      <span>A3 双栏讲义 PDF</span>
+                    </SpringButton>
+                    <SpringButton
+                      springLabel="导出笔记"
+                      onClick={() =>
+                        downloadText(
+                          `${studyPackage.blueprint_used.blueprint_title}_精要笔记.md`,
+                          studyPackage.study_notes_markdown
+                        )
+                      }
+                      maxShift={5}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        borderRadius: '999px',
+                        border: '1px solid rgba(60, 60, 67, 0.14)',
+                        backgroundColor: '#FFFFFF',
+                        padding: '5px 11px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        color: '#1C1C1E',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>.md</span>
+                    </SpringButton>
+                  </div>
                 </div>
 
                 <div className="markdown-body">
@@ -302,7 +496,7 @@ export const StudyStudio: React.FC<Props> = ({
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                   >
-                    {studyPackage.study_notes_markdown}
+                    {normalizeMathMarkdown(studyPackage.study_notes_markdown)}
                   </ReactMarkdown>
                 </div>
               </div>
@@ -450,6 +644,42 @@ export const StudyStudio: React.FC<Props> = ({
                     ]}
                   />
 
+                  <SpringButton
+                    springLabel="导出A4PDF"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('quiz', 'a4', true)}
+                    maxShift={5}
+                    style={{
+                      borderRadius: '999px',
+                      border: '1px solid rgba(0, 122, 255, 0.35)',
+                      backgroundColor: 'rgba(0, 122, 255, 0.1)',
+                      padding: '5px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      color: '#007AFF',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {exportingPdfKey === 'quiz-a4' ? '生成A4中...' : 'A4 试卷 PDF (附答案)'}
+                  </SpringButton>
+                  <SpringButton
+                    springLabel="导出A3PDF"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('quiz', 'a3', true)}
+                    maxShift={5}
+                    style={{
+                      borderRadius: '999px',
+                      border: '1px solid rgba(0, 122, 255, 0.35)',
+                      backgroundColor: '#FFFFFF',
+                      padding: '5px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      color: '#007AFF',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {exportingPdfKey === 'quiz-a3' ? '生成A3中...' : 'A3 双栏密封线 PDF'}
+                  </SpringButton>
                   <SpringButton
                     springLabel="导出空白卷"
                     onClick={() => exportQuizMarkdown(false)}
@@ -808,13 +1038,15 @@ export const StudyStudio: React.FC<Props> = ({
               switchLabel="返回导学笔记"
             />
           ) : (
-            <div style={{ maxWidth: '72ch' }}>
+            <div style={{ width: '100%', maxWidth: '100%' }}>
               <div
                 className="no-print"
                 style={{
                   display: 'flex',
+                  flexWrap: 'wrap',
                   alignItems: 'center',
                   justifyContent: 'space-between',
+                  gap: '8px',
                   marginBottom: '12px',
                 }}
               >
@@ -822,47 +1054,75 @@ export const StudyStudio: React.FC<Props> = ({
                   <Zap className="w-3.5 h-3.5 inline mr-1.5 text-[#FF9500]" />
                   高密度考前速记表 (Cheat Sheet)
                 </span>
-                <SpringButton
-                  springLabel="导出速记表"
-                  onClick={() =>
-                    downloadText(
-                      `${studyPackage.blueprint_used.blueprint_title}_考前速记表.md`,
-                      studyPackage.cheatsheet_markdown
-                    )
-                  }
-                  maxShift={5}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    borderRadius: '999px',
-                    border: '1px solid rgba(60, 60, 67, 0.14)',
-                    backgroundColor: '#FFFFFF',
-                    padding: '5px 12px',
-                    fontSize: '11.5px',
-                    fontWeight: 600,
-                    color: '#1C1C1E',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>导出速记表 .md</span>
-                </SpringButton>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <SpringButton
+                    springLabel="导出速记PDF"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('cheatsheet', 'a4', true)}
+                    maxShift={5}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      borderRadius: '999px',
+                      border: '1px solid rgba(255, 149, 0, 0.35)',
+                      backgroundColor: 'rgba(255, 149, 0, 0.1)',
+                      padding: '5px 12px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      color: '#995700',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>{exportingPdfKey === 'cheatsheet-a4' ? '生成中...' : '导出速记 PDF'}</span>
+                  </SpringButton>
+                  <SpringButton
+                    springLabel="导出速记表"
+                    onClick={() =>
+                      downloadText(
+                        `${studyPackage.blueprint_used.blueprint_title}_考前速记表.md`,
+                        studyPackage.cheatsheet_markdown
+                      )
+                    }
+                    maxShift={5}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      borderRadius: '999px',
+                      border: '1px solid rgba(60, 60, 67, 0.14)',
+                      backgroundColor: '#FFFFFF',
+                      padding: '5px 12px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      color: '#1C1C1E',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>导出速记表 .md</span>
+                  </SpringButton>
+                </div>
               </div>
               <div
                 className="markdown-body"
                 style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  overflowX: 'auto',
                   borderRadius: '14px',
                   backgroundColor: '#FFFDF5',
                   border: '1px solid rgba(255, 149, 0, 0.25)',
                   padding: '20px 22px',
+                  marginBottom: '28px',
                 }}
               >
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkMath]}
                   rehypePlugins={[rehypeKatex]}
                 >
-                  {studyPackage.cheatsheet_markdown}
+                  {normalizeMathMarkdown(studyPackage.cheatsheet_markdown)}
                 </ReactMarkdown>
               </div>
             </div>
@@ -1124,6 +1384,25 @@ export const StudyStudio: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {previewSpec && (
+        <PrintPreviewModal
+          projectId={studyPackage.project_id}
+          docType={previewSpec.docType}
+          paperSize={previewSpec.paperSize}
+          includeAnswers={previewSpec.includeAnswers}
+          exporting={Boolean(exportingPdfKey)}
+          onChangeSpec={setPreviewSpec}
+          onDownload={() =>
+            handleExportPdf(
+              previewSpec.docType,
+              previewSpec.paperSize,
+              previewSpec.includeAnswers
+            )
+          }
+          onClose={() => setPreviewSpec(null)}
+        />
+      )}
     </div>
   );
 };
@@ -1141,6 +1420,191 @@ function MetricTile({ label, value }: { label: string; value: string }) {
       <div style={{ fontSize: '10.5px', color: '#8E8E93', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: '13px', fontWeight: 700, color: '#1C1C1E', marginTop: '3px' }}>
         {value}
+      </div>
+    </div>
+  );
+}
+
+function PrintPreviewModal({
+  projectId,
+  docType,
+  paperSize,
+  includeAnswers,
+  exporting,
+  onChangeSpec,
+  onDownload,
+  onClose,
+}: {
+  projectId: string;
+  docType: 'quiz' | 'study_guide' | 'cheatsheet';
+  paperSize: 'a4' | 'a3';
+  includeAnswers: boolean;
+  exporting: boolean;
+  onChangeSpec: (next: {
+    docType: 'quiz' | 'study_guide' | 'cheatsheet';
+    paperSize: 'a4' | 'a3';
+    includeAnswers: boolean;
+  }) => void;
+  onDownload: () => void;
+  onClose: () => void;
+}) {
+  const pdfUrl = `${api.getExportPdfUrl(projectId, {
+    doc_type: docType,
+    paper_size: paperSize,
+    include_answers: includeAnswers,
+  })}#view=FitH`;
+
+  return (
+    <div
+      className="no-print"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 80,
+        backgroundColor: 'rgba(15, 23, 42, 0.56)',
+        backdropFilter: 'blur(6px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+    >
+      <div
+        style={{
+          width: 'min(1180px, 96vw)',
+          height: '90vh',
+          borderRadius: '18px',
+          backgroundColor: '#FFFFFF',
+          border: '1px solid rgba(60, 60, 67, 0.16)',
+          boxShadow: '0 30px 70px -15px rgba(0, 0, 0, 0.35)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            padding: '12px 18px',
+            borderBottom: '1px solid rgba(60, 60, 67, 0.12)',
+            backgroundColor: '#F8FAFC',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>
+              独立印刷排版 PDF 预览
+            </span>
+            <SpringSegmentedControl<'quiz' | 'study_guide' | 'cheatsheet'>
+              compact
+              springLabel="预览文稿"
+              value={docType}
+              onChange={(nextDoc) =>
+                onChangeSpec({ docType: nextDoc, paperSize, includeAnswers })
+              }
+              options={[
+                { value: 'quiz', label: '标准试卷题库' },
+                { value: 'study_guide', label: '自学案讲义(含例题)' },
+                { value: 'cheatsheet', label: '考前速记表' },
+              ]}
+            />
+            <SpringSegmentedControl<'a4' | 'a3'>
+              compact
+              springLabel="纸张版式"
+              value={paperSize}
+              onChange={(nextSize) =>
+                onChangeSpec({ docType, paperSize: nextSize, includeAnswers })
+              }
+              options={[
+                { value: 'a4', label: 'A4 竖版印刷' },
+                { value: 'a3', label: 'A3 双栏密封线' },
+              ]}
+            />
+            {docType !== 'cheatsheet' && (
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#334155',
+                  cursor: 'pointer',
+                  padding: '4px 8px',
+                  borderRadius: '999px',
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid rgba(60, 60, 67, 0.14)',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={includeAnswers}
+                  onChange={(e) =>
+                    onChangeSpec({
+                      docType,
+                      paperSize,
+                      includeAnswers: e.target.checked,
+                    })
+                  }
+                />
+                <span>{docType === 'quiz' ? '附参考答案与解析' : '附边学边练与解析'}</span>
+              </label>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <SpringButton
+              springLabel="下载预览PDF"
+              disabled={exporting}
+              onClick={onDownload}
+              maxShift={5}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                borderRadius: '999px',
+                border: 'none',
+                backgroundColor: '#007AFF',
+                color: '#FFFFFF',
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{exporting ? '生成中...' : `下载 ${paperSize.toUpperCase()} PDF`}</span>
+            </SpringButton>
+            <button
+              onClick={onClose}
+              style={{
+                borderRadius: '999px',
+                border: '1px solid rgba(60, 60, 67, 0.14)',
+                backgroundColor: '#FFFFFF',
+                padding: '6px',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="关闭预览"
+            >
+              <X className="w-4 h-4 text-[#636366]" />
+            </button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, backgroundColor: '#E2E8F0' }}>
+          <iframe
+            key={pdfUrl}
+            src={pdfUrl}
+            title="印刷排版 PDF 预览"
+            style={{ width: '100%', height: '100%', border: 'none' }}
+          />
+        </div>
       </div>
     </div>
   );

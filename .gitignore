@@ -18,3 +18,9 @@ frontend/*.tsbuildinfo
 .env.*
 .DS_Store
 Thumbs.db
+
+# Desktop compiled executable & copied runtime DLLs (rebuilt via desktop/build_exe.ps1)
+AutoStudyGuidance.exe
+Microsoft.Web.WebView2.Core.dll
+Microsoft.Web.WebView2.WinForms.dll
+WebView2Loader.dll

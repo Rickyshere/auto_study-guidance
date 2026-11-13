@@ -554,22 +554,30 @@ export function App() {
           .mac-sp-split {
             flex: 1;
             min-height: 0;
+            height: calc(100vh - 54px);
             display: grid;
             grid-template-columns: 280px minmax(620px, 1fr);
+            grid-template-rows: minmax(0, 1fr);
+            overflow: hidden;
           }
           .mac-sp-col {
             height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
             overflow-y: auto;
-            padding: 14px;
+            padding: 14px 14px 80px;
             border-right: 1px solid var(--separator);
             background-color: var(--bg-grouped);
             min-width: 0;
           }
           .mac-sp-canvas {
             height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
             overflow-y: auto;
+            overflow-x: hidden;
             background-color: #FFFFFF;
-            padding: 24px 32px 84px;
+            padding: 24px 32px 120px;
             min-width: 0;
           }
           .mac-sp-hud {
