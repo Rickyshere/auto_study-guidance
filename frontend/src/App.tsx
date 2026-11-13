@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   GraduationCap,
   Settings,
@@ -7,8 +7,8 @@ import {
   PanelLeft,
   Search,
   Sparkles,
-  CheckCircle2,
   Gauge,
+  ScanText,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -32,12 +32,13 @@ import { SwiftUILiquidGlassShowcase } from './components/showcases/SwiftUILiquid
 import { ImpeccableAuditedShowcase } from './components/showcases/ImpeccableAuditedShowcase';
 import { AppleDesignAuditedShowcase } from './components/showcases/AppleDesignAuditedShowcase';
 import {
+  SegmentedOption,
   Spring1D,
   SpringButton,
+  SpringSegmentedControl,
   SpringTelemetry,
   SpringTelemetryProvider,
   project,
-  rubberband,
 } from './utils/springPhysics';
 
 type AppViewMode =
@@ -49,13 +50,17 @@ type AppViewMode =
   | 'impeccable'
   | 'emil';
 
-const STUDIO_TABS: { key: StudioTabKey; label: string }[] = [
-  { key: 'notes', label: '导学笔记' },
-  { key: 'quiz', label: '互动题库' },
-  { key: 'cheatsheet', label: '考前速记' },
-  { key: 'mindmap', label: '知识图谱' },
-  { key: 'blueprint_trace', label: '细目与路由' },
-];
+type MainViewKey = 'stage1_negotiate' | StudioTabKey;
+
+const OCR_SHORT_LABEL: Record<string, string> = {
+  mineru_pipeline: 'MinerU Pipeline',
+  somark_free_api: 'Free-OXR API',
+  paddleocr: 'PaddleOCR',
+  mineru_full: 'MinerU Full',
+  oxr_full: 'SoMark OXR',
+  rapidocr: 'RapidOCR',
+  vision_vlm: 'VLM 识图',
+};
 
 export function App() {
   const [viewMode, setViewMode] = useState<AppViewMode>('functional');
@@ -67,7 +72,7 @@ export function App() {
   const [blueprint, setBlueprint] = useState<StudyBlueprint | null>(null);
   const [studyPackage, setStudyPackage] = useState<StudyPackage | null>(null);
 
-  const [activeStudioTab, setActiveStudioTab] = useState<StudioTabKey>('notes');
+  const [activeMainView, setActiveMainView] = useState<MainViewKey>('stage1_negotiate');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
   const [routerPopoverOpen, setRouterPopoverOpen] = useState(false);
@@ -76,6 +81,7 @@ export function App() {
 
   const [uploading, setUploading] = useState(false);
   const [negotiating, setNegotiating] = useState(false);
+  const [aiFilling, setAiFilling] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progressInfo, setProgressInfo] = useState<{ percent: number; message: string } | null>(
     null
@@ -92,25 +98,10 @@ export function App() {
     setTelemetry({ vx: Math.round(vx), vy: Math.round(vy), note: msg });
   }, []);
 
-  // Refs for macOS Three-Pane Split, Segmented Control & Floating HUD ζ=1.0 springs
+  // Refs for Focused 2-Pane Split & Floating HUD ζ=1.0 springs
   const splitRef = useRef<HTMLDivElement | null>(null);
-  const segTrackRef = useRef<HTMLDivElement | null>(null);
-  const segThumbRef = useRef<HTMLDivElement | null>(null);
-  const tabBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const hudRef = useRef<HTMLDivElement | null>(null);
-
   const sidebarSpringRef = useRef<Spring1D | null>(null);
-  const segXRef = useRef<Spring1D | null>(null);
-  const segWRef = useRef<Spring1D | null>(null);
-  const segDragRef = useRef({
-    active: false,
-    startX: 0,
-    baseLeft: 3,
-    curLeft: 3,
-    lastX: 0,
-    lastT: 0,
-    vx: 0,
-  });
 
   const hudXRef = useRef<Spring1D | null>(null);
   const hudYRef = useRef<Spring1D | null>(null);
@@ -127,7 +118,7 @@ export function App() {
     vy: 0,
   });
 
-  // Backend initialization
+  // Backend initialization (includes startup GPU VRAM & OCR auto-detection)
   const refreshProviderStatus = async () => {
     try {
       const st = await api.getProviderStatus();
@@ -152,17 +143,17 @@ export function App() {
     refreshProjects();
   }, []);
 
-  // Sidebar ζ=1.0 spring
+  // Sidebar ζ=1.0 spring (280px <-> 0px in Focused 2-Pane NavigationSplitView)
   useEffect(() => {
     if (viewMode !== 'functional') return;
     sidebarSpringRef.current = new Spring1D({
-      value: sidebarOpen ? 290 : 0,
+      value: sidebarOpen ? 280 : 0,
       response: 0.28,
-      bounds: [0, 290],
+      bounds: [0, 280],
       bounceFactor: 0.45,
       onUpdate: (w) => {
         if (splitRef.current) {
-          splitRef.current.style.gridTemplateColumns = `${Math.max(0, w).toFixed(1)}px 400px minmax(520px, 1fr)`;
+          splitRef.current.style.gridTemplateColumns = `${Math.max(0, w).toFixed(1)}px minmax(620px, 1fr)`;
         }
       },
       onRebound: (v) => reportPhysics(v, 0, '侧栏滑轨边界回弹'),
@@ -173,79 +164,52 @@ export function App() {
   const toggleSidebar = () => {
     const next = !sidebarOpen;
     setSidebarOpen(next);
-    sidebarSpringRef.current?.setTarget(next ? 290 : 0);
+    sidebarSpringRef.current?.setTarget(next ? 280 : 0);
   };
 
-  // Segmented Control ζ=1.0 springs
-  const syncSegToTab = useCallback((tab: StudioTabKey, instant: boolean, boostVx: number | null = null) => {
-    const btn = tabBtnRefs.current[tab];
-    const track = segTrackRef.current;
-    if (!btn || !track || !segXRef.current || !segWRef.current) return;
-    segXRef.current.bounds = [3, Math.max(3, track.clientWidth - btn.offsetWidth - 3)];
-    if (instant) {
-      segXRef.current.setImmediate(btn.offsetLeft);
-      segWRef.current.setImmediate(btn.offsetWidth);
-    } else {
-      segXRef.current.setTarget(btn.offsetLeft, boostVx);
-      segWRef.current.setTarget(btn.offsetWidth);
-    }
-  }, []);
-
+  // Keep activeMainView valid if studyPackage disappears
   useEffect(() => {
-    if (viewMode !== 'functional') return;
-    segXRef.current = new Spring1D({
-      value: 3,
-      response: 0.24,
-      bounceFactor: 0.62,
-      onUpdate: (x) => {
-        if (segThumbRef.current) {
-          segThumbRef.current.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0)`;
-        }
-      },
-      onRebound: (v, side) => reportPhysics(v, 0, `分段滑块${side}`),
-    });
-    segWRef.current = new Spring1D({
-      value: 84,
-      response: 0.24,
-      onUpdate: (w) => {
-        if (segThumbRef.current) {
-          segThumbRef.current.style.width = `${w.toFixed(2)}px`;
-        }
-      },
-    });
-    const rafId = requestAnimationFrame(() => syncSegToTab(activeStudioTab, true));
-    const onResize = () => syncSegToTab(activeStudioTab, true);
-    window.addEventListener('resize', onResize);
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', onResize);
-      segXRef.current?.stop();
-      segWRef.current?.stop();
-    };
-  }, [viewMode, reportPhysics, syncSegToTab]);
+    if (!studyPackage && activeMainView !== 'stage1_negotiate') {
+      setActiveMainView('stage1_negotiate');
+    }
+  }, [studyPackage, activeMainView]);
 
-  const selectStudioTab = useCallback(
-    (tab: StudioTabKey, boostVx: number | null = null) => {
-      setActiveStudioTab(tab);
-      syncSegToTab(tab, false, boostVx);
-    },
-    [syncSegToTab]
-  );
+  // Contextual topbar switcher options: never show dead deliverable tabs before generation!
+  const topbarViewOptions = useMemo<SegmentedOption<MainViewKey>[]>(() => {
+    if (!documentIr) {
+      return [{ value: 'stage1_negotiate', label: '① 等待导入教材' }];
+    }
+    if (!studyPackage) {
+      return [
+        { value: 'stage1_negotiate', label: '① 需求解析与方案定制' },
+        {
+          value: 'notes',
+          label: '② 学习资料工作台 (生成后解锁)',
+          disabled: true,
+          title: '请在下方确认方案并点击“确认生成”，生成完成后即可切换导学笔记/题库/速记',
+        },
+      ];
+    }
+    return [
+      { value: 'stage1_negotiate', label: '① 方案微调' },
+      { value: 'notes', label: '导学笔记' },
+      { value: 'quiz', label: '互动题库' },
+      { value: 'cheatsheet', label: '考前速记' },
+      { value: 'mindmap', label: '知识图谱' },
+      { value: 'blueprint_trace', label: '细目与路由' },
+    ];
+  }, [documentIr, studyPackage]);
 
-  // Sync tab automatically when a new StudyPackage completes
-  const autoSwitchTabForPackage = useCallback(
-    (pkg: StudyPackage) => {
-      const pid = pkg.blueprint_used.preset_id;
-      let nextTab: StudioTabKey = 'notes';
-      if (pid === 'in_class_practice' || pid === 'self_test_exam' || pid === 'sync_practice') {
-        nextTab = 'quiz';
-      } else if (pid === 'exam_cheatsheet') {
-        nextTab = 'cheatsheet';
-      }
-      selectStudioTab(nextTab);
-    },
-    [selectStudioTab]
-  );
+  const autoSwitchTabForPackage = useCallback((pkg: StudyPackage) => {
+    const pid = pkg.blueprint_used.preset_id;
+    let nextTab: StudioTabKey = 'notes';
+    if (pid === 'in_class_practice' || pid === 'self_test_exam' || pid === 'sync_practice') {
+      nextTab = 'quiz';
+    } else if (pid === 'exam_cheatsheet') {
+      nextTab = 'cheatsheet';
+    }
+    setActiveMainView(nextTab);
+  }, []);
 
   // HUD 2D ζ=1.0 springs
   useEffect(() => {
@@ -276,7 +240,7 @@ export function App() {
     };
   }, [viewMode, reportPhysics]);
 
-  // ⌘K Spotlight & Escape keyboard shortcuts (0ms latency)
+  // ⌘K Spotlight & Escape keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -300,7 +264,11 @@ export function App() {
       setDocumentIr(detail.document_ir);
       setBlueprint(detail.blueprint);
       setStudyPackage(detail.study_package);
-      if (detail.study_package) autoSwitchTabForPackage(detail.study_package);
+      if (detail.study_package) {
+        autoSwitchTabForPackage(detail.study_package);
+      } else {
+        setActiveMainView('stage1_negotiate');
+      }
       await refreshProjects();
     } catch (e: any) {
       setErrorMsg(e.message);
@@ -317,7 +285,11 @@ export function App() {
       setDocumentIr(detail.document_ir);
       setBlueprint(detail.blueprint);
       setStudyPackage(detail.study_package);
-      if (detail.study_package) autoSwitchTabForPackage(detail.study_package);
+      if (detail.study_package) {
+        autoSwitchTabForPackage(detail.study_package);
+      } else {
+        setActiveMainView('stage1_negotiate');
+      }
       await refreshProjects();
     } catch (e: any) {
       setErrorMsg(e.message);
@@ -333,7 +305,11 @@ export function App() {
       setDocumentIr(detail.document_ir);
       setBlueprint(detail.blueprint);
       setStudyPackage(detail.study_package);
-      if (detail.study_package) autoSwitchTabForPackage(detail.study_package);
+      if (detail.study_package) {
+        autoSwitchTabForPackage(detail.study_package);
+      } else {
+        setActiveMainView('stage1_negotiate');
+      }
     } catch (e: any) {
       setErrorMsg(e.message);
     }
@@ -346,6 +322,7 @@ export function App() {
       setDocumentIr(null);
       setBlueprint(null);
       setStudyPackage(null);
+      setActiveMainView('stage1_negotiate');
     }
     await refreshProjects();
   };
@@ -378,10 +355,30 @@ export function App() {
         current_blueprint: blueprint,
       });
       setBlueprint(updated);
+      setActiveMainView('stage1_negotiate');
     } catch (e: any) {
       setErrorMsg(e.message);
     } finally {
       setNegotiating(false);
+    }
+  };
+
+  const handleAiFillParams = async () => {
+    if (!documentIr) return;
+    setErrorMsg(null);
+    setAiFilling(true);
+    try {
+      const filled = await api.aiFillParams(documentIr.project_id, {
+        preset_id: blueprint?.preset_id,
+        user_prompt: blueprint?.ai_feedback_message || '',
+        current_blueprint: blueprint,
+      });
+      setBlueprint(filled);
+      reportPhysics(0, 0, '✨ AI 已智能填充题量与参数');
+    } catch (e: any) {
+      setErrorMsg(e.message);
+    } finally {
+      setAiFilling(false);
     }
   };
 
@@ -454,7 +451,7 @@ export function App() {
     if (s.routing_mode === 'smart_stage') return '智能多阶段 Harness';
     const map: Record<string, string> = {
       heuristic: '内置规则引擎',
-      harness: `CLI · ${s.harness_config.preferred_cli}`,
+      harness: `CLI · ${s.harness_config.preferred_cli.toUpperCase()}`,
       cloud: `Cloud · ${s.cloud_config.model}`,
       local: `Local · ${s.local_config.model}`,
     };
@@ -469,101 +466,37 @@ export function App() {
     return '#FF9500';
   };
 
-  // Segmented Thumb Drag Handlers (Pointer velocity inheritance + rubberband + wall rebound)
-  const onSegThumbDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    segXRef.current?.stop();
-    segWRef.current?.stop();
-    if (segXRef.current) segXRef.current.dragging = true;
-    const cur = segXRef.current?.value ?? 3;
-    segDragRef.current = {
-      active: true,
-      startX: e.clientX,
-      baseLeft: cur,
-      curLeft: cur,
-      lastX: e.clientX,
-      lastT: performance.now(),
-      vx: 0,
-    };
-  };
-
-  const onSegThumbMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const sd = segDragRef.current;
-    const track = segTrackRef.current;
-    const thumb = segThumbRef.current;
-    if (!sd.active || !track || !thumb || !segXRef.current) return;
-    const now = performance.now();
-    const dt = Math.max(1, now - sd.lastT) / 1000;
-    sd.vx = (e.clientX - sd.lastX) / dt;
-    sd.lastX = e.clientX;
-    sd.lastT = now;
-
-    const minX = 3;
-    const maxX = Math.max(3, track.clientWidth - thumb.offsetWidth - 3);
-    const raw = sd.baseLeft + (e.clientX - sd.startX);
-    const clamped =
-      raw < minX
-        ? minX - rubberband(minX - raw, 110, 0.55)
-        : raw > maxX
-        ? maxX + rubberband(raw - maxX, 110, 0.55)
-        : raw;
-    sd.curLeft = clamped;
-    segXRef.current.setImmediate(clamped, sd.vx);
-  };
-
-  const onSegThumbUp = () => {
-    const sd = segDragRef.current;
-    if (!sd.active || !segXRef.current || !segThumbRef.current) return;
-    sd.active = false;
-    segXRef.current.dragging = false;
-
-    const projCenter =
-      sd.curLeft + segThumbRef.current.offsetWidth / 2 + project(sd.vx, 0.994);
-    let best: StudioTabKey = 'notes';
-    let bestDist = Infinity;
-    STUDIO_TABS.forEach((t) => {
-      const b = tabBtnRefs.current[t.key];
-      if (!b) return;
-      const c = b.offsetLeft + b.offsetWidth / 2;
-      if (Math.abs(c - projCenter) < bestDist) {
-        bestDist = Math.abs(c - projCenter);
-        best = t.key;
-      }
-    });
-    reportPhysics(
-      sd.vx,
-      0,
-      Math.abs(sd.vx) > 650 ? '分段滑块高速松手边界回弹!' : 'ζ = 1.0 速度接管落位'
-    );
-    selectStudioTab(best, sd.vx * 0.85);
+  const vramPillLabel = () => {
+    const gpu = providerStatus?.gpu_vram;
+    const ocrCfg = providerStatus?.settings.ocr_config;
+    if (!gpu || ocrCfg?.detect_vram_on_startup === false) return null;
+    const activeEngine = ocrCfg?.active_engine || gpu.recommended_ocr_engine;
+    const engineLabel = OCR_SHORT_LABEL[activeEngine] || activeEngine;
+    const vramStr = gpu.effective_vram_gb > 0 ? `${gpu.effective_vram_gb.toFixed(0)}GB` : '无独显';
+    return `${vramStr} · ${engineLabel}`;
   };
 
   if (viewMode !== 'functional') {
     return (
       <div className="min-h-screen bg-slate-100">
-        <div className="bg-slate-900 text-slate-200 px-4 py-1.5 text-xs flex flex-wrap items-center justify-between gap-2 no-print">
+        <div className="bg-slate-900 text-slate-200 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 no-print">
           <span className="font-medium">UI 范式对比预览模式（只读展示）</span>
-          <div className="flex items-center gap-2">
-            <select
+          <div className="flex flex-wrap items-center gap-2">
+            <SpringSegmentedControl<AppViewMode>
+              compact
+              springLabel="视图模式"
               value={viewMode}
-              onChange={(e) => setViewMode(e.target.value as AppViewMode)}
-              className="rounded-md bg-slate-800 border border-slate-700 px-2.5 py-1 text-xs text-white"
-            >
-              <option value="functional">← 返回 ASG 完整生产工作台 (Apple Design + ζ=1.0)</option>
-              <option value="apple_audited">Apple Design 融合审计示范版</option>
-              <option value="impeccable_audited">Impeccable 融合审计示范版</option>
-              <option value="swiftui">示范版 4：SwiftUI Liquid Glass</option>
-              <option value="apple">示范版 3：Apple Design 原版</option>
-              <option value="impeccable">示范版 1：Impeccable 原版</option>
-              <option value="emil">示范版 2：Emil Kowalski 原版</option>
-            </select>
-            <button
-              onClick={() => setViewMode('functional')}
-              className="rounded-md bg-[#007AFF] px-3 py-1 text-xs font-semibold text-white"
-            >
-              返回生产工作台
-            </button>
+              onChange={(m) => setViewMode(m)}
+              options={[
+                { value: 'functional', label: '← 返回 ASG 生产工作台' },
+                { value: 'apple_audited', label: 'Apple 审计版' },
+                { value: 'impeccable_audited', label: 'Impeccable 审计版' },
+                { value: 'swiftui', label: 'SwiftUI' },
+                { value: 'apple', label: 'Apple 原版' },
+                { value: 'impeccable', label: 'Impeccable' },
+                { value: 'emil', label: 'Emil' },
+              ]}
+            />
           </div>
         </div>
         {viewMode === 'apple_audited' && <AppleDesignAuditedShowcase />}
@@ -614,7 +547,7 @@ export function App() {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 10px;
             padding: 0 16px;
             z-index: 30;
           }
@@ -622,7 +555,7 @@ export function App() {
             flex: 1;
             min-height: 0;
             display: grid;
-            grid-template-columns: 290px 400px minmax(520px, 1fr);
+            grid-template-columns: 280px minmax(620px, 1fr);
           }
           .mac-sp-col {
             height: 100%;
@@ -636,44 +569,8 @@ export function App() {
             height: 100%;
             overflow-y: auto;
             background-color: #FFFFFF;
-            padding: 26px 32px 72px;
+            padding: 24px 32px 84px;
             min-width: 0;
-          }
-          .mac-sp-seg-track {
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-            background: rgba(118, 118, 128, 0.14);
-            border-radius: 999px;
-            padding: 3px;
-            gap: 2px;
-            touch-action: none;
-            user-select: none;
-          }
-          .mac-sp-seg-thumb {
-            position: absolute;
-            top: 3px;
-            left: 0;
-            height: calc(100% - 6px);
-            background: #FFFFFF;
-            border-radius: 999px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-            will-change: transform, width;
-            cursor: grab;
-            z-index: 1;
-          }
-          .mac-sp-tab {
-            position: relative;
-            z-index: 2;
-            border: none;
-            background: transparent;
-            padding: 6px 12px;
-            font-size: 12px;
-            font-weight: 600;
-            border-radius: 999px;
-            cursor: pointer;
-            user-select: none;
-            white-space: nowrap;
           }
           .mac-sp-hud {
             position: fixed;
@@ -713,7 +610,7 @@ export function App() {
 
         {/* Top Liquid Glass Window Toolbar */}
         <header className="mac-sp-topbar mac-sp-glass no-print">
-          {/* Left: Traffic Lights + Collapsible Sidebar Toggle + Plain Document Title */}
+          {/* Left: Traffic Lights + Collapsible Sidebar Toggle + Title */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
             <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }} aria-hidden="true">
               <span style={{ width: 11, height: 11, borderRadius: '999px', backgroundColor: '#FF5F57' }} />
@@ -750,7 +647,7 @@ export function App() {
               {documentIr && (
                 <span
                   className="truncate hidden xl:inline"
-                  style={{ fontSize: '12px', color: '#636366', maxWidth: '210px' }}
+                  style={{ fontSize: '12px', color: '#636366', maxWidth: '180px' }}
                   title={documentIr.filename}
                 >
                   — {documentIr.filename}
@@ -759,33 +656,47 @@ export function App() {
             </div>
           </div>
 
-          {/* Center: Draggable & Flickable Critically-Damped Spring Segmented Control */}
-          <div ref={segTrackRef} className="mac-sp-seg-track">
-            <div
-              ref={segThumbRef}
-              className="mac-sp-seg-thumb"
-              onPointerDown={onSegThumbDown}
-              onPointerMove={onSegThumbMove}
-              onPointerUp={onSegThumbUp}
-              onPointerCancel={onSegThumbUp}
+          {/* Center: Contextual ζ=1.0 Spring Stage / Studio Switcher (no dead buttons before generation) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <SpringSegmentedControl<MainViewKey>
+              compact
+              springLabel="工作区阶段"
+              value={activeMainView}
+              onChange={(next) => {
+                if (next !== 'stage1_negotiate' && !studyPackage) return;
+                setActiveMainView(next);
+              }}
+              options={topbarViewOptions}
             />
-            {STUDIO_TABS.map((t) => (
-              <button
-                key={t.key}
-                ref={(el) => {
-                  tabBtnRefs.current[t.key] = el;
-                }}
-                onClick={() => selectStudioTab(t.key)}
-                className="mac-sp-tab"
-                style={{ color: activeStudioTab === t.key ? '#007AFF' : '#636366' }}
-              >
-                {t.label}
-              </button>
-            ))}
           </div>
 
-          {/* Right: Spotlight + HUD Toggle + 3-Tier Router + Showcase Selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', position: 'relative' }}>
+          {/* Right: Startup VRAM/OCR Badge + Spotlight + HUD + 3-Tier Router */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+            {vramPillLabel() && (
+              <SpringButton
+                springLabel="显存与OCR识别"
+                onClick={() => setConfigOpen(true)}
+                maxShift={4}
+                style={{
+                  borderRadius: '999px',
+                  border: '1px solid rgba(52, 199, 89, 0.3)',
+                  backgroundColor: 'rgba(52, 199, 89, 0.1)',
+                  padding: '5px 9px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#1B5E20',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer',
+                }}
+                title={providerStatus?.gpu_vram?.recommendation_reason || '查看显存检测与 OCR 部署配置'}
+              >
+                <ScanText className="w-3 h-3 text-[#2E7D32]" />
+                <span className="mac-sp-tabular hidden lg:inline">{vramPillLabel()}</span>
+              </SpringButton>
+            )}
+
             <SpringButton
               springLabel="Spotlight"
               onClick={() => setSpotlightOpen(true)}
@@ -794,7 +705,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.12)',
                 backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 10px',
+                padding: '6px 9px',
                 fontSize: '11.5px',
                 fontWeight: 600,
                 color: '#1C1C1E',
@@ -816,7 +727,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.12)',
                 backgroundColor: hudVisible ? 'rgba(0, 122, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 10px',
+                padding: '6px 9px',
                 fontSize: '11.5px',
                 fontWeight: 600,
                 color: hudVisible ? '#007AFF' : '#636366',
@@ -828,7 +739,7 @@ export function App() {
               title="切换物理遥测悬浮舱"
             >
               <Gauge className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">HUD</span>
+              <span className="hidden xl:inline">HUD</span>
             </SpringButton>
 
             <SpringButton
@@ -839,7 +750,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.14)',
                 backgroundColor: 'rgba(255, 255, 255, 0.92)',
-                padding: '6px 11px',
+                padding: '6px 10px',
                 fontSize: '11.5px',
                 fontWeight: 600,
                 color: '#1C1C1E',
@@ -857,114 +768,98 @@ export function App() {
                   backgroundColor: activeProviderTint(),
                 }}
               />
-              <span className="max-w-[140px] truncate">{activeEngineLabel()}</span>
-              <Settings className="w-3.5 h-3.5 text-[#636366]" />
+              <span className="max-w-[130px] truncate">{activeEngineLabel()}</span>
             </SpringButton>
 
-            <select
-              aria-label="视图模式"
-              value={viewMode}
-              onChange={(e) => setViewMode(e.target.value as AppViewMode)}
+            <SpringButton
+              springLabel="路由与OCR设置"
+              onClick={() => setConfigOpen(true)}
+              maxShift={5}
               style={{
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.12)',
                 backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '5px 8px',
-                fontSize: '11px',
-                color: '#636366',
+                padding: '6px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 cursor: 'pointer',
               }}
+              title="路由、CLI Harness 与显存分级 OCR 配置"
             >
-              <option value="functional">ASG 生产工作台</option>
-              <option value="apple_audited">Apple 审计示范稿</option>
-              <option value="impeccable_audited">Impeccable 示范稿</option>
-            </select>
+              <Settings className="w-3.5 h-3.5 text-[#636366]" />
+            </SpringButton>
 
-            {/* Anchored 3-Tier Router Quick Popover */}
+            {/* Anchored 3-Tier Router & View Quick Popover */}
             {routerPopoverOpen && (
               <div
                 style={{
                   position: 'absolute',
                   top: '46px',
                   right: '0',
-                  width: '300px',
+                  width: '320px',
                   borderRadius: '16px',
                   padding: '10px',
                   zIndex: 50,
-                  backgroundColor: 'rgba(255, 255, 255, 0.92)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.94)',
                   backdropFilter: 'blur(22px) saturate(180%)',
                   WebkitBackdropFilter: 'blur(22px) saturate(180%)',
                   border: '1px solid rgba(60, 60, 67, 0.12)',
                   boxShadow: '0 20px 44px -12px rgba(0, 0, 0, 0.22)',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '6px',
+                  gap: '7px',
                 }}
               >
-                <div style={{ fontSize: '11px', fontWeight: 700, color: '#636366', padding: '2px 6px' }}>
-                  快速切换模型路由通道
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#636366', padding: '0 4px' }}>
+                  快速切换模型路由通道 (ζ=1.0)
                 </div>
-                {(
-                  [
+
+                <SpringSegmentedControl<ProviderType>
+                  compact
+                  wrap
+                  springLabel="快速通道"
+                  value={providerStatus?.settings.active_provider || 'heuristic'}
+                  onChange={(p) => handleQuickSwitchProvider(p)}
+                  options={[
                     {
-                      id: 'harness' as ProviderType,
-                      title: `CLI Harness (${providerStatus?.settings.harness_config.preferred_cli || 'claude'})`,
-                      sub: '本机 Claude / Codex / Gemini 命令行代理',
-                      dot: '#34C759',
+                      value: 'harness',
+                      label: `CLI (${(providerStatus?.settings.harness_config.preferred_cli || 'claude').toUpperCase()})`,
                     },
-                    {
-                      id: 'cloud' as ProviderType,
-                      title: `云端 API (${providerStatus?.settings.cloud_config.model || 'Cloud'})`,
-                      sub: 'OpenAI / DeepSeek / Anthropic 高精度生成',
-                      dot: '#007AFF',
-                    },
-                    {
-                      id: 'local' as ProviderType,
-                      title: `本地模型 (${providerStatus?.settings.local_config.model || 'Ollama'})`,
-                      sub: 'Ollama / LM Studio 100% 离线私有推理',
-                      dot: '#5856D6',
-                    },
-                    {
-                      id: 'heuristic' as ProviderType,
-                      title: '内置智能规则引擎',
-                      sub: '零 Token 消耗结构化即时预览与保底回退',
-                      dot: '#FF9500',
-                    },
-                  ] as const
-                ).map((item) => {
-                  const isActive =
-                    providerStatus?.settings.routing_mode === 'single' &&
-                    providerStatus.settings.active_provider === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => handleQuickSwitchProvider(item.id)}
-                      style={{
-                        textAlign: 'left',
-                        padding: '8px 10px',
-                        borderRadius: '10px',
-                        border: isActive ? `1px solid ${item.dot}` : '1px solid transparent',
-                        backgroundColor: isActive ? 'rgba(0, 122, 255, 0.08)' : '#FFFFFF',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}>
-                        <span style={{ width: 7, height: 7, borderRadius: '999px', backgroundColor: item.dot }} />
-                        <span>{item.title}</span>
-                      </div>
-                      <div style={{ fontSize: '10.5px', color: '#636366', marginTop: '2px' }}>{item.sub}</div>
-                    </button>
-                  );
-                })}
+                    { value: 'cloud', label: '云端 API' },
+                    { value: 'local', label: '本地模型' },
+                    { value: 'heuristic', label: '内置规则' },
+                  ]}
+                />
+
+                <div style={{ fontSize: '10.5px', color: '#8E8E93', padding: '0 4px', marginTop: '2px' }}>
+                  界面视图范式对比
+                </div>
+                <SpringSegmentedControl<AppViewMode>
+                  compact
+                  wrap
+                  springLabel="视图切换"
+                  value={viewMode}
+                  onChange={(m) => {
+                    setRouterPopoverOpen(false);
+                    setViewMode(m);
+                  }}
+                  options={[
+                    { value: 'functional', label: 'ASG 生产工作台' },
+                    { value: 'apple_audited', label: 'Apple 审计稿' },
+                    { value: 'impeccable_audited', label: 'Impeccable 稿' },
+                  ]}
+                />
+
                 <SpringButton
-                  springLabel="打开完整路由配置"
+                  springLabel="打开完整路由与OCR配置"
                   onClick={() => {
                     setRouterPopoverOpen(false);
                     setConfigOpen(true);
                   }}
                   maxShift={4}
                   style={{
-                    marginTop: '4px',
+                    marginTop: '2px',
                     width: '100%',
                     borderRadius: '10px',
                     border: 'none',
@@ -981,7 +876,7 @@ export function App() {
                   }}
                 >
                   <Cpu className="w-3.5 h-3.5" />
-                  <span>打开多阶段编排与密钥配置...</span>
+                  <span>打开 CLI 一键安装 / OCR 显存编排与密钥配置...</span>
                 </SpringButton>
               </div>
             )}
@@ -1008,8 +903,10 @@ export function App() {
               <AlertCircle className="w-4 h-4 shrink-0" />
               {errorMsg}
             </span>
-            <button
+            <SpringButton
+              springLabel="关闭错误提示"
               onClick={() => setErrorMsg(null)}
+              maxShift={3}
               style={{
                 border: 'none',
                 background: 'transparent',
@@ -1019,13 +916,13 @@ export function App() {
               }}
             >
               关闭
-            </button>
+            </SpringButton>
           </div>
         )}
 
-        {/* Desktop Three-Pane NavigationSplitView */}
+        {/* Focused Two-Pane Desktop Workspace (Collapsible Left Source Sidebar + Spacious Main Stage) */}
         <div ref={splitRef} className="mac-sp-split">
-          {/* Pane 1: Collapsible Left Source & History Sidebar */}
+          {/* Pane 1: Collapsible Left Source & Chapter Sidebar */}
           <aside className="mac-sp-col no-print" style={{ borderRightColor: 'rgba(60, 60, 67, 0.14)' }}>
             <UploadAndTocPanel
               documentIr={documentIr}
@@ -1041,63 +938,25 @@ export function App() {
             />
           </aside>
 
-          {/* Pane 2: Center Stage 1 Inspector (Presets + AI Requirement Negotiation + Blueprint Spec) */}
-          <section className="mac-sp-col no-print">
-            {!documentIr ? (
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid rgba(60, 60, 67, 0.08)',
-                  padding: '20px 16px',
-                  textAlign: 'center',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                }}
-              >
-                <Sparkles className="w-6 h-6 text-[#007AFF] mx-auto" />
-                <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1C1C1E' }}>
-                  阶段 1 · 等待导入教材或课件
-                </div>
-                <p style={{ fontSize: '11.5px', color: '#636366', lineHeight: 1.55 }}>
-                  请在左侧导入课本 / PPTX（或加载示例课件），即可在此选择「随堂练习 / 同步练习 / 自测卷 / 自学案 / 考前速记包」并由 AI 解析微调方案。
-                </p>
-              </div>
-            ) : (
-              <BlueprintNegotiator
-                presets={presets}
-                blueprint={blueprint}
-                onChangeBlueprint={setBlueprint}
-                onNegotiate={handleNegotiate}
-                onConfirmAndGenerate={handleConfirmAndGenerate}
-                onQuickGenerate={handleQuickGenerate}
-                negotiating={negotiating}
-                generating={generating}
-                progressInfo={progressInfo}
-              />
-            )}
-          </section>
-
-          {/* Pane 3: Right Widescreen Stage 2 Study Studio Canvas */}
+          {/* Pane 2: Spacious Unified Main Stage (Welcome / Stage 1 Blueprint Negotiation / Stage 2 Study Studio) */}
           <main className="mac-sp-canvas">
             {!documentIr ? (
               <div
                 style={{
-                  maxWidth: '640px',
-                  margin: '56px auto 0',
-                  borderRadius: '20px',
+                  maxWidth: '680px',
+                  margin: '52px auto 0',
+                  borderRadius: '22px',
                   border: '1px solid rgba(60, 60, 67, 0.1)',
                   backgroundColor: '#FAFAFC',
-                  padding: '40px 32px',
+                  padding: '42px 34px',
                   textAlign: 'center',
                 }}
               >
                 <div
                   style={{
-                    width: '58px',
-                    height: '58px',
-                    borderRadius: '16px',
+                    width: '60px',
+                    height: '60px',
+                    borderRadius: '18px',
                     backgroundColor: 'rgba(0, 122, 255, 0.1)',
                     color: '#007AFF',
                     display: 'inline-flex',
@@ -1108,13 +967,13 @@ export function App() {
                 >
                   <GraduationCap className="w-8 h-8" />
                 </div>
-                <h1 className="mac-sp-display" style={{ fontSize: '24px', fontWeight: 700, color: '#1C1C1E' }}>
+                <h1 className="mac-sp-display" style={{ fontSize: '25px', fontWeight: 700, color: '#1C1C1E' }}>
                   上传课本或 PPTX，定制专属学习资料
                 </h1>
-                <p style={{ marginTop: '10px', fontSize: '13px', color: '#636366', lineHeight: 1.65 }}>
-                  保留 <strong>「AI 解析需求 → 反馈确认方案 → 正式生成」</strong> 双阶段控制契约，内置 6 大教学预设与三模（Cloud API / Local Ollama·LM Studio / 本机 Claude·Codex·Gemini CLI Harness）智能路由引擎。
+                <p style={{ marginTop: '10px', fontSize: '13.5px', color: '#636366', lineHeight: 1.7 }}>
+                  采用 <strong>「AI 解析需求 → 确认定制方案 → 正式生成资料」</strong> 双阶段控制契约。支持启动显存分级 OCR（MinerU Pipeline / Free-OXR API / PaddleOCR / Full OXR）、DSH/Claude/Codex/Gemini CLI 一键安装，以及直接输入或 AI 一键填充题量参数。
                 </p>
-                <div style={{ marginTop: '22px' }}>
+                <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <SpringButton
                     springLabel="体验示例课件"
                     disabled={uploading}
@@ -1138,107 +997,52 @@ export function App() {
                     <Sparkles className="w-4 h-4" />
                     <span>{uploading ? '正在解析示例 PPTX...' : '立即加载示例 PPTX 课件体验完整流程'}</span>
                   </SpringButton>
-                </div>
-              </div>
-            ) : !studyPackage ? (
-              <div
-                style={{
-                  maxWidth: '680px',
-                  margin: '28px auto 0',
-                  borderRadius: '18px',
-                  border: '1px solid rgba(60, 60, 67, 0.1)',
-                  backgroundColor: '#FAFAFC',
-                  padding: '28px',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    borderRadius: '999px',
-                    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-                    color: '#007AFF',
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                  }}
-                >
-                  Stage 1 方案预览 · 待确认正式生成
-                </div>
-                <h2 className="mac-sp-display" style={{ fontSize: '21px', fontWeight: 700, marginTop: '10px' }}>
-                  {blueprint?.blueprint_title || documentIr.filename}
-                </h2>
-                <p style={{ fontSize: '13px', color: '#636366', marginTop: '6px', lineHeight: 1.6 }}>
-                  {blueprint?.parsed_intent_summary}
-                </p>
 
-                {blueprint && (
-                  <div
-                    className="mac-sp-tabular"
+                  <SpringButton
+                    springLabel="打开OCR与CLI设置"
+                    onClick={() => setConfigOpen(true)}
+                    maxShift={6}
                     style={{
-                      marginTop: '18px',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(3, 1fr)',
-                      gap: '10px',
+                      borderRadius: '999px',
+                      border: '1px solid rgba(60, 60, 67, 0.14)',
+                      backgroundColor: '#FFFFFF',
+                      color: '#1C1C1E',
+                      padding: '11px 18px',
+                      fontSize: '12.5px',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      cursor: 'pointer',
                     }}
                   >
-                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '12px', border: '1px solid rgba(60,60,67,0.08)' }}>
-                      <div style={{ fontSize: '11px', color: '#8E8E93' }}>已选章节范围</div>
-                      <div style={{ fontSize: '16px', fontWeight: 700, marginTop: '3px' }}>
-                        {blueprint.selected_chapter_ids.length} / {documentIr.chapters.length} 章
-                      </div>
-                    </div>
-                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '12px', border: '1px solid rgba(60,60,67,0.08)' }}>
-                      <div style={{ fontSize: '11px', color: '#8E8E93' }}>题库题量配比</div>
-                      <div style={{ fontSize: '16px', fontWeight: 700, marginTop: '3px' }}>
-                        {blueprint.deliverables.mcq_count}选 · {blueprint.deliverables.fill_blank_count}填 ·{' '}
-                        {blueprint.deliverables.short_answer_count}简
-                      </div>
-                    </div>
-                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '12px', border: '1px solid rgba(60,60,67,0.08)' }}>
-                      <div style={{ fontSize: '11px', color: '#8E8E93' }}>当前调度路由</div>
-                      <div style={{ fontSize: '14px', fontWeight: 700, marginTop: '5px', color: '#007AFF' }}>
-                        {activeEngineLabel()}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {blueprint && (
-                  <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
-                    <SpringButton
-                      springLabel="右边栏直接确认生成"
-                      disabled={generating || negotiating || blueprint.selected_chapter_ids.length === 0}
-                      onClick={() => handleConfirmAndGenerate(blueprint)}
-                      maxShift={7}
-                      style={{
-                        borderRadius: '999px',
-                        border: 'none',
-                        backgroundColor: '#007AFF',
-                        color: '#FFFFFF',
-                        padding: '10px 20px',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        boxShadow: '0 8px 20px -6px rgba(0, 122, 255, 0.45)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        cursor: generating ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>{generating ? '正在流式生成中...' : '确认当前方案并立即生成学习资料'}</span>
-                    </SpringButton>
-                  </div>
-                )}
+                    <ScanText className="w-4 h-4 text-[#34C759]" />
+                    <span>查看显存 OCR 与 CLI Harness 配置</span>
+                  </SpringButton>
+                </div>
+              </div>
+            ) : !studyPackage || activeMainView === 'stage1_negotiate' ? (
+              <div style={{ maxWidth: '1080px', margin: '0 auto' }}>
+                <BlueprintNegotiator
+                  presets={presets}
+                  blueprint={blueprint}
+                  onChangeBlueprint={setBlueprint}
+                  onNegotiate={handleNegotiate}
+                  onAiFillParams={handleAiFillParams}
+                  onConfirmAndGenerate={handleConfirmAndGenerate}
+                  onQuickGenerate={handleQuickGenerate}
+                  negotiating={negotiating}
+                  aiFilling={aiFilling}
+                  generating={generating}
+                  progressInfo={progressInfo}
+                />
               </div>
             ) : (
               <StudyStudio
                 studyPackage={studyPackage}
                 documentIr={documentIr}
-                activeTab={activeStudioTab}
-                onChangeTab={selectStudioTab}
+                activeTab={activeMainView}
+                onChangeTab={(tab) => setActiveMainView(tab)}
               />
             )}
           </main>
@@ -1296,7 +1100,7 @@ export function App() {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
               <span style={{ fontSize: '11px', fontWeight: 700, color: '#1C1C1E' }}>
-                ζ=1.00 弹簧物理与生成配比 HUD
+                ζ=1.00 弹簧物理与题量 HUD
               </span>
               <span className="mac-sp-tabular" style={{ fontSize: '10px', color: '#007AFF', fontWeight: 700 }}>
                 {blueprint
@@ -1328,7 +1132,7 @@ export function App() {
           </aside>
         )}
 
-        {/* Spotlight ⌘K Instant 0ms Command Modal */}
+        {/* Spotlight ⌘K Instant Command Modal */}
         {spotlightOpen && (
           <div
             className="no-print"
@@ -1370,8 +1174,16 @@ export function App() {
                   }}
                 />
                 <SpotlightRow
-                  label="切换三模路由与 CLI Harness 编排配置..."
-                  hint="Router"
+                  label="✨ 一键 AI 智能填充当前题量与参数"
+                  hint="AI Fill"
+                  onClick={() => {
+                    setSpotlightOpen(false);
+                    if (documentIr) handleAiFillParams();
+                  }}
+                />
+                <SpotlightRow
+                  label="配置显存分级 OCR、DSH/CLI Harness 一键安装..."
+                  hint="Router & OCR"
                   onClick={() => {
                     setSpotlightOpen(false);
                     setConfigOpen(true);
@@ -1413,8 +1225,10 @@ export function App() {
 
 function SpotlightRow({ label, hint, onClick }: { label: string; hint: string; onClick: () => void }) {
   return (
-    <button
+    <SpringButton
+      springLabel={hint}
       onClick={onClick}
+      maxShift={4}
       style={{
         width: '100%',
         textAlign: 'left',
@@ -1431,7 +1245,7 @@ function SpotlightRow({ label, hint, onClick }: { label: string; hint: string; o
     >
       <span style={{ fontWeight: 600, color: '#1C1C1E' }}>{label}</span>
       <span style={{ fontSize: '10.5px', color: '#007AFF', fontWeight: 700 }}>{hint}</span>
-    </button>
+    </SpringButton>
   );
 }
 

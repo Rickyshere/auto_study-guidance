@@ -5,6 +5,8 @@ backend/.pytest_cache/
 *.py[cod]
 backend/data/projects/
 backend/data/settings.json
+backend/data/logs/
+backend/tools/
 
 # Node / Frontend
 frontend/node_modules/

@@ -1,4 +1,7 @@
 import {
+  GpuVramInfo,
+  OcrEngineStatusItem,
+  OcrEngineType,
   PresetTemplate,
   ProjectDetailResponse,
   ProjectSummary,
@@ -43,6 +46,44 @@ export const api = {
       }
     ),
 
+  detectOcrVram: (vramOverrideGb?: number | null) => {
+    const qs =
+      vramOverrideGb !== undefined && vramOverrideGb !== null
+        ? `?vram_override_gb=${encodeURIComponent(vramOverrideGb)}`
+        : '';
+    return requestJson<{ gpu_vram: GpuVramInfo; ocr_engines: OcrEngineStatusItem[] }>(
+      `/api/ocr/vram-detect${qs}`
+    );
+  },
+
+  setupOcrEngine: (engineId: OcrEngineType, action = 'install_and_start') =>
+    requestJson<{
+      ok: boolean;
+      engine_id: OcrEngineType;
+      installed: boolean;
+      running: boolean;
+      message: string;
+      log: string;
+    }>('/api/ocr/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine_id: engineId, action }),
+    }),
+
+  installHarness: (cliName: string) =>
+    requestJson<{
+      ok: boolean;
+      cli_name: string;
+      available: boolean;
+      executable_path?: string | null;
+      message: string;
+      log: string;
+    }>('/api/harnesses/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli_name: cliName }),
+    }),
+
   getPresets: () => requestJson<PresetTemplate[]>('/api/presets'),
 
   listProjects: () => requestJson<ProjectSummary[]>('/api/projects'),
@@ -78,6 +119,20 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+
+  aiFillParams: (
+    projectId: string,
+    payload: {
+      preset_id?: string;
+      user_prompt?: string;
+      current_blueprint?: StudyBlueprint | null;
+    }
+  ) =>
+    requestJson<StudyBlueprint>(`/api/projects/${projectId}/ai-fill-params`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_prompt: '', ...payload }),
     }),
 
   quickGenerate: (

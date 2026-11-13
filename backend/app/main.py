@@ -13,10 +13,16 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.config import PROJECTS_DIR, get_project_dir, load_settings, save_settings
 from app.parsers import SUPPORTED_EXTENSIONS, parse_uploaded_file
-from app.parsers.ocr_engine import is_rapidocr_available
+from app.parsers.ocr_engine import (
+    detect_gpu_vram,
+    get_ocr_engines_status,
+    is_rapidocr_available,
+    setup_ocr_engine,
+)
 from app.router import (
     ModelRouter,
     detect_installed_harnesses,
+    install_cli_harness,
     probe_lmstudio,
     probe_ollama,
 )
@@ -25,6 +31,7 @@ from app.schemas import (
     DocumentIR,
     GenerateRequest,
     NegotiateRequest,
+    OcrEngineType,
     PresetTemplate,
     ProjectDetailResponse,
     ProjectSummary,
@@ -104,6 +111,8 @@ async def get_providers_status() -> ProviderStatusResponse:
     harnesses = detect_installed_harnesses()
     ollama_ok, ollama_models = await probe_ollama(settings.local_config.ollama_url)
     lms_ok, lms_models = await probe_lmstudio(settings.local_config.lmstudio_url)
+    gpu_vram = detect_gpu_vram(settings.ocr_config.vram_override_gb)
+    ocr_engines = await get_ocr_engines_status(settings)
     return ProviderStatusResponse(
         settings=settings,
         harnesses=harnesses,
@@ -112,7 +121,35 @@ async def get_providers_status() -> ProviderStatusResponse:
         lmstudio_available=lms_ok,
         lmstudio_models=lms_models,
         rapidocr_available=is_rapidocr_available(),
+        gpu_vram=gpu_vram,
+        ocr_engines=ocr_engines,
     )
+
+
+@app.get("/api/ocr/vram-detect")
+async def detect_ocr_vram_tier(vram_override_gb: Optional[float] = None) -> Dict[str, Any]:
+    settings = load_settings()
+    effective_override = vram_override_gb if vram_override_gb is not None else settings.ocr_config.vram_override_gb
+    gpu_vram = detect_gpu_vram(effective_override)
+    ocr_engines = await get_ocr_engines_status(settings)
+    return {
+        "gpu_vram": gpu_vram.model_dump(),
+        "ocr_engines": [item.model_dump() for item in ocr_engines],
+    }
+
+
+@app.post("/api/ocr/setup")
+async def setup_ocr_backend(payload: Dict[str, Any]) -> Dict[str, Any]:
+    engine_id = str(payload.get("engine_id") or "mineru_pipeline")
+    action = str(payload.get("action") or "install_and_start")
+    settings = load_settings()
+    return await setup_ocr_engine(engine_id, settings, action=action)  # type: ignore
+
+
+@app.post("/api/harnesses/install")
+async def install_harness_cli(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cli_name = str(payload.get("cli_name") or "dsh")
+    return await install_cli_harness(cli_name)
 
 
 @app.post("/api/providers/settings", response_model=RouterSettings)
@@ -267,6 +304,73 @@ async def negotiate_requirements(project_id: str, req: NegotiateRequest) -> Stud
     )
     _save_blueprint(project_id, blueprint)
     return blueprint
+
+
+@app.post("/api/projects/{project_id}/ai-fill-params", response_model=StudyBlueprint)
+async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> StudyBlueprint:
+    """One-click AI calculation of optimal question counts, timing, score, and focus topics."""
+    doc_ir = _load_project_ir(project_id)
+    current_bp = req.current_blueprint or _load_blueprint(project_id)
+    preset = get_preset(req.preset_id or (current_bp.preset_id if current_bp else "self_study_guide"))
+
+    sel_ids = (
+        current_bp.selected_chapter_ids
+        if current_bp and current_bp.selected_chapter_ids
+        else [c.chapter_id for c in doc_ir.chapters]
+    )
+    sel_chapters = [c for c in doc_ir.chapters if c.chapter_id in sel_ids] or doc_ir.chapters
+    chap_count = max(1, len(sel_chapters))
+    total_chars = sum(c.char_count for c in sel_chapters)
+    density_scale = min(1.8, max(0.8, total_chars / 3500.0))
+
+    mcq = max(3, min(18, round((3 * chap_count) * density_scale)))
+    fill_blank = max(2, min(12, round((1.5 * chap_count) * density_scale)))
+    short_ans = max(1, min(8, round(chap_count * density_scale)))
+
+    if preset.preset_id == "in_class_practice":
+        mcq, fill_blank, short_ans = min(8, max(4, chap_count * 2)), min(4, chap_count), 1
+        minutes, total_score = 15, 50
+    elif preset.preset_id == "exam_cheatsheet":
+        mcq, fill_blank, short_ans = 3, 2, 1
+        minutes, total_score = 15, 40
+    elif preset.preset_id == "self_test_exam":
+        mcq, fill_blank, short_ans = max(8, mcq), max(4, fill_blank), max(2, short_ans)
+        minutes, total_score = 60, 100
+    else:
+        minutes = min(90, max(20, mcq * 2 + fill_blank * 3 + short_ans * 8))
+        total_score = mcq * 5 + fill_blank * 5 + short_ans * 10
+
+    focus_topics: List[str] = []
+    for ch in sel_chapters:
+        focus_topics.extend(ch.key_terms[:3])
+    focus_topics = list(dict.fromkeys(focus_topics))[:10]
+
+    base_bp = current_bp or HeuristicStudyEngine.build_blueprint_from_ir(doc_ir, preset)
+    updated_deliverables = base_bp.deliverables.model_copy(
+        update={
+            "mcq_count": mcq,
+            "fill_blank_count": fill_blank,
+            "short_answer_count": short_ans,
+            "suggested_minutes": minutes,
+            "total_score": total_score,
+        }
+    )
+    updated_bp = base_bp.model_copy(
+        update={
+            "deliverables": updated_deliverables,
+            "focus_topics": focus_topics or base_bp.focus_topics,
+            "parsed_intent_summary": (
+                f"AI 已结合已选 {chap_count} 个章节（约 {total_chars:,} 字）智能填充题量："
+                f"{mcq} 单选 + {fill_blank} 填空 + {short_ans} 简答（共 {total_score} 分 / {minutes} 分钟）。"
+            ),
+            "ai_feedback_message": (
+                f"已根据文档信息密度自动填好题量与考核重点（单选 {mcq} / 填空 {fill_blank} / 简答 {short_ans}），"
+                "您也可以继续手动微调具体数字。"
+            ),
+        }
+    )
+    _save_blueprint(project_id, updated_bp)
+    return updated_bp
 
 
 @app.post("/api/projects/{project_id}/generate")

@@ -72,11 +72,14 @@ def test_health_and_providers():
     status_resp = client.get("/api/providers/status")
     assert status_resp.status_code == 200
     data = status_resp.json()
-    assert len(data["harnesses"]) >= 3
+    assert len(data["harnesses"]) >= 4
+    assert "gpu_vram" in data
+    assert "ocr_engines" in data
 
     harnesses = {h.name: h for h in detect_installed_harnesses()}
     assert "claude" in harnesses
     assert "codex" in harnesses
+    assert "dsh" in harnesses
 
 
 def test_presets_list():
@@ -188,5 +191,43 @@ def test_demo_project_lifecycle():
         )
         assert qgen.status_code == 200
         assert "Transformer" in qgen.json()["study_notes_markdown"]
+    finally:
+        client.delete(f"/api/projects/{pid}")
+
+
+def test_vram_ocr_dsh_and_ai_fill():
+    vram_resp = client.get("/api/ocr/vram-detect")
+    assert vram_resp.status_code == 200
+    vram_data = vram_resp.json()
+    assert "gpu_vram" in vram_data
+    assert vram_data["gpu_vram"]["vram_tier"] in {"le_8gb", "gt_8_lt_48gb", "ge_48gb"}
+    assert vram_data["gpu_vram"]["recommended_ocr_engine"]
+    engine_ids = {item["engine_id"] for item in vram_data["ocr_engines"]}
+    assert {"mineru_pipeline", "somark_free_api", "paddleocr", "mineru_full", "oxr_full", "rapidocr"} <= engine_ids
+
+    dsh_resp = client.post("/api/harnesses/install", json={"cli_name": "dsh"})
+    assert dsh_resp.status_code == 200
+    dsh_data = dsh_resp.json()
+    assert dsh_data["ok"] is True
+    assert dsh_data["available"] is True
+
+    demo = client.post("/api/projects/demo")
+    assert demo.status_code == 200
+    pid = demo.json()["document_ir"]["project_id"]
+    try:
+        fill_resp = client.post(
+            f"/api/projects/{pid}/ai-fill-params",
+            json={
+                "preset_id": "self_test_exam",
+                "user_prompt": "重点考查第2章，适当增加选择题数量",
+                "current_blueprint": demo.json()["blueprint"],
+            },
+        )
+        assert fill_resp.status_code == 200
+        bp = fill_resp.json()
+        assert bp["deliverables"]["mcq_count"] >= 0
+        assert bp["deliverables"]["fill_blank_count"] >= 0
+        assert bp["deliverables"]["short_answer_count"] >= 0
+        assert bp["ai_feedback_message"]
     finally:
         client.delete(f"/api/projects/{pid}")

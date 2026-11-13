@@ -9,14 +9,24 @@ import {
   X,
   RefreshCw,
   Zap,
+  ScanText,
+  Download,
 } from 'lucide-react';
 import { api } from '../api';
 import {
+  GpuVramInfo,
+  OcrEngineStatusItem,
+  OcrEngineType,
   ProviderStatusResponse,
   ProviderType,
   RouterSettings,
   StageName,
 } from '../types';
+import {
+  SpringButton,
+  SpringSegmentedControl,
+  SpringToggleSwitch,
+} from '../utils/springPhysics';
 
 interface Props {
   open: boolean;
@@ -35,11 +45,20 @@ const STAGE_LABELS: Record<StageName, string> = {
 };
 
 const PROVIDER_OPTIONS: { value: ProviderType; label: string }[] = [
-  { value: 'heuristic', label: '内置智能规则引擎 (免Token即时预览)' },
-  { value: 'harness', label: '本地 CLI Harness (Claude / Codex / Gemini)' },
-  { value: 'cloud', label: '云端 API (OpenAI / DeepSeek / Claude / OpenRouter)' },
-  { value: 'local', label: '本地模型服务 (Ollama / LM Studio)' },
+  { value: 'heuristic', label: '内置规则引擎' },
+  { value: 'harness', label: 'CLI Harness (DSH/Claude/Codex)' },
+  { value: 'cloud', label: '云端 API' },
+  { value: 'local', label: '本地模型 (Ollama/LM Studio)' },
 ];
+
+type VramPresetKey = 'auto' | 'le_8gb' | 'gt_8_lt_48gb' | 'ge_48gb';
+
+function vramPresetFromOverride(override?: number | null): VramPresetKey {
+  if (override === undefined || override === null) return 'auto';
+  if (override >= 48) return 'ge_48gb';
+  if (override > 8) return 'gt_8_lt_48gb';
+  return 'le_8gb';
+}
 
 export const RouterConfigModal: React.FC<Props> = ({
   open,
@@ -51,24 +70,47 @@ export const RouterConfigModal: React.FC<Props> = ({
   const [draft, setDraft] = useState<RouterSettings | null>(
     status ? JSON.parse(JSON.stringify(status.settings)) : null
   );
+  const [liveVram, setLiveVram] = useState<GpuVramInfo | null>(status?.gpu_vram ?? null);
+  const [liveOcrEngines, setLiveOcrEngines] = useState<OcrEngineStatusItem[]>(
+    status?.ocr_engines ?? []
+  );
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  const [installingTarget, setInstallingTarget] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (status && open) {
-      setDraft(JSON.parse(JSON.stringify(status.settings)));
+      const cloned: RouterSettings = JSON.parse(JSON.stringify(status.settings));
+      if (!cloned.ocr_config) {
+        cloned.ocr_config = {
+          active_engine: 'auto_recommend',
+          detect_vram_on_startup: true,
+          vram_override_gb: null,
+          somark_api_base_url: 'https://free-oxr.somark.ai/api/v1',
+          somark_api_key: '',
+          mineru_service_url: 'http://127.0.0.1:8010',
+          oxr_service_url: 'http://127.0.0.1:8020',
+        };
+      }
+      setDraft(cloned);
+      setLiveVram(status.gpu_vram);
+      setLiveOcrEngines(status.ocr_engines || []);
       setTestResult(null);
     }
   }, [status, open]);
 
   if (!open || !draft || !status) return null;
 
+  const currentVram = liveVram || status.gpu_vram;
+  const currentOcrEngines = liveOcrEngines.length > 0 ? liveOcrEngines : status.ocr_engines;
+
   const handleSave = async () => {
     setSaving(true);
     try {
       const saved = await api.saveProviderSettings(draft);
       onSaved(saved);
+      await onRefreshStatus();
       onClose();
     } catch (e: any) {
       setTestResult(`保存失败: ${e.message}`);
@@ -95,194 +137,769 @@ export const RouterConfigModal: React.FC<Props> = ({
     }
   };
 
+  const handleVramPresetChange = async (tierKey: VramPresetKey) => {
+    const overrideMap: Record<VramPresetKey, number | null> = {
+      auto: null,
+      le_8gb: 8,
+      gt_8_lt_48gb: 24,
+      ge_48gb: 48,
+    };
+    const nextOverride = overrideMap[tierKey];
+    const nextDraft = {
+      ...draft,
+      ocr_config: { ...draft.ocr_config, vram_override_gb: nextOverride },
+    };
+    setDraft(nextDraft);
+    try {
+      const res = await api.detectOcrVram(nextOverride);
+      setLiveVram(res.gpu_vram);
+      setLiveOcrEngines(res.ocr_engines);
+    } catch (e: any) {
+      setTestResult(`显存探测异常: ${e.message}`);
+    }
+  };
+
+  const handleSetupOcr = async (engineId: OcrEngineType) => {
+    setInstallingTarget(`ocr:${engineId}`);
+    setTestResult(`正在静默执行 [${engineId}] 下载·安装·启动一条龙服务...`);
+    try {
+      const res = await api.setupOcrEngine(engineId, 'install_and_start');
+      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}${res.log ? `\n${res.log}` : ''}`);
+      await onRefreshStatus();
+      const vramRes = await api.detectOcrVram(draft.ocr_config.vram_override_gb);
+      setLiveVram(vramRes.gpu_vram);
+      setLiveOcrEngines(vramRes.ocr_engines);
+      if (res.ok) {
+        setDraft((prev) =>
+          prev ? { ...prev, ocr_config: { ...prev.ocr_config, active_engine: engineId } } : prev
+        );
+      }
+    } catch (e: any) {
+      setTestResult(`❌ OCR 部署异常: ${e.message}`);
+    } finally {
+      setInstallingTarget(null);
+    }
+  };
+
+  const handleInstallHarness = async (cliName: string) => {
+    setInstallingTarget(`cli:${cliName}`);
+    setTestResult(`正在静默安装 ${cliName.toUpperCase()} CLI Harness...`);
+    try {
+      const res = await api.installHarness(cliName);
+      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}${res.log ? `\n${res.log}` : ''}`);
+      await onRefreshStatus();
+      if (res.ok && ['dsh', 'claude', 'codex', 'gemini'].includes(cliName)) {
+        setDraft((prev) =>
+          prev
+            ? {
+                ...prev,
+                harness_config: {
+                  ...prev.harness_config,
+                  preferred_cli: cliName as RouterSettings['harness_config']['preferred_cli'],
+                },
+              }
+            : prev
+        );
+      }
+    } catch (e: any) {
+      setTestResult(`❌ CLI 安装异常: ${e.message}`);
+    } finally {
+      setInstallingTarget(null);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-      <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200">
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 60,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(15, 23, 42, 0.45)',
+        backdropFilter: 'blur(8px)',
+        padding: '16px',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '1040px',
+          maxHeight: '92vh',
+          overflowY: 'auto',
+          borderRadius: '20px',
+          backgroundColor: '#FFFFFF',
+          boxShadow: '0 28px 70px -16px rgba(0, 0, 0, 0.35)',
+          border: '1px solid rgba(60, 60, 67, 0.14)',
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderBottom: '1px solid rgba(60, 60, 67, 0.12)',
+            backgroundColor: 'rgba(255, 255, 255, 0.92)',
+            backdropFilter: 'blur(18px)',
+            padding: '14px 22px',
+          }}
+        >
           <div>
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Zap className="w-5 h-5 text-indigo-600" />
-              三模路由与 CLI Harness 编排中心
+            <h2
+              style={{
+                fontSize: '16px',
+                fontWeight: 700,
+                color: '#1C1C1E',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <Zap className="w-5 h-5 text-[#007AFF]" />
+              三模路由、DSH CLI Harness 与显卡分级 OCR 部署中心
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              自由切换 云端 API / 本地模型 (Ollama·LM Studio) / 本地 Agent CLI Harness (Claude·Codex)，支持按阶段混合路由
+            <p style={{ fontSize: '11.5px', color: '#636366', marginTop: '2px' }}>
+              启动自动探测显存并推荐 MinerU 2 Pipeline / 全量 MinerU / SoMark Free-OXR / PaddleOCR / OXR 全量部署，同时支持 DSH 一键安装
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <SpringButton
+              springLabel="重新探测环境"
               onClick={onRefreshStatus}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              maxShift={5}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                borderRadius: '999px',
+                border: '1px solid rgba(60, 60, 67, 0.14)',
+                backgroundColor: '#F9F9FB',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#1C1C1E',
+                cursor: 'pointer',
+              }}
             >
-              <RefreshCw className="w-3.5 h-3.5" /> 重新探测本机环境
-            </button>
-            <button
+              <RefreshCw className="w-3.5 h-3.5" />
+              重新探测环境
+            </SpringButton>
+            <SpringButton
+              springLabel="关闭设置"
               onClick={onClose}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              maxShift={4}
+              style={{
+                borderRadius: '999px',
+                border: 'none',
+                backgroundColor: '#F2F2F7',
+                padding: '6px',
+                color: '#636366',
+                cursor: 'pointer',
+              }}
             >
-              <X className="w-5 h-5" />
-            </button>
+              <X className="w-4 h-4" />
+            </SpringButton>
           </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Routing Mode Selector */}
-          <div className="rounded-xl bg-slate-50 p-4 border border-slate-200">
-            <div className="flex flex-wrap items-center justify-between gap-4">
+        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Section 1: GPU VRAM Detection & Tiered OCR Engine Matrix */}
+          <div
+            style={{
+              borderRadius: '16px',
+              backgroundColor: '#F9F9FB',
+              border: '1px solid rgba(60, 60, 67, 0.1)',
+              padding: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+              }}
+            >
               <div>
-                <div className="text-sm font-semibold text-slate-800">路由调度模式</div>
-                <div className="text-xs text-slate-500 mt-0.5">
+                <div
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    color: '#1C1C1E',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <ScanText className="w-4 h-4 text-[#007AFF]" />
+                  <span>分级 OCR 识别引擎与启动显存检测</span>
+                </div>
+                {currentVram && (
+                  <div style={{ fontSize: '11.5px', color: '#3A3A3C', marginTop: '4px' }}>
+                    <span style={{ fontWeight: 600, color: '#007AFF' }}>
+                      {currentVram.gpu_name} · 有效显存 {currentVram.effective_vram_gb.toFixed(1)} GB
+                    </span>
+                    <span style={{ color: '#636366', marginLeft: '8px' }}>
+                      {currentVram.recommendation_reason}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <SpringToggleSwitch
+                checked={draft.ocr_config.detect_vram_on_startup}
+                onChange={(val) =>
+                  setDraft({
+                    ...draft,
+                    ocr_config: { ...draft.ocr_config, detect_vram_on_startup: val },
+                  })
+                }
+                label="启动时检测显存大小"
+                springLabel="显存启动检测开关"
+              />
+            </div>
+
+            {/* VRAM Tier Quick Probe / Simulation Switcher */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11.5px', fontWeight: 600, color: '#636366' }}>
+                显存档位模式：
+              </span>
+              <SpringSegmentedControl<VramPresetKey>
+                springLabel="显存档位切换"
+                compact
+                wrap
+                value={vramPresetFromOverride(draft.ocr_config.vram_override_gb)}
+                onChange={handleVramPresetChange}
+                options={[
+                  { value: 'auto', label: '自动探测本机显存' },
+                  { value: 'le_8gb', label: '≤ 8GB 轻量档 (MinerU Pipeline / Free-OXR / PaddleOCR)' },
+                  { value: 'gt_8_lt_48gb', label: '8–48GB 进阶档 (MinerU 2 全量本地)' },
+                  { value: 'ge_48gb', label: '≥ 48GB 旗舰档 (SoMark OXR 全量部署)' },
+                ]}
+              />
+            </div>
+
+            {/* Active OCR Selector */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11.5px', fontWeight: 600, color: '#636366' }}>
+                当前激活 OCR：
+              </span>
+              <SpringSegmentedControl<OcrEngineType>
+                springLabel="OCR引擎切换"
+                compact
+                wrap
+                value={draft.ocr_config.active_engine}
+                onChange={(val) =>
+                  setDraft({ ...draft, ocr_config: { ...draft.ocr_config, active_engine: val } })
+                }
+                options={[
+                  { value: 'auto_recommend', label: '★ 按显存自动推荐' },
+                  { value: 'mineru_pipeline', label: 'MinerU 2 Pipeline (无vLLM)' },
+                  { value: 'somark_free_api', label: 'Free-OXR 开放 API' },
+                  { value: 'paddleocr', label: 'PaddleOCR 备选' },
+                  { value: 'mineru_full', label: 'MinerU 2 全量部署' },
+                  { value: 'oxr_full', label: 'SoMark OXR 全量部署' },
+                  { value: 'rapidocr', label: 'RapidOCR 内置' },
+                ]}
+              />
+            </div>
+
+            {/* OCR Engine Cards with 1-Click Download/Install/Start */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gap: '10px',
+              }}
+            >
+              {currentOcrEngines.map((eng) => {
+                const isRec = currentVram?.recommended_ocr_engine === eng.engine_id;
+                const isInstalling = installingTarget === `ocr:${eng.engine_id}`;
+                return (
+                  <div
+                    key={eng.engine_id}
+                    style={{
+                      borderRadius: '12px',
+                      backgroundColor: '#FFFFFF',
+                      border: isRec
+                        ? '1.5px solid #007AFF'
+                        : '1px solid rgba(60, 60, 67, 0.12)',
+                      padding: '11px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '6px',
+                        }}
+                      >
+                        <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#1C1C1E' }}>
+                          {eng.name}
+                        </span>
+                        <span
+                          style={{
+                            borderRadius: '999px',
+                            backgroundColor: isRec
+                              ? 'rgba(0, 122, 255, 0.12)'
+                              : '#F2F2F7',
+                            color: isRec ? '#007AFF' : '#636366',
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {isRec ? '★ 当前显存推荐' : eng.tier_badge}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '11px', color: '#636366', marginTop: '4px', lineHeight: 1.45 }}>
+                        {eng.description}
+                      </p>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '6px',
+                        paddingTop: '6px',
+                        borderTop: '1px solid rgba(60, 60, 67, 0.08)',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '10.5px',
+                          fontWeight: 600,
+                          color: eng.installed ? '#248A3D' : '#8E8E93',
+                        }}
+                      >
+                        {eng.running
+                          ? '● 运行中 / 就绪'
+                          : eng.installed
+                          ? '● 已安装'
+                          : '○ 未本地安装'}
+                      </span>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        {eng.supports_one_click_setup && (
+                          <SpringButton
+                            springLabel={`一键部署:${eng.engine_id}`}
+                            disabled={Boolean(installingTarget)}
+                            onClick={() => handleSetupOcr(eng.engine_id)}
+                            maxShift={5}
+                            style={{
+                              borderRadius: '999px',
+                              border: 'none',
+                              backgroundColor: '#007AFF',
+                              color: '#FFFFFF',
+                              fontSize: '10.5px',
+                              fontWeight: 600,
+                              padding: '4px 9px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              cursor: installingTarget ? 'wait' : 'pointer',
+                            }}
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>
+                              {isInstalling
+                                ? '安装启动中...'
+                                : eng.engine_id === 'mineru_pipeline'
+                                ? '一键下载·安装·启动'
+                                : '一键下载部署'}
+                            </span>
+                          </SpringButton>
+                        )}
+                        <SpringButton
+                          springLabel={`选用:${eng.engine_id}`}
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              ocr_config: { ...draft.ocr_config, active_engine: eng.engine_id },
+                            })
+                          }
+                          maxShift={4}
+                          style={{
+                            borderRadius: '999px',
+                            border: '1px solid rgba(60, 60, 67, 0.16)',
+                            backgroundColor:
+                              draft.ocr_config.active_engine === eng.engine_id
+                                ? '#1C1C1E'
+                                : '#FFFFFF',
+                            color:
+                              draft.ocr_config.active_engine === eng.engine_id
+                                ? '#FFFFFF'
+                                : '#1C1C1E',
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            padding: '4px 9px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {draft.ocr_config.active_engine === eng.engine_id ? '已选用' : '选用'}
+                        </SpringButton>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Free-OXR API Endpoint Config */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: '10px',
+                paddingTop: '4px',
+              }}
+            >
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '3px' }}>
+                  SoMark Free-OXR 开放 API URL
+                </label>
+                <input
+                  type="text"
+                  value={draft.ocr_config.somark_api_base_url}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      ocr_config: { ...draft.ocr_config, somark_api_base_url: e.target.value },
+                    })
+                  }
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.18)',
+                    backgroundColor: '#FFFFFF',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '3px' }}>
+                  MinerU 2 本地服务端口 URL
+                </label>
+                <input
+                  type="text"
+                  value={draft.ocr_config.mineru_service_url}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      ocr_config: { ...draft.ocr_config, mineru_service_url: e.target.value },
+                    })
+                  }
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.18)',
+                    backgroundColor: '#FFFFFF',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '3px' }}>
+                  SoMark OXR 本地服务端口 URL
+                </label>
+                <input
+                  type="text"
+                  value={draft.ocr_config.oxr_service_url}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      ocr_config: { ...draft.ocr_config, oxr_service_url: e.target.value },
+                    })
+                  }
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.18)',
+                    backgroundColor: '#FFFFFF',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 2: Routing Mode Selector (Physical Spring Switchers) */}
+          <div
+            style={{
+              borderRadius: '16px',
+              backgroundColor: '#F9F9FB',
+              border: '1px solid rgba(60, 60, 67, 0.1)',
+              padding: '15px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1C1C1E' }}>
+                  模型路由调度模式
+                </div>
+                <div style={{ fontSize: '11px', color: '#636366', marginTop: '2px' }}>
                   单一引擎模式统一调用同一通道；智能阶段编排允许不同任务阶段使用不同模型/CLI
                 </div>
               </div>
-              <div className="flex rounded-lg bg-white p-1 border border-slate-200">
-                <button
-                  onClick={() => setDraft({ ...draft, routing_mode: 'single' })}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
-                    draft.routing_mode === 'single'
-                      ? 'bg-indigo-600 text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  单一引擎直连
-                </button>
-                <button
-                  onClick={() => setDraft({ ...draft, routing_mode: 'smart_stage' })}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
-                    draft.routing_mode === 'smart_stage'
-                      ? 'bg-indigo-600 text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  智能阶段 Harness 编排
-                </button>
-              </div>
+              <SpringSegmentedControl<'single' | 'smart_stage'>
+                springLabel="路由调度模式"
+                value={draft.routing_mode}
+                onChange={(val) => setDraft({ ...draft, routing_mode: val })}
+                options={[
+                  { value: 'single', label: '单一引擎直连' },
+                  { value: 'smart_stage', label: '智能阶段 Harness 编排' },
+                ]}
+              />
             </div>
 
             {draft.routing_mode === 'single' ? (
-              <div className="mt-4">
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  当前全局激活引擎
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {PROVIDER_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setDraft({ ...draft, active_provider: opt.value })}
-                      className={`text-left px-3 py-2.5 rounded-lg border text-xs font-medium transition ${
-                        draft.active_provider === opt.value
-                          ? 'border-indigo-600 bg-indigo-50 text-indigo-800 ring-1 ring-indigo-600'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+              <div>
+                <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#636366', marginBottom: '6px' }}>
+                  当前全局激活引擎（可拖拽或点击切换，ζ = 1.0 物理弹簧）
                 </div>
+                <SpringSegmentedControl<ProviderType>
+                  springLabel="全局激活引擎"
+                  wrap
+                  value={draft.active_provider}
+                  onChange={(val) => setDraft({ ...draft, active_provider: val })}
+                  options={PROVIDER_OPTIONS}
+                />
               </div>
             ) : (
-              <div className="mt-4 space-y-2">
-                <div className="text-xs font-medium text-slate-700">按任务阶段分配路由通道：</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#636366' }}>
+                  按任务阶段分配路由通道：
+                </div>
                 {(Object.keys(STAGE_LABELS) as StageName[]).map((stage) => (
                   <div
                     key={stage}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white p-2.5 rounded-lg border border-slate-200"
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      backgroundColor: '#FFFFFF',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(60, 60, 67, 0.1)',
+                      padding: '8px 11px',
+                    }}
                   >
-                    <span className="text-xs font-medium text-slate-700">{STAGE_LABELS[stage]}</span>
-                    <select
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#1C1C1E' }}>
+                      {STAGE_LABELS[stage]}
+                    </span>
+                    <SpringSegmentedControl<ProviderType>
+                      springLabel={`阶段:${stage}`}
+                      compact
+                      wrap
                       value={draft.stage_mapping[stage]?.provider || 'heuristic'}
-                      onChange={(e) =>
+                      onChange={(val) =>
                         setDraft({
                           ...draft,
                           stage_mapping: {
                             ...draft.stage_mapping,
-                            [stage]: { provider: e.target.value as ProviderType },
+                            [stage]: { provider: val },
                           },
                         })
                       }
-                      className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs bg-white"
-                    >
-                      {PROVIDER_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: 'heuristic', label: '规则引擎' },
+                        { value: 'harness', label: 'CLI Harness' },
+                        { value: 'cloud', label: '云端 API' },
+                        { value: 'local', label: '本地模型' },
+                      ]}
+                    />
                   </div>
                 ))}
               </div>
             )}
 
-            <label className="mt-3 inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={draft.enable_fallback}
-                onChange={(e) => setDraft({ ...draft, enable_fallback: e.target.checked })}
-                className="rounded border-slate-300 text-indigo-600"
-              />
-              启用自动安全回退（当外部 API / CLI 调用超时或未配置时自动降级至内置智能规则引擎，确保流程不中断）
-            </label>
+            <SpringToggleSwitch
+              checked={draft.enable_fallback}
+              onChange={(val) => setDraft({ ...draft, enable_fallback: val })}
+              label="启用自动安全回退（外部 API / CLI 调用异常时自动降级至内置智能规则引擎，确保不中断）"
+              springLabel="安全回退开关"
+            />
           </div>
 
-          {/* 3-Column Provider Configurations */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* CLI Harness Card */}
-            <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <Terminal className="w-4 h-4 text-emerald-600" />
-                  CLI Harness 路由
+          {/* Section 3: 3-Column Provider Cards (CLI Harness with DSH + Cloud API + Local LLM) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: '14px',
+            }}
+          >
+            {/* CLI Harness Card (with DSH + 1-Click Install) */}
+            <div
+              style={{
+                borderRadius: '14px',
+                border: '1px solid rgba(60, 60, 67, 0.12)',
+                padding: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h3
+                  style={{
+                    fontSize: '13.5px',
+                    fontWeight: 700,
+                    color: '#1C1C1E',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Terminal className="w-4 h-4 text-[#34C759]" />
+                  CLI Harness (含 DSH)
                 </h3>
-                <button
+                <SpringButton
+                  springLabel="测试CLI"
                   disabled={testing}
                   onClick={() => handleTest('harness')}
-                  className="text-xs text-indigo-600 hover:underline font-medium"
+                  maxShift={4}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    color: '#007AFF',
+                    cursor: 'pointer',
+                  }}
                 >
-                  测试 CLI
-                </button>
+                  测试连通性
+                </SpringButton>
               </div>
-              <div className="space-y-1.5">
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {status.harnesses.map((h) => (
                   <div
                     key={h.name}
-                    className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-md bg-slate-50"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      padding: '6px 9px',
+                      borderRadius: '8px',
+                      backgroundColor: '#F9F9FB',
+                      border: '1px solid rgba(60, 60, 67, 0.08)',
+                    }}
                   >
-                    <span className="font-medium uppercase">{h.name}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, textTransform: 'uppercase' }}>{h.name}</span>
+                      {h.name === 'dsh' && (
+                        <span style={{ marginLeft: '5px', fontSize: '10px', color: '#007AFF', fontWeight: 600 }}>
+                          DeepSeek Harness
+                        </span>
+                      )}
+                    </div>
                     {h.available ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> 已检测到
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          color: '#248A3D',
+                          fontWeight: 600,
+                          fontSize: '11px',
+                        }}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> 已安装
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-slate-400">
-                        <XCircle className="w-3.5 h-3.5" /> 未安装
-                      </span>
+                      <SpringButton
+                        springLabel={`一键安装:${h.name}`}
+                        disabled={Boolean(installingTarget)}
+                        onClick={() => handleInstallHarness(h.name)}
+                        maxShift={4}
+                        style={{
+                          borderRadius: '999px',
+                          border: 'none',
+                          backgroundColor: '#007AFF',
+                          color: '#FFFFFF',
+                          fontSize: '10.5px',
+                          fontWeight: 600,
+                          padding: '3px 8px',
+                          cursor: installingTarget ? 'wait' : 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                        }}
+                      >
+                        <XCircle className="w-3 h-3" />
+                        <span>
+                          {installingTarget === `cli:${h.name}` ? '安装中...' : '一键安装'}
+                        </span>
+                      </SpringButton>
                     )}
                   </div>
                 ))}
               </div>
+
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">首选 CLI 工具</label>
-                <select
+                <div style={{ fontSize: '11px', fontWeight: 600, color: '#636366', marginBottom: '4px' }}>
+                  首选 CLI 工具
+                </div>
+                <SpringSegmentedControl<'dsh' | 'claude' | 'codex' | 'gemini' | 'custom'>
+                  springLabel="首选CLI工具"
+                  compact
+                  wrap
                   value={draft.harness_config.preferred_cli}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setDraft({
                       ...draft,
-                      harness_config: {
-                        ...draft.harness_config,
-                        preferred_cli: e.target.value as any,
-                      },
+                      harness_config: { ...draft.harness_config, preferred_cli: val },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                >
-                  <option value="claude">Claude Code CLI (claude)</option>
-                  <option value="codex">OpenAI Codex CLI (codex)</option>
-                  <option value="gemini">Gemini CLI (gemini)</option>
-                  <option value="custom">自定义命令模板</option>
-                </select>
+                  options={[
+                    { value: 'dsh', label: 'DSH (DeepSeek)' },
+                    { value: 'claude', label: 'Claude' },
+                    { value: 'codex', label: 'Codex' },
+                    { value: 'gemini', label: 'Gemini' },
+                    { value: 'custom', label: '自定义' },
+                  ]}
+                />
               </div>
+
               {draft.harness_config.preferred_cli === 'custom' && (
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                  <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '3px' }}>
                     自定义模板 (支持 {'{prompt_file}'})
                   </label>
                   <input
@@ -297,46 +914,85 @@ export const RouterConfigModal: React.FC<Props> = ({
                         },
                       })
                     }
-                    placeholder="my-agent --file {prompt_file}"
-                    className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                    placeholder="dsh --file {prompt_file}"
+                    style={{
+                      width: '100%',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(60, 60, 67, 0.2)',
+                      padding: '6px 9px',
+                      fontSize: '11.5px',
+                    }}
                   />
                 </div>
               )}
             </div>
 
             {/* Cloud API Card */}
-            <div className="rounded-xl border border-slate-200 p-4 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <Cloud className="w-4 h-4 text-sky-600" />
-                  云端 API 配置
+            <div
+              style={{
+                borderRadius: '14px',
+                border: '1px solid rgba(60, 60, 67, 0.12)',
+                padding: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '9px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h3
+                  style={{
+                    fontSize: '13.5px',
+                    fontWeight: 700,
+                    color: '#1C1C1E',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Cloud className="w-4 h-4 text-[#007AFF]" />
+                  云端 API (DeepSeek / OpenAI)
                 </h3>
-                <button
+                <SpringButton
+                  springLabel="测试云端API"
                   disabled={testing}
                   onClick={() => handleTest('cloud')}
-                  className="text-xs text-indigo-600 hover:underline font-medium"
+                  maxShift={4}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    color: '#007AFF',
+                    cursor: 'pointer',
+                  }}
                 >
                   测试 API
-                </button>
+                </SpringButton>
               </div>
+
               <div>
-                <label className="block text-xs text-slate-600 mb-0.5">接口协议</label>
-                <select
+                <div style={{ fontSize: '11px', color: '#636366', marginBottom: '4px' }}>接口协议</div>
+                <SpringSegmentedControl<'openai_compatible' | 'anthropic'>
+                  springLabel="云端接口协议"
+                  compact
                   value={draft.cloud_config.api_format}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setDraft({
                       ...draft,
-                      cloud_config: { ...draft.cloud_config, api_format: e.target.value as any },
+                      cloud_config: { ...draft.cloud_config, api_format: val },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                >
-                  <option value="openai_compatible">OpenAI 兼容 (DeepSeek / OpenRouter / Qwen 等)</option>
-                  <option value="anthropic">Anthropic Claude 原生</option>
-                </select>
+                  options={[
+                    { value: 'openai_compatible', label: 'OpenAI / DeepSeek' },
+                    { value: 'anthropic', label: 'Anthropic Claude' },
+                  ]}
+                />
               </div>
+
               <div>
-                <label className="block text-xs text-slate-600 mb-0.5">Base URL</label>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '2px' }}>
+                  Base URL
+                </label>
                 <input
                   type="text"
                   value={draft.cloud_config.base_url}
@@ -346,11 +1002,19 @@ export const RouterConfigModal: React.FC<Props> = ({
                       cloud_config: { ...draft.cloud_config, base_url: e.target.value },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.2)',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-600 mb-0.5">API Key</label>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '2px' }}>
+                  API Key（DSH Harness 亦可复用此密钥）
+                </label>
                 <input
                   type="password"
                   value={draft.cloud_config.api_key}
@@ -361,11 +1025,19 @@ export const RouterConfigModal: React.FC<Props> = ({
                       cloud_config: { ...draft.cloud_config, api_key: e.target.value },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.2)',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-600 mb-0.5">文本模型名称</label>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '2px' }}>
+                  模型名称
+                </label>
                 <input
                   type="text"
                   value={draft.cloud_config.model}
@@ -375,118 +1047,208 @@ export const RouterConfigModal: React.FC<Props> = ({
                       cloud_config: { ...draft.cloud_config, model: e.target.value },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.2)',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
                 />
               </div>
             </div>
 
             {/* Local LLM Card */}
-            <div className="rounded-xl border border-slate-200 p-4 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <Cpu className="w-4 h-4 text-violet-600" />
+            <div
+              style={{
+                borderRadius: '14px',
+                border: '1px solid rgba(60, 60, 67, 0.12)',
+                padding: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '9px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h3
+                  style={{
+                    fontSize: '13.5px',
+                    fontWeight: 700,
+                    color: '#1C1C1E',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Cpu className="w-4 h-4 text-[#5856D6]" />
                   本地模型服务
                 </h3>
-                <button
+                <SpringButton
+                  springLabel="测试本地模型"
                   disabled={testing}
                   onClick={() => handleTest('local')}
-                  className="text-xs text-indigo-600 hover:underline font-medium"
+                  maxShift={4}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    color: '#007AFF',
+                    cursor: 'pointer',
+                  }}
                 >
                   测试本地
-                </button>
+                </SpringButton>
               </div>
-              <div className="text-xs space-y-1">
-                <div className="flex justify-between bg-slate-50 px-2 py-1 rounded">
+
+              <div style={{ fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    backgroundColor: '#F9F9FB',
+                    padding: '5px 8px',
+                    borderRadius: '7px',
+                  }}
+                >
                   <span>Ollama</span>
-                  <span className={status.ollama_available ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                  <span style={{ color: status.ollama_available ? '#248A3D' : '#8E8E93', fontWeight: 600 }}>
                     {status.ollama_available ? `在线 (${status.ollama_models.length} 模型)` : '未启动'}
                   </span>
                 </div>
-                <div className="flex justify-between bg-slate-50 px-2 py-1 rounded">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    backgroundColor: '#F9F9FB',
+                    padding: '5px 8px',
+                    borderRadius: '7px',
+                  }}
+                >
                   <span>LM Studio</span>
-                  <span className={status.lmstudio_available ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                  <span style={{ color: status.lmstudio_available ? '#248A3D' : '#8E8E93', fontWeight: 600 }}>
                     {status.lmstudio_available ? `在线 (${status.lmstudio_models.length} 模型)` : '未启动'}
                   </span>
                 </div>
               </div>
+
               <div>
-                <label className="block text-xs text-slate-600 mb-0.5">本地引擎</label>
-                <select
+                <div style={{ fontSize: '11px', color: '#636366', marginBottom: '4px' }}>本地引擎</div>
+                <SpringSegmentedControl<'ollama' | 'lmstudio'>
+                  springLabel="本地模型引擎"
+                  compact
                   value={draft.local_config.engine}
+                  onChange={(val) =>
+                    setDraft({
+                      ...draft,
+                      local_config: { ...draft.local_config, engine: val },
+                    })
+                  }
+                  options={[
+                    { value: 'ollama', label: 'Ollama (11434)' },
+                    { value: 'lmstudio', label: 'LM Studio (1234)' },
+                  ]}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '2px' }}>
+                  模型名称
+                </label>
+                <input
+                  type="text"
+                  value={draft.local_config.model}
                   onChange={(e) =>
                     setDraft({
                       ...draft,
-                      local_config: { ...draft.local_config, engine: e.target.value as any },
+                      local_config: { ...draft.local_config, model: e.target.value },
                     })
                   }
-                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                >
-                  <option value="ollama">Ollama (127.0.0.1:11434)</option>
-                  <option value="lmstudio">LM Studio (127.0.0.1:1234)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-600 mb-0.5">模型名</label>
-                {((draft.local_config.engine === 'ollama' && status.ollama_models.length > 0) ||
-                  (draft.local_config.engine === 'lmstudio' && status.lmstudio_models.length > 0)) ? (
-                  <select
-                    value={draft.local_config.model}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        local_config: { ...draft.local_config, model: e.target.value },
-                      })
-                    }
-                    className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                  >
-                    {(draft.local_config.engine === 'ollama'
-                      ? status.ollama_models
-                      : status.lmstudio_models
-                    ).map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={draft.local_config.model}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        local_config: { ...draft.local_config, model: e.target.value },
-                      })
-                    }
-                    className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                  />
-                )}
+                  style={{
+                    width: '100%',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(60, 60, 67, 0.2)',
+                    padding: '6px 9px',
+                    fontSize: '11.5px',
+                  }}
+                />
               </div>
             </div>
           </div>
 
           {testResult && (
-            <div className="rounded-xl bg-slate-900 text-slate-100 px-4 py-3 text-xs font-mono">
+            <div
+              style={{
+                borderRadius: '12px',
+                backgroundColor: '#1C1C1E',
+                color: '#F2F2F7',
+                padding: '10px 14px',
+                fontSize: '11.5px',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                maxHeight: '160px',
+                overflowY: 'auto',
+              }}
+            >
               {testResult}
             </div>
           )}
         </div>
 
-        <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-3.5">
-          <button
+        {/* Footer */}
+        <div
+          style={{
+            position: 'sticky',
+            bottom: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: '10px',
+            borderTop: '1px solid rgba(60, 60, 67, 0.12)',
+            backgroundColor: '#F9F9FB',
+            padding: '12px 22px',
+          }}
+        >
+          <SpringButton
+            springLabel="取消设置"
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200"
+            maxShift={5}
+            style={{
+              borderRadius: '999px',
+              border: '1px solid rgba(60, 60, 67, 0.14)',
+              backgroundColor: '#FFFFFF',
+              padding: '8px 16px',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: '#636366',
+              cursor: 'pointer',
+            }}
           >
             取消
-          </button>
-          <button
+          </SpringButton>
+          <SpringButton
+            springLabel="保存路由与OCR配置"
             disabled={saving}
             onClick={handleSave}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+            maxShift={6}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderRadius: '999px',
+              border: 'none',
+              backgroundColor: '#007AFF',
+              padding: '8px 18px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              color: '#FFFFFF',
+              cursor: saving ? 'wait' : 'pointer',
+              opacity: saving ? 0.65 : 1,
+            }}
           >
             <Sparkles className="w-4 h-4" />
-            {saving ? '保存中...' : '保存路由配置'}
-          </button>
+            <span>{saving ? '保存中...' : '保存路由与 OCR 配置'}</span>
+          </SpringButton>
         </div>
       </div>
     </div>

@@ -10,6 +10,16 @@ export type RoutingMode = 'single' | 'smart_stage';
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'exam_sprint';
 export type NotesStyle = 'guided_learning' | 'concise_outline' | 'deep_dive' | 'in_class_recap';
 export type QuizMode = 'in_class' | 'sync_layered' | 'exam_paper' | 'custom';
+export type OcrEngineType =
+  | 'auto_recommend'
+  | 'mineru_pipeline'
+  | 'somark_free_api'
+  | 'paddleocr'
+  | 'mineru_full'
+  | 'oxr_full'
+  | 'rapidocr'
+  | 'vision_vlm';
+export type VramTier = 'le_8gb' | 'gt_8_lt_48gb' | 'ge_48gb';
 
 export interface CloudConfig {
   provider_label: string;
@@ -29,9 +39,19 @@ export interface LocalConfig {
 }
 
 export interface HarnessConfig {
-  preferred_cli: 'claude' | 'codex' | 'gemini' | 'custom';
+  preferred_cli: 'dsh' | 'claude' | 'codex' | 'gemini' | 'custom';
   custom_command_template: string;
   timeout_seconds: number;
+}
+
+export interface OcrConfig {
+  active_engine: OcrEngineType;
+  detect_vram_on_startup: boolean;
+  vram_override_gb?: number | null;
+  somark_api_base_url: string;
+  somark_api_key: string;
+  mineru_service_url: string;
+  oxr_service_url: string;
 }
 
 export interface ProviderSelection {
@@ -46,6 +66,7 @@ export interface RouterSettings {
   cloud_config: CloudConfig;
   local_config: LocalConfig;
   harness_config: HarnessConfig;
+  ocr_config: OcrConfig;
   stage_mapping: Record<StageName, ProviderSelection>;
 }
 
@@ -54,6 +75,28 @@ export interface HarnessStatusItem {
   available: boolean;
   executable_path?: string | null;
   description: string;
+  install_supported?: boolean;
+  install_command_hint?: string;
+}
+
+export interface GpuVramInfo {
+  gpu_name: string;
+  detected_vram_gb: number;
+  effective_vram_gb: number;
+  vram_tier: VramTier;
+  recommended_ocr_engine: OcrEngineType;
+  recommendation_reason: string;
+}
+
+export interface OcrEngineStatusItem {
+  engine_id: OcrEngineType;
+  name: string;
+  tier_badge: string;
+  installed: boolean;
+  running: boolean;
+  supports_one_click_setup: boolean;
+  description: string;
+  repo_or_api_url: string;
 }
 
 export interface ProviderStatusResponse {
@@ -64,6 +107,8 @@ export interface ProviderStatusResponse {
   lmstudio_available: boolean;
   lmstudio_models: string[];
   rapidocr_available: boolean;
+  gpu_vram: GpuVramInfo;
+  ocr_engines: OcrEngineStatusItem[];
 }
 
 export interface AssetItem {

@@ -16,6 +16,17 @@ RoutingMode = Literal["single", "smart_stage"]
 DifficultyLevel = Literal["beginner", "intermediate", "advanced", "exam_sprint"]
 NotesStyle = Literal["guided_learning", "concise_outline", "deep_dive", "in_class_recap"]
 QuizMode = Literal["in_class", "sync_layered", "exam_paper", "custom"]
+OcrEngineType = Literal[
+    "auto_recommend",
+    "mineru_pipeline",
+    "somark_free_api",
+    "paddleocr",
+    "mineru_full",
+    "oxr_full",
+    "rapidocr",
+    "vision_vlm",
+]
+VramTier = Literal["le_8gb", "gt_8_lt_48gb", "ge_48gb"]
 
 
 class CloudConfig(BaseModel):
@@ -36,9 +47,19 @@ class LocalConfig(BaseModel):
 
 
 class HarnessConfig(BaseModel):
-    preferred_cli: Literal["claude", "codex", "gemini", "custom"] = "claude"
+    preferred_cli: Literal["dsh", "claude", "codex", "gemini", "custom"] = "dsh"
     custom_command_template: str = ""
     timeout_seconds: int = 180
+
+
+class OcrConfig(BaseModel):
+    active_engine: OcrEngineType = "auto_recommend"
+    detect_vram_on_startup: bool = True
+    vram_override_gb: Optional[float] = None
+    somark_api_base_url: str = "https://free-oxr.somark.ai/api/v1"
+    somark_api_key: str = ""
+    mineru_service_url: str = "http://127.0.0.1:8010"
+    oxr_service_url: str = "http://127.0.0.1:8020"
 
 
 class ProviderSelection(BaseModel):
@@ -53,6 +74,7 @@ class RouterSettings(BaseModel):
     cloud_config: CloudConfig = Field(default_factory=CloudConfig)
     local_config: LocalConfig = Field(default_factory=LocalConfig)
     harness_config: HarnessConfig = Field(default_factory=HarnessConfig)
+    ocr_config: OcrConfig = Field(default_factory=OcrConfig)
     stage_mapping: Dict[StageName, ProviderSelection] = Field(
         default_factory=lambda: {
             "vision_ocr": ProviderSelection(provider="heuristic"),
@@ -69,6 +91,28 @@ class HarnessStatusItem(BaseModel):
     available: bool
     executable_path: Optional[str] = None
     description: str
+    install_supported: bool = True
+    install_command_hint: str = ""
+
+
+class GpuVramInfo(BaseModel):
+    gpu_name: str = "未检测到独立 NVIDIA 显卡 (按 ≤8GB 轻量档推荐)"
+    detected_vram_gb: float = 0.0
+    effective_vram_gb: float = 0.0
+    vram_tier: VramTier = "le_8gb"
+    recommended_ocr_engine: OcrEngineType = "mineru_pipeline"
+    recommendation_reason: str = ""
+
+
+class OcrEngineStatusItem(BaseModel):
+    engine_id: OcrEngineType
+    name: str
+    tier_badge: str
+    installed: bool = False
+    running: bool = False
+    supports_one_click_setup: bool = False
+    description: str = ""
+    repo_or_api_url: str = ""
 
 
 class ProviderStatusResponse(BaseModel):
@@ -79,6 +123,8 @@ class ProviderStatusResponse(BaseModel):
     lmstudio_available: bool = False
     lmstudio_models: List[str] = Field(default_factory=list)
     rapidocr_available: bool = False
+    gpu_vram: GpuVramInfo = Field(default_factory=GpuVramInfo)
+    ocr_engines: List[OcrEngineStatusItem] = Field(default_factory=list)
 
 
 class AssetItem(BaseModel):

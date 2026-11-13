@@ -22,7 +22,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { DocumentIR, QuizQuestion, StudyPackage } from '../types';
-import { SpringButton } from '../utils/springPhysics';
+import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -439,60 +439,16 @@ export const StudyStudio: React.FC<Props> = ({
                     </span>
                   )}
 
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      backgroundColor: 'rgba(118, 118, 128, 0.14)',
-                      borderRadius: '999px',
-                      padding: '3px',
-                      gap: '2px',
-                    }}
-                  >
-                    <SpringButton
-                      springLabel="在线作答"
-                      onClick={() => setQuizStudyMode('exam')}
-                      maxShift={4}
-                      style={{
-                        border: 'none',
-                        borderRadius: '999px',
-                        padding: '4px 10px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        backgroundColor: quizStudyMode === 'exam' ? '#FFFFFF' : 'transparent',
-                        color: quizStudyMode === 'exam' ? '#007AFF' : '#636366',
-                        boxShadow: quizStudyMode === 'exam' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none',
-                      }}
-                    >
-                      <Play className="w-3 h-3" />
-                      在线作答
-                    </SpringButton>
-                    <SpringButton
-                      springLabel="背题解析"
-                      onClick={() => setQuizStudyMode('review')}
-                      maxShift={4}
-                      style={{
-                        border: 'none',
-                        borderRadius: '999px',
-                        padding: '4px 10px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        backgroundColor: quizStudyMode === 'review' ? '#FFFFFF' : 'transparent',
-                        color: quizStudyMode === 'review' ? '#007AFF' : '#636366',
-                        boxShadow: quizStudyMode === 'review' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none',
-                      }}
-                    >
-                      <Eye className="w-3 h-3" />
-                      背题与解析
-                    </SpringButton>
-                  </div>
+                  <SpringSegmentedControl<'exam' | 'review'>
+                    compact
+                    springLabel="做题模式"
+                    value={quizStudyMode}
+                    onChange={(mode) => setQuizStudyMode(mode)}
+                    options={[
+                      { value: 'exam', label: '▶ 在线作答' },
+                      { value: 'review', label: '👁 背题与解析' },
+                    ]}
+                  />
 
                   <SpringButton
                     springLabel="导出空白卷"
