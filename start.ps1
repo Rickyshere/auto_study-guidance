@@ -18,11 +18,22 @@ if (-not (Test-Path $PythonExe)) {
     throw "未找到后端虚拟环境: $PythonExe"
 }
 
-# 1. 静默启动 FastAPI 后端服务 (无窗口)
+# 0. 若端口 8000 / 5173 已有旧服务实例，先静默清理，保证最新代码生效
+foreach ($port in @(8000, 5173)) {
+    $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in $conns) {
+        if ($c.OwningProcess -gt 0) {
+            Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+Start-Sleep -Milliseconds 300
+
+# 1. 静默启动 FastAPI 后端服务 (无窗口 + 热重载)
 $backendOutLog = Join-Path $LogDir "backend_stdout.log"
 $backendErrLog = Join-Path $LogDir "backend_stderr.log"
 $backendProc = Start-Process -FilePath $PythonExe `
-    -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000" `
+    -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload" `
     -WorkingDirectory $BackendDir `
     -WindowStyle Hidden `
     -RedirectStandardOutput $backendOutLog `

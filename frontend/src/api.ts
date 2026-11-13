@@ -45,24 +45,35 @@ async function postSseStream<T>(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, stream: true }),
   });
-  if (!res.ok || !res.body) {
+  if (!res.ok) {
     throw new Error(`流式请求失败 (${res.status})`);
   }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json') || !res.body) {
+    const json = (await res.json()) as any;
+    onProgress({
+      type: 'complete',
+      percent: 100,
+      stage: json?.ok ? '✓ 操作完成' : '操作结束',
+      message: json?.message || '操作已完成',
+      log_line: json?.log || '',
+      result: json,
+    });
+    return json as T;
+  }
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
   let finalResult: T | null = null;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() || '';
-    for (const part of parts) {
-      const line = part.trim();
+  const consumeChunk = (part: string) => {
+    for (const rawLine of part.split(/\r?\n/)) {
+      const line = rawLine.trim();
       if (!line.startsWith('data:')) continue;
       const jsonStr = line.replace(/^data:\s*/, '');
+      if (!jsonStr) continue;
       try {
         const evt = JSON.parse(jsonStr) as StreamProgressEvent;
         onProgress(evt);
@@ -77,6 +88,20 @@ async function postSseStream<T>(
         }
       }
     }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || '';
+    for (const part of parts) {
+      consumeChunk(part);
+    }
+  }
+  if (buffer.trim()) {
+    consumeChunk(buffer);
   }
   if (!finalResult) {
     throw new Error('操作已结束但未返回最终结果');

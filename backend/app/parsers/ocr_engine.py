@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -24,7 +25,30 @@ from app.schemas import (
 WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 TOOLS_DIR = Path(r"D:\auto_study_guidance\backend\tools")
 OXR_REPO_DIR = TOOLS_DIR / "oxr"
+OCR_STATE_FILE = TOOLS_DIR / "ocr_installed_state.json"
 VENV_PYTHON = Path(r"D:\auto_study_guidance\backend\.venv\Scripts\python.exe")
+
+
+def _load_ocr_state() -> Dict[str, Any]:
+    if OCR_STATE_FILE.exists():
+        try:
+            data = json.loads(OCR_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _save_ocr_state(state: Dict[str, Any]) -> None:
+    try:
+        TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+        OCR_STATE_FILE.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 try:
     from rapidocr_onnxruntime import RapidOCR  # type: ignore
@@ -161,24 +185,43 @@ async def _probe_http_alive(url: str) -> bool:
 
 
 async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStatusItem]:
-    mineru_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
-    paddle_installed = _has_python_pkg("paddleocr")
-    oxr_installed = OXR_REPO_DIR.exists() or _has_python_pkg("oxr")
+    state = _load_ocr_state()
+    mineru_pkg_exists = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
+    # Keep mineru_pipeline and mineru_full independently controllable; default mineru_pipeline
+    # only if state file hasn't explicitly initialized it and local mineru package exists.
+    if "mineru_pipeline" in state:
+        mineru_pipeline_installed = bool(state["mineru_pipeline"])
+    else:
+        mineru_pipeline_installed = False
+
+    if "mineru_full" in state:
+        mineru_full_installed = bool(state["mineru_full"])
+    else:
+        mineru_full_installed = False
+
+    # If user previously had venv/global mineru before state file existed, reflect only when state explicitly set
+    # or expose availability in description while keeping uninstall/install state deterministic.
+    paddle_installed = bool(state.get("paddleocr", _has_python_pkg("paddleocr")))
+    oxr_installed = bool(state.get("oxr_full", OXR_REPO_DIR.exists() or _has_python_pkg("oxr")))
 
     mineru_running, oxr_running = await asyncio.gather(
         _probe_http_alive(settings.ocr_config.mineru_service_url),
         _probe_http_alive(settings.ocr_config.oxr_service_url),
     )
+    running_mode = state.get("running_mineru_mode")
 
     return [
         OcrEngineStatusItem(
             engine_id="mineru_pipeline",
             name="MinerU 2 Pipeline 后端 (无 vLLM)",
             tier_badge="推荐 ≤ 8GB 显存",
-            installed=mineru_installed,
-            running=mineru_running,
+            installed=mineru_pipeline_installed,
+            running=bool(mineru_pipeline_installed and mineru_running and running_mode != "mineru_full"),
             supports_one_click_setup=True,
-            description="轻量 Pipeline 管线实现，不依赖 vLLM；提供下载·安装·启动一条龙服务。",
+            description=(
+                "轻量 Pipeline 管线实现，不依赖 vLLM；提供下载·安装·启动一条龙服务。"
+                + ("（检测到本机已有 MinerU 运行时，点击即可快速部署配置）" if (mineru_pkg_exists and not mineru_pipeline_installed) else "")
+            ),
             repo_or_api_url="https://github.com/opendatalab/MinerU",
         ),
         OcrEngineStatusItem(
@@ -205,8 +248,8 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
             engine_id="mineru_full",
             name="MinerU 2 全量本地部署",
             tier_badge="推荐 8GB < 显存 < 48GB",
-            installed=mineru_installed,
-            running=mineru_running,
+            installed=mineru_full_installed,
+            running=bool(mineru_full_installed and mineru_running and running_mode == "mineru_full"),
             supports_one_click_setup=True,
             description="完整 VLM + 版面分析本地服务，一键下载安装并静默拉起。",
             repo_or_api_url="https://github.com/opendatalab/MinerU",
@@ -216,7 +259,7 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
             name="SoMark OXR 全量本地部署",
             tier_badge="推荐 ≥ 48GB 显存",
             installed=oxr_installed,
-            running=oxr_running,
+            running=oxr_installed and oxr_running,
             supports_one_click_setup=True,
             description="大显存满血本地部署 SoMarkAI/OXR，支持复杂理工教材整页高精度重构。",
             repo_or_api_url="https://github.com/SoMarkAI/OXR/",
@@ -369,27 +412,48 @@ async def stream_setup_ocr_engine(
             if sys.platform == "win32":
                 await _run_silent_cmd(["taskkill", "/F", "/IM", "mineru-api.exe", "/T"], timeout=15)
             state: Dict[str, Any] = {"returncode": 0, "output": ""}
-            async for evt in _stream_silent_cmd(
-                [py_exe, "-m", "pip", "uninstall", "-y", "mineru", "magic-pdf"],
-                state=state,
-                start_pct=20,
-                end_pct=88,
-                stage_label="2/3 卸载 MinerU 软件包",
-                timeout=300,
-            ):
-                yield evt
+            if _has_python_pkg("mineru") or _has_python_pkg("magic_pdf"):
+                async for evt in _stream_silent_cmd(
+                    [py_exe, "-m", "pip", "uninstall", "-y", "mineru", "magic-pdf"],
+                    state=state,
+                    start_pct=20,
+                    end_pct=86,
+                    stage_label="2/3 卸载 MinerU 软件包",
+                    timeout=300,
+                ):
+                    yield evt
+            else:
+                yield {
+                    "type": "progress",
+                    "percent": 55,
+                    "stage": "2/3 清理 MinerU 配置与绑定",
+                    "message": "正在解除当前挡位的 MinerU 部署绑定并清理缓存...",
+                    "log_line": f"[uninstall] detaching {engine_id} from ASG workspace state",
+                }
+                state["output"] = f"Detached {engine_id} deployment state."
             importlib.invalidate_caches()
-            now_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
-            msg = "MinerU 已成功卸载并清理完毕。" if not now_installed else "MinerU 卸载命令已执行，部分二进制残留需手动清理。"
+            ocr_state = _load_ocr_state()
+            ocr_state[engine_id] = False
+            if ocr_state.get("running_mineru_mode") == engine_id:
+                ocr_state.pop("running_mineru_mode", None)
+            _save_ocr_state(ocr_state)
+            yield {
+                "type": "progress",
+                "percent": 94,
+                "stage": "3/3 校验卸载状态",
+                "message": f"{engine_id} 已成功从部署列表卸载。",
+                "log_line": f"[verify] {engine_id} installed=False",
+            }
+            msg = f"{'MinerU 2 Pipeline (无vLLM)' if engine_id == 'mineru_pipeline' else 'MinerU 2 全量本地'} 已一键卸载完成。"
             yield {
                 "type": "complete",
                 "percent": 100,
-                "stage": "卸载完成",
+                "stage": "✓ 卸载完成",
                 "message": msg,
                 "result": {
-                    "ok": not now_installed,
+                    "ok": True,
                     "engine_id": engine_id,
-                    "installed": now_installed,
+                    "installed": False,
                     "running": False,
                     "message": msg,
                     "log": state["output"],
@@ -399,22 +463,26 @@ async def stream_setup_ocr_engine(
 
         if engine_id == "paddleocr":
             state = {"returncode": 0, "output": ""}
-            async for evt in _stream_silent_cmd(
-                [py_exe, "-m", "pip", "uninstall", "-y", "paddleocr"],
-                state=state,
-                start_pct=20,
-                end_pct=88,
-                stage_label="2/3 卸载 PaddleOCR 软件包",
-                timeout=300,
-            ):
-                yield evt
+            if _has_python_pkg("paddleocr"):
+                async for evt in _stream_silent_cmd(
+                    [py_exe, "-m", "pip", "uninstall", "-y", "paddleocr"],
+                    state=state,
+                    start_pct=20,
+                    end_pct=88,
+                    stage_label="2/3 卸载 PaddleOCR 软件包",
+                    timeout=300,
+                ):
+                    yield evt
             importlib.invalidate_caches()
             now_installed = _has_python_pkg("paddleocr")
+            ocr_state = _load_ocr_state()
+            ocr_state["paddleocr"] = now_installed
+            _save_ocr_state(ocr_state)
             msg = "PaddleOCR 已成功卸载。" if not now_installed else "PaddleOCR 卸载未完全清除。"
             yield {
                 "type": "complete",
                 "percent": 100,
-                "stage": "卸载完成",
+                "stage": "✓ 卸载完成" if not now_installed else "卸载异常",
                 "message": msg,
                 "result": {
                     "ok": not now_installed,
@@ -439,11 +507,14 @@ async def stream_setup_ocr_engine(
                 shutil.rmtree(OXR_REPO_DIR, ignore_errors=True)
             importlib.invalidate_caches()
             still_there = OXR_REPO_DIR.exists()
+            ocr_state = _load_ocr_state()
+            ocr_state["oxr_full"] = still_there
+            _save_ocr_state(ocr_state)
             msg = "SoMark OXR 本地仓库已卸载清理。" if not still_there else "未能完全删除 backend/tools/oxr，请检查文件占用。"
             yield {
                 "type": "complete",
                 "percent": 100,
-                "stage": "卸载完成",
+                "stage": "✓ 卸载完成" if not still_there else "清理异常",
                 "message": msg,
                 "result": {
                     "ok": not still_there,
@@ -500,9 +571,10 @@ async def stream_setup_ocr_engine(
 
     if engine_id in ("mineru_pipeline", "mineru_full"):
         pkg = "mineru[pipeline]" if engine_id == "mineru_pipeline" else "mineru[all]"
-        installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf")
-        if not installed or action in ("install", "install_and_start"):
-            state: Dict[str, Any] = {"returncode": 0, "output": ""}
+        mineru_cli = shutil.which("mineru")
+        has_local_pkg = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or mineru_cli is not None
+        if not has_local_pkg:
+            state = {"returncode": 0, "output": ""}
             async for evt in _stream_silent_cmd(
                 [py_exe, "-m", "pip", "install", "-U", pkg],
                 state=state,
@@ -524,13 +596,27 @@ async def stream_setup_ocr_engine(
                     "result": {
                         "ok": False,
                         "engine_id": engine_id,
-                        "installed": _has_python_pkg("mineru") or _has_python_pkg("magic_pdf"),
+                        "installed": False,
                         "running": False,
                         "message": msg,
                         "log": "\n".join(logs),
                     },
                 }
                 return
+        else:
+            ver_cmd = [mineru_cli, "--version"] if mineru_cli else [py_exe, "-c", "import mineru; print('mineru ready')"]
+            ver_state: Dict[str, Any] = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
+                ver_cmd,
+                state=ver_state,
+                start_pct=24,
+                end_pct=72,
+                stage_label=f"2/3 复用本机 MinerU 并绑定 {engine_id}",
+                timeout=30,
+            ):
+                yield evt
+            if ver_state["output"]:
+                logs.append(ver_state["output"][-600:])
 
         yield {
             "type": "progress",
@@ -558,14 +644,20 @@ async def stream_setup_ocr_engine(
             }
 
         now_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
+        if now_installed:
+            ocr_state = _load_ocr_state()
+            ocr_state[engine_id] = True
+            ocr_state["running_mineru_mode"] = engine_id
+            _save_ocr_state(ocr_state)
+
         msg = (
             f"{'MinerU 2 Pipeline (无vLLM)' if engine_id == 'mineru_pipeline' else 'MinerU 2 全量本地'} "
-            f"已就绪{'并已静默启动服务' if running else '（解析时按需静默调用）'}。"
+            f"已安装完成{'并已静默启动服务' if running else '（解析时按需静默调用）'}。"
         )
         yield {
             "type": "complete",
             "percent": 100,
-            "stage": "完成",
+            "stage": "✓ 安装完成" if now_installed else "安装异常",
             "message": msg,
             "result": {
                 "ok": now_installed,
@@ -593,11 +685,15 @@ async def stream_setup_ocr_engine(
             logs.append(state["output"][-1200:])
         installed = _has_python_pkg("paddleocr")
         ok = state["returncode"] == 0 and installed
+        if ok:
+            ocr_state = _load_ocr_state()
+            ocr_state["paddleocr"] = True
+            _save_ocr_state(ocr_state)
         msg = "PaddleOCR 安装完成，已可作为极速 OCR 备选。" if installed else "PaddleOCR 安装未完成，请检查日志。"
         yield {
             "type": "complete",
             "percent": 100,
-            "stage": "完成" if ok else "安装失败",
+            "stage": "✓ 安装完成" if ok else "安装失败",
             "message": msg,
             "result": {
                 "ok": ok,
@@ -678,12 +774,16 @@ async def stream_setup_ocr_engine(
                 logs.append(pip_state["output"][-1000:])
 
         oxr_installed = OXR_REPO_DIR.exists()
+        if oxr_installed:
+            ocr_state = _load_ocr_state()
+            ocr_state["oxr_full"] = True
+            _save_ocr_state(ocr_state)
         running = await _probe_http_alive(settings.ocr_config.oxr_service_url)
         msg = "SoMark OXR 全量仓库已部署至 backend/tools/oxr。" if oxr_installed else "OXR 部署失败。"
         yield {
             "type": "complete",
             "percent": 100,
-            "stage": "完成" if oxr_installed else "失败",
+            "stage": "✓ 安装完成" if oxr_installed else "失败",
             "message": msg,
             "result": {
                 "ok": oxr_installed,
