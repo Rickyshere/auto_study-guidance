@@ -51,6 +51,7 @@ class HarnessConfig(BaseModel):
     preferred_cli: Literal["dsh", "claude", "codex", "gemini", "custom"] = "dsh"
     custom_command_template: str = ""
     timeout_seconds: int = 180
+    max_retries: int = 2
 
 
 class OcrConfig(BaseModel):

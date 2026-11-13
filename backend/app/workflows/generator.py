@@ -126,6 +126,45 @@ async def generate_study_package(
     router: ModelRouter,
     progress_cb: ProgressCallback = None,
 ) -> StudyPackage:
+    router.check_cancelled()
+    current_stage_state = {"stage": "notes", "percent": 20}
+    prev_status_cb = router.status_cb
+
+    async def _forward_router_status(stage_name: str, msg: str) -> None:
+        if prev_status_cb:
+            maybe = prev_status_cb(stage_name, msg)
+            if hasattr(maybe, "__await__"):
+                await maybe
+        if progress_cb and msg:
+            await progress_cb(
+                current_stage_state["stage"],
+                current_stage_state["percent"],
+                msg,
+            )
+
+    if progress_cb:
+        router.status_cb = _forward_router_status
+
+    try:
+        return await _run_generate_study_package(
+            document_ir,
+            blueprint,
+            router,
+            progress_cb,
+            current_stage_state,
+        )
+    finally:
+        router.status_cb = prev_status_cb
+
+
+async def _run_generate_study_package(
+    document_ir: DocumentIR,
+    blueprint: StudyBlueprint,
+    router: ModelRouter,
+    progress_cb: ProgressCallback,
+    current_stage_state: dict,
+) -> StudyPackage:
+    router.check_cancelled()
     selected_chapters = [
         c for c in document_ir.chapters if c.chapter_id in blueprint.selected_chapter_ids
     ] or document_ir.chapters
@@ -137,6 +176,9 @@ async def generate_study_package(
     # 1. Study Notes / Guided Study Sheet
     study_notes_md = ""
     if d.include_study_guide_notes:
+        router.check_cancelled()
+        current_stage_state["stage"] = "notes"
+        current_stage_state["percent"] = 20
         if progress_cb:
             await progress_cb("notes", 20, f"正在生成【{blueprint.preset_name}】讲义与精要笔记...")
         notes_sys = (
@@ -175,6 +217,11 @@ async def generate_study_package(
         cs_user = (
             f"密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
         )
+        router.check_cancelled()
+        current_stage_state["stage"] = "cheatsheet"
+        current_stage_state["percent"] = 45
+        if progress_cb:
+            await progress_cb("cheatsheet", 45, "正在提炼核心公式与概念速记表...")
         res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
         cheatsheet_md = normalize_markdown_math(
             res_cs or HeuristicStudyEngine.generate_cheatsheet_from_ir(document_ir, blueprint)
@@ -183,6 +230,9 @@ async def generate_study_package(
     # 3. Quiz Paper
     quiz_paper: QuizPaper
     if d.include_quiz:
+        router.check_cancelled()
+        current_stage_state["stage"] = "quiz"
+        current_stage_state["percent"] = 70
         if progress_cb:
             await progress_cb("quiz", 70, f"正在命制【{blueprint.preset_name}】配套题库与详细解析...")
         quiz_sys = (
@@ -273,6 +323,9 @@ async def generate_study_package(
     # 4. Mindmap
     mindmap_mermaid = ""
     if d.include_mindmap:
+        router.check_cancelled()
+        current_stage_state["stage"] = "mindmap"
+        current_stage_state["percent"] = 90
         if progress_cb:
             await progress_cb("mindmap", 90, "正在构建 Mermaid 可视化知识图谱...")
         mm_sys = (
@@ -293,6 +346,7 @@ async def generate_study_package(
         )
 
     # 5. Global Quality Verification (Strictly enabled ONLY when non-heuristic engine is used)
+    router.check_cancelled()
     quality_audit_report = ""
     audit_sel = router.resolve_quality_audit_provider()
     if audit_sel is None:
@@ -305,6 +359,8 @@ async def generate_study_package(
             router.routing_trace["global_quality_audit"] = "已手动关闭"
             quality_audit_report = "全局质量验收已手动关闭。"
     else:
+        current_stage_state["stage"] = "quality_audit"
+        current_stage_state["percent"] = 95
         if progress_cb:
             await progress_cb(
                 "quality_audit",
@@ -400,6 +456,7 @@ async def generate_study_package(
             repair_note = f"（已自动补全：{', '.join(repairs)}）" if repairs else "（全部契约项一次通过）"
             quality_audit_report = f"已完成数学公式规范化、题量契约核验与 Mermaid 语法清洗{repair_note}。"
 
+    router.check_cancelled()
     if progress_cb:
         await progress_cb("done", 100, "学习资料生成完成！")
 

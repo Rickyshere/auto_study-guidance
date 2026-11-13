@@ -451,3 +451,169 @@ def test_global_quality_audit_activation_rule():
 
     s_cloud_off = s_cloud.model_copy(update={"enable_quality_audit": False})
     assert ModelRouter(s_cloud_off).resolve_quality_audit_provider() is None
+
+
+
+def test_cli_harness_strict_exit_retry_stream_json_and_cancel():
+    import asyncio
+    asyncio.run(_async_test_cli_harness_strict_exit_retry_stream_json_and_cancel())
+
+
+async def _async_test_cli_harness_strict_exit_retry_stream_json_and_cancel():
+    import asyncio
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from app.router.harness_provider import HarnessCancelToken, run_cli_harness
+    from app.schemas import HarnessConfig
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # (a) Non-zero exit MUST fail even if stdout has text
+        nonzero_script = tmp / "nonzero.py"
+        nonzero_script.write_text(
+            "import sys\nprint('partial stdout should NOT count')\nsys.exit(2)\n",
+            encoding="utf-8",
+        )
+        cfg_fail = HarnessConfig(
+            preferred_cli="custom",
+            custom_command_template=f'"{sys.executable}" "{nonzero_script}"',
+            timeout_seconds=10,
+            max_retries=0,
+        )
+        with pytest.raises(RuntimeError, match="非零退出"):
+            await run_cli_harness("sys", "usr", cfg_fail)
+
+        # (b) Transient failure auto-retries and succeeds
+        counter_file = tmp / "attempts.txt"
+        retry_script = tmp / "retry_ok.py"
+        retry_script.write_text(
+            f"""import pathlib, sys
+p = pathlib.Path({repr(str(counter_file))})
+n = int(p.read_text()) + 1 if p.exists() else 1
+p.write_text(str(n))
+if n == 1:
+    sys.stderr.write("transient glitch\\n")
+    sys.exit(1)
+print("recovered ok")
+""",
+            encoding="utf-8",
+        )
+        retry_statuses: list[str] = []
+        cfg_retry = HarnessConfig(
+            preferred_cli="custom",
+            custom_command_template=f'"{sys.executable}" "{retry_script}"',
+            timeout_seconds=10,
+            max_retries=2,
+        )
+        out_retry = await run_cli_harness(
+            "sys", "usr", cfg_retry, status_cb=lambda msg: retry_statuses.append(msg)
+        )
+        assert out_retry == "recovered ok"
+        assert int(counter_file.read_text()) == 2
+        assert any("重试" in s for s in retry_statuses)
+
+        # (c1) stream-json NDJSON intermediate events update status_cb and extract result
+        stream_script = tmp / "stream_ok.py"
+        stream_script.write_text(
+            """import json, sys, time
+events = [
+    {"type": "init", "model": "mock-stream-1"},
+    {"type": "assistant", "delta": "Hello "},
+    {"type": "assistant", "delta": "World"},
+    {"type": "result", "subtype": "success", "is_error": False, "result": "Hello World"},
+]
+for ev in events:
+    print(json.dumps(ev), flush=True)
+    time.sleep(0.05)
+""",
+            encoding="utf-8",
+        )
+        stream_statuses: list[str] = []
+        cfg_stream = HarnessConfig(
+            preferred_cli="custom",
+            custom_command_template=f'"{sys.executable}" "{stream_script}"',
+            timeout_seconds=10,
+            max_retries=0,
+        )
+        out_stream = await run_cli_harness(
+            "sys", "usr", cfg_stream, status_cb=lambda msg: stream_statuses.append(msg)
+        )
+        assert out_stream == "Hello World"
+        assert any("mock-stream-1" in s or "会话已建立" in s for s in stream_statuses)
+        assert any("返回完整结果" in s for s in stream_statuses)
+
+        # (c2) stream-json error event fails even if exit code is 0
+        stream_err_script = tmp / "stream_err.py"
+        stream_err_script.write_text(
+            'import json\nprint(json.dumps({"type": "error", "is_error": True, "message": "upstream overloaded"}), flush=True)\n',
+            encoding="utf-8",
+        )
+        cfg_stream_err = HarnessConfig(
+            preferred_cli="custom",
+            custom_command_template=f'"{sys.executable}" "{stream_err_script}"',
+            timeout_seconds=10,
+            max_retries=0,
+        )
+        with pytest.raises(RuntimeError, match="stream-json 报错"):
+            await run_cli_harness("sys", "usr", cfg_stream_err)
+
+        # (d) cancel_token.cancel() kills the subprocess tree promptly and raises CancelledError
+        ready_file = tmp / "ready.pid"
+        grandchild_file = tmp / "grandchild.pid"
+        hang_script = tmp / "hang_tree.py"
+        hang_script.write_text(
+            f"""import os, pathlib, subprocess, sys, time
+cflags = 0x08000000 if sys.platform == "win32" else 0
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], creationflags=cflags)
+pathlib.Path({repr(str(grandchild_file))}).write_text(str(child.pid))
+pathlib.Path({repr(str(ready_file))}).write_text(str(os.getpid()))
+time.sleep(30)
+""",
+            encoding="utf-8",
+        )
+        token = HarnessCancelToken()
+        cfg_cancel = HarnessConfig(
+            preferred_cli="custom",
+            custom_command_template=f'"{sys.executable}" "{hang_script}"',
+            timeout_seconds=30,
+            max_retries=0,
+        )
+        task = asyncio.create_task(
+            run_cli_harness("sys", "usr", cfg_cancel, cancel_token=token)
+        )
+        wait_deadline = time.monotonic() + 5.0
+        while not ready_file.exists() and time.monotonic() < wait_deadline:
+            await asyncio.sleep(0.05)
+        assert ready_file.exists(), "Subprocess failed to start in time"
+
+        t0 = time.monotonic()
+        token.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        elapsed = time.monotonic() - t0
+        assert elapsed < 6.0
+
+        # Ensure grandchild process was killed by tree termination (taskkill /T)
+        if grandchild_file.exists():
+            gc_pid = int(grandchild_file.read_text().strip())
+            await asyncio.sleep(0.2)
+            if sys.platform == "win32":
+                chk = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {gc_pid}", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                assert str(gc_pid) not in chk.stdout
+            else:
+                try:
+                    os.kill(gc_pid, 0)
+                    raise AssertionError("Grandchild process still alive")
+                except ProcessLookupError:
+                    pass

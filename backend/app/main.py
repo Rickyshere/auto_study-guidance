@@ -474,17 +474,52 @@ async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> St
     return updated_bp
 
 
+from app.router.harness_provider import HarnessCancelToken
+
+_ACTIVE_GENERATIONS: dict[str, tuple[HarnessCancelToken, asyncio.Task | None]] = {}
+
+
+def _cancel_active_generation(project_id: str) -> bool:
+    entry = _ACTIVE_GENERATIONS.get(project_id)
+    if not entry:
+        return False
+    token, task = entry
+    token.cancel()
+    if task is not None and not task.done():
+        task.cancel()
+    return True
+
+
+@app.post("/api/projects/{project_id}/cancel")
+async def cancel_generation(project_id: str):
+    cancelled = _cancel_active_generation(project_id)
+    return {"status": "cancelled" if cancelled else "idle", "project_id": project_id}
+
+
 @app.post("/api/projects/{project_id}/generate")
 async def generate_materials(project_id: str, req: GenerateRequest):
     doc_ir = _load_project_ir(project_id)
     settings = load_settings()
-    router = ModelRouter(settings)
+    _cancel_active_generation(project_id)
+    cancel_token = HarnessCancelToken()
+    router = ModelRouter(settings, cancel_token=cancel_token)
     _save_blueprint(project_id, req.blueprint)
 
     if not req.stream:
-        package = await generate_study_package(doc_ir, req.blueprint, router)
-        _save_package(project_id, package)
-        return package
+        task = asyncio.current_task()
+        _ACTIVE_GENERATIONS[project_id] = (cancel_token, task)
+        try:
+            package = await generate_study_package(doc_ir, req.blueprint, router)
+            cancel_token.raise_if_cancelled()
+            _save_package(project_id, package)
+            return package
+        except asyncio.CancelledError:
+            cancel_token.cancel()
+            raise HTTPException(status_code=499, detail="生成任务已取消")
+        finally:
+            cur = _ACTIVE_GENERATIONS.get(project_id)
+            if cur and cur[0] is cancel_token:
+                _ACTIVE_GENERATIONS.pop(project_id, None)
 
     async def event_stream():
         queue: asyncio.Queue[str] = asyncio.Queue()
@@ -501,27 +536,51 @@ async def generate_materials(project_id: str, req: GenerateRequest):
                 package = await generate_study_package(
                     doc_ir, req.blueprint, router, progress_cb=on_progress
                 )
+                cancel_token.raise_if_cancelled()
                 _save_package(project_id, package)
                 done_payload = json.dumps(
                     {"type": "complete", "package": package.model_dump()},
                     ensure_ascii=False,
                 )
                 await queue.put(f"data: {done_payload}\n\n")
+            except asyncio.CancelledError:
+                cancel_token.cancel()
+                cancel_payload = json.dumps(
+                    {"type": "cancelled", "message": "生成任务已取消，后台子进程已终止"},
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {cancel_payload}\n\n")
             except Exception as exc:
                 err_payload = json.dumps(
                     {"type": "error", "message": str(exc)}, ensure_ascii=False
                 )
                 await queue.put(f"data: {err_payload}\n\n")
             finally:
+                cur = _ACTIVE_GENERATIONS.get(project_id)
+                if cur and cur[0] is cancel_token:
+                    _ACTIVE_GENERATIONS.pop(project_id, None)
                 await queue.put("__END__")
 
         task = asyncio.create_task(runner())
-        while True:
-            item = await queue.get()
-            if item == "__END__":
-                break
-            yield item
-        await task
+        _ACTIVE_GENERATIONS[project_id] = (cancel_token, task)
+        try:
+            while True:
+                item = await queue.get()
+                if item == "__END__":
+                    break
+                yield item
+            await task
+        finally:
+            if not task.done():
+                cancel_token.cancel()
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+            cur = _ACTIVE_GENERATIONS.get(project_id)
+            if cur and cur[0] is cancel_token:
+                _ACTIVE_GENERATIONS.pop(project_id, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -531,7 +590,9 @@ async def quick_generate_from_preset(project_id: str, req: QuickGenerateRequest)
     doc_ir = _load_project_ir(project_id)
     preset = get_preset(req.preset_id)
     settings = load_settings()
-    router = ModelRouter(settings)
+    _cancel_active_generation(project_id)
+    cancel_token = HarnessCancelToken()
+    router = ModelRouter(settings, cancel_token=cancel_token)
 
     blueprint = HeuristicStudyEngine.build_blueprint_from_ir(
         doc_ir, preset, user_prompt=req.user_prompt
@@ -544,9 +605,20 @@ async def quick_generate_from_preset(project_id: str, req: QuickGenerateRequest)
     blueprint.confirmed = True
     _save_blueprint(project_id, blueprint)
 
-    package = await generate_study_package(doc_ir, blueprint, router)
-    _save_package(project_id, package)
-    return package
+    task = asyncio.current_task()
+    _ACTIVE_GENERATIONS[project_id] = (cancel_token, task)
+    try:
+        package = await generate_study_package(doc_ir, blueprint, router)
+        cancel_token.raise_if_cancelled()
+        _save_package(project_id, package)
+        return package
+    except asyncio.CancelledError:
+        cancel_token.cancel()
+        raise HTTPException(status_code=499, detail="生成任务已取消")
+    finally:
+        cur = _ACTIVE_GENERATIONS.get(project_id)
+        if cur and cur[0] is cancel_token:
+            _ACTIVE_GENERATIONS.pop(project_id, None)
 
 
 def _build_pdf_export_response(

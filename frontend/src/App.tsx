@@ -120,9 +120,11 @@ export function App() {
   const [negotiating, setNegotiating] = useState(false);
   const [aiFilling, setAiFilling] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [progressInfo, setProgressInfo] = useState<{ percent: number; message: string } | null>(
-    null
-  );
+  const [progressInfo, setProgressInfo] = useState<{
+    percent: number;
+    message: string;
+    logs?: string[];
+  } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const reportPhysics = useCallback((_vx: number, _vy: number, _msg: string) => {
@@ -391,12 +393,18 @@ export function App() {
   };
 
   const handleCancelGenerate = () => {
+    if (documentIr?.project_id) {
+      api.cancelGeneration(documentIr.project_id).catch(() => {});
+    }
     if (generateAbortRef.current) {
       generateAbortRef.current.abort();
       generateAbortRef.current = null;
     }
     setGenerating(false);
-    setProgressInfo({ percent: 0, message: '已暂停并中止当前生成，可继续调整阶段 1 参数' });
+    setProgressInfo({
+      percent: 0,
+      message: '已暂停并通知后端终止子进程，可继续调整阶段 1 参数',
+    });
     setTimeout(() => setProgressInfo(null), 2200);
   };
 
@@ -423,7 +431,11 @@ export function App() {
     if (!documentIr) return;
     setErrorMsg(null);
     setGenerating(true);
-    setProgressInfo({ percent: 5, message: '已确认定制方案，正在调度路由引擎...' });
+    setProgressInfo({
+      percent: 5,
+      message: '已确认定制方案，正在调度路由引擎...',
+      logs: ['已确认定制方案，正在调度路由引擎...'],
+    });
     const controller = new AbortController();
     generateAbortRef.current = controller;
     try {
@@ -431,7 +443,14 @@ export function App() {
         documentIr.project_id,
         confirmedBp,
         (_stage, percent, message) => {
-          setProgressInfo({ percent, message });
+          setProgressInfo((prev) => {
+            const prevLogs = prev?.logs || [];
+            const nextLogs =
+              prevLogs[prevLogs.length - 1] === message
+                ? prevLogs
+                : [...prevLogs.slice(-5), message];
+            return { percent, message, logs: nextLogs };
+          });
         },
         controller.signal
       );

@@ -44,7 +44,7 @@ interface Props {
   negotiating: boolean;
   aiFilling: boolean;
   generating: boolean;
-  progressInfo: { percent: number; message: string } | null;
+  progressInfo: { percent: number; message: string; logs?: string[] } | null;
 }
 
 const PRESET_ICON: Record<string, React.ReactNode> = {
@@ -949,6 +949,37 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                   }}
                 />
               </div>
+              {progressInfo.logs && progressInfo.logs.length > 0 && (
+                <div
+                  style={{
+                    marginTop: '8px',
+                    paddingTop: '6px',
+                    borderTop: '1px dashed rgba(0, 122, 255, 0.2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    fontSize: '11px',
+                    color: '#3B6EA8',
+                    maxHeight: '76px',
+                    overflowY: 'auto',
+                  }}
+                >
+                  {progressInfo.logs.slice(-4).map((logLine, idx) => (
+                    <div
+                      key={`${idx}-${logLine.slice(0, 16)}`}
+                      style={{
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                      title={logLine}
+                    >
+                      › {logLine}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

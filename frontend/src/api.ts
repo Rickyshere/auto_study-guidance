@@ -225,6 +225,12 @@ export const api = {
       { method: 'DELETE' }
     ),
 
+  cancelGeneration: (projectId: string) =>
+    requestJson<{ status: string; project_id: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/cancel`,
+      { method: 'POST' }
+    ),
+
   getUpdateStatus: (fetchRemote = false) =>
     requestJson<UpdateStatusResponse>(
       `/api/system/update-status?fetch=${fetchRemote ? 'true' : 'false'}`
