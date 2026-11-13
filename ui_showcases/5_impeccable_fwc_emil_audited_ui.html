@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PC 桌面工作台 · Impeccable × (fwc-swiftui + Emil) 联合审计版</title>
+  <style>
+    :root {
+      --paper: #F6F3EC;
+      --folio: #FDFBF7;
+      --ink: #141413;
+      --graphite: #57534E;
+      --rule: #DDD6C8;
+      --vermilion: #C83E1D;
+      --forest: #1F4E3D;
+      --ochre: #9A6B16;
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background-color: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    }
+    ::selection { background-color: rgba(200, 62, 29, 0.16); color: #141413; }
+    .serif { font-family: 'Newsreader', 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+    .tabular { font-variant-numeric: tabular-nums; }
+
+    .app-shell { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
+    .topbar {
+      height: 54px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 20px;
+      background-color: rgba(253, 251, 247, 0.92);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--rule);
+      z-index: 25;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border-radius: 2px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--rule);
+      background-color: var(--folio);
+      color: var(--ink);
+      padding: 8px 13px;
+      transition: transform 140ms var(--ease-out), background-color 150ms var(--ease-out), border-color 150ms var(--ease-out), color 150ms var(--ease-out);
+      user-select: none;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background-color: var(--vermilion); border-color: var(--vermilion); color: #FDFBF7; font-weight: 600; }
+    .btn-forest { background-color: var(--forest); border-color: var(--forest); color: #FDFBF7; font-weight: 600; }
+
+    @media (hover: hover) and (pointer: fine) {
+      .btn:hover { border-color: var(--ink); background-color: #EFEAE0; }
+      .btn-primary:hover { background-color: #B33517; border-color: #B33517; }
+      .btn-forest:hover { background-color: #183F31; border-color: #183F31; }
+      .stamp:hover { border-color: var(--ink); }
+      .tree-row:hover { background-color: #F2EDE2; }
+    }
+
+    .workspace {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 290px 395px minmax(520px, 1fr);
+      transition: grid-template-columns 240ms var(--ease-out);
+    }
+    .workspace[data-sidebar="collapsed"] { grid-template-columns: 0px 410px minmax(580px, 1fr); }
+
+    .pane {
+      height: 100%;
+      overflow-y: auto;
+      background-color: var(--folio);
+      border-right: 1px solid var(--rule);
+      min-width: 0;
+    }
+    .pane-sidebar { background-color: #F9F6EE; overflow-x: hidden; }
+    .canvas-bg { background-color: var(--paper); padding: 24px 32px 48px; overflow-y: auto; min-width: 0; }
+
+    .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+    .stamp {
+      text-align: left;
+      padding: 9px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      background-color: #FAF7F0;
+      cursor: pointer;
+      transition: transform 140ms var(--ease-out), border-color 150ms var(--ease-out), background-color 150ms var(--ease-out);
+    }
+    .stamp:active { transform: scale(0.97); }
+    .stamp[data-active="true"] { border-color: var(--vermilion); background-color: #FDF3EF; }
+
+    .tree-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      padding: 9px 12px;
+      border-bottom: 1px solid #EDE7DA;
+      cursor: pointer;
+      transition: background-color 140ms var(--ease-out);
+    }
+
+    .folio-sheet {
+      max-width: 1120px;
+      margin: 0 auto;
+      background-color: var(--folio);
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      box-shadow: 0 18px 42px -28px rgba(20, 20, 19, 0.25);
+      padding: 30px 36px 40px;
+    }
+    .item-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 65ch) 1px minmax(210px, 1fr);
+      gap: 24px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid #EDE7DA;
+    }
+
+    .popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: 315px;
+      background-color: var(--folio);
+      border: 1px solid var(--ink);
+      border-radius: 2px;
+      box-shadow: 0 18px 36px -16px rgba(20,20,19,0.28);
+      padding: 8px;
+      z-index: 45;
+      transform-origin: top right;
+      animation: popIn 160ms var(--ease-out) forwards;
+      display: none;
+    }
+    .popover.open { display: block; }
+    @keyframes popIn { from { opacity: 0; transform: scale(0.95) translateY(-4px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+    @keyframes blurEnter { from { opacity: 0; filter: blur(2px); transform: scale(0.96) translateY(6px); } to { opacity: 1; filter: blur(0px); transform: scale(1) translateY(0); } }
+    .morph { animation: blurEnter 210ms var(--ease-out) both; }
+
+    .drawer-backdrop { position: fixed; inset: 0; background: rgba(20,20,19,0.34); z-index: 50; display: none; justify-content: flex-end; }
+    .drawer-backdrop.open { display: flex; }
+    .drawer-panel { width: min(720px, 100vw); height: 100%; background: var(--folio); border-left: 1px solid var(--ink); padding: 24px 28px; overflow-y: auto; animation: drawerIn 250ms var(--ease-drawer) forwards; }
+    @keyframes drawerIn { from { transform: translateX(28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    .cmd-backdrop { position: fixed; inset: 0; background: rgba(20,20,19,0.42); z-index: 60; display: none; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+    .cmd-backdrop.open { display: flex; }
+    .cmd-box { width: min(560px, calc(100vw - 32px)); background: var(--folio); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 0 24px 48px -18px rgba(20,20,19,0.38); padding: 16px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    }
+    @media print { .topbar, .pane-sidebar, .pane-inspector { display: none !important; } .workspace { display: block; } .canvas-bg { overflow: visible; padding: 0; background: #fff; } }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <button id="toggleSidebarBtn" class="btn" style="padding:6px 10px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+          <span id="sidebarBtnLabel">收起目录栏</span>
+        </button>
+        <div style="display:flex;align-items:baseline;gap:10px;">
+          <span class="serif" style="font-size:18px;font-weight:700;letter-spacing:-0.02em;">Auto Study Guidance · 桌面教研排印工作室</span>
+          <span style="font-size:12px;color:var(--graphite);">人教版《分子与细胞》第 3 章.pdf</span>
+        </div>
+      </div>
+
+      <div style="display:inline-flex;border:1px solid var(--rule);border-radius:2px;background:var(--paper);padding:2px;gap:2px;">
+        <button class="btn tab-btn" data-tab="sheet" style="border:none;padding:5px 11px;font-size:12px;background:var(--ink);color:#FDFBF7;">清样排版画布</button>
+        <button class="btn tab-btn" data-tab="matrix" style="border:none;padding:5px 11px;font-size:12px;background:transparent;color:var(--graphite);">命题双向细目表</button>
+        <button class="btn tab-btn" data-tab="compare" style="border:none;padding:5px 11px;font-size:12px;background:transparent;color:var(--graphite);">原书图表与批注对照</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;position:relative;">
+        <button id="cmdTrigger" class="btn tabular" style="padding:6px 10px;"><span>快捷指令</span><kbd style="font-size:11px;padding:1px 5px;border:1px solid var(--rule);background:var(--paper);">⌘K</kbd></button>
+        <div style="position:relative;">
+          <button id="routerTrigger" class="btn" style="padding:6px 11px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h12" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="17" r="2"/></svg>
+            <span id="routerBadge">TIER 1 · HARNESS</span>
+          </button>
+          <div id="routerPopover" class="popover">
+            <div style="font-size:11px;color:var(--graphite);padding:4px 8px 6px;border-bottom:1px solid #EDE7DA;">3-Tier 混合推理路由（Origin Top-Right 160ms）</div>
+            <button class="btn router-opt" data-tier="harness" data-badge="TIER 1 · HARNESS" data-title="CLI Harness · claude/codex" style="width:100%;justify-content:space-between;margin-top:4px;border-color:var(--vermilion);background:#FDF3EF;"><span>CLI Harness · claude/codex</span><span style="color:var(--vermilion);font-size:11px;">HARNESS</span></button>
+            <button class="btn router-opt" data-tier="cloud" data-badge="TIER 2 · CLOUD" data-title="Cloud API · DeepSeek-R1" style="width:100%;justify-content:space-between;margin-top:4px;"><span>Cloud API · DeepSeek-R1</span><span style="font-size:11px;">CLOUD</span></button>
+            <button class="btn router-opt" data-tier="local" data-badge="TIER 3 · LOCAL" data-title="Local · Ollama qwen2.5:14b" style="width:100%;justify-content:space-between;margin-top:4px;"><span>Local · Ollama qwen2.5:14b</span><span style="font-size:11px;">LOCAL</span></button>
+          </div>
+        </div>
+        <button id="auditTrigger" class="btn btn-primary" style="padding:6px 12px;">联合 UI 审计表 (7)</button>
+        <button onclick="window.print()" class="btn" style="padding:6px 11px;">打印 / 导出</button>
+      </div>
+    </header>
+
+    <div id="workspace" class="workspace" data-sidebar="open">
+      <!-- Left Sidebar -->
+      <aside class="pane pane-sidebar">
+        <div style="padding:16px 16px 12px;border-bottom:1px solid var(--rule);">
+          <div style="font-size:12.5px;font-weight:700;margin-bottom:8px;">课本 / PPTX 解析源</div>
+          <div style="border:1px dashed var(--ink);background:var(--folio);padding:12px;border-radius:2px;font-size:12px;line-height:1.5;">
+            <div style="font-weight:600;">人教版《生物·必修一》.pdf</div>
+            <div class="tabular" style="color:var(--graphite);margin-top:3px;">142 页 · 18 张矢量图 · OCR 99.4%</div>
+          </div>
+        </div>
+        <div style="padding:12px 16px 6px;font-size:12px;font-weight:700;color:var(--graphite);">勾选纳入生成的章节范围</div>
+        <label class="tree-row"><input type="checkbox" checked class="ch-chk" value="3.1" style="margin-top:3px;accent-color:#C83E1D;" /><div><div style="font-size:12.5px;font-weight:600;">3.1 水进出细胞的原理（渗透作用）</div><div class="tabular" style="font-size:11px;color:var(--graphite);">P62–65 · 4.2k tokens</div></div></label>
+        <label class="tree-row"><input type="checkbox" checked class="ch-chk" value="3.2" style="margin-top:3px;accent-color:#C83E1D;" /><div><div style="font-size:12.5px;font-weight:600;">3.2 主动运输与胞吞、胞吐（ATP）</div><div class="tabular" style="font-size:11px;color:var(--graphite);">P66–71 · 5.8k tokens</div></div></label>
+        <label class="tree-row"><input type="checkbox" class="ch-chk" value="3.3" style="margin-top:3px;accent-color:#C83E1D;" /><div><div style="font-size:12.5px;">3.3 生物膜流动镶嵌模型与实验史</div><div class="tabular" style="font-size:11px;color:var(--graphite);">P72–75 · 3.1k tokens</div></div></label>
+        <div style="padding:16px;margin-top:8px;border-top:1px solid var(--rule);font-size:12px;color:var(--graphite);">
+          <div style="font-weight:700;color:var(--ink);margin-bottom:4px;">当前执行引擎</div>
+          <div id="engineLabel">CLI Harness · claude/codex</div>
+        </div>
+      </aside>
+
+      <!-- Center Inspector -->
+      <section class="pane pane-inspector" style="padding:20px 22px 28px;display:flex;flex-direction:column;gap:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--ink);padding-bottom:10px;">
+          <h2 class="serif" style="font-size:18px;font-weight:700;margin:0;">阶段 1 · AI 需求解析与方案契约</h2>
+          <span id="stageStatus" class="tabular" style="font-size:11.5px;font-weight:600;color:var(--vermilion);">待确认方案</span>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:8px;">
+            <span style="font-weight:600;">教学资料预设模版 (6 大模版)</span>
+            <span id="presetTiming" style="color:var(--graphite);">12 分钟 · 当堂闭环</span>
+          </div>
+          <div id="presetGrid" class="preset-grid"></div>
+        </div>
+
+        <div style="border-top:1px solid var(--rule);padding-top:14px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:8px;">
+            <span>AI 解析三维认知配比</span>
+            <span id="ratioReadout" class="tabular" style="color:var(--forest);">30% / 50% / 20%</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;font-size:11.5px;color:var(--graphite);">
+            <label>概念记忆 <input type="range" id="r0" min="10" max="70" value="30" style="width:100%;accent-color:#C83E1D;" /></label>
+            <label>原理理解 <input type="range" id="r1" min="10" max="70" value="50" style="width:100%;accent-color:#C83E1D;" /></label>
+            <label>实验迁移 <input type="range" id="r2" min="10" max="70" value="20" style="width:100%;accent-color:#C83E1D;" /></label>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--rule);padding-top:14px;">
+          <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;">教师修订反馈指令（实时同步至右侧清样）</label>
+          <textarea id="teacherNote" rows="4" style="width:100%;border:1px solid var(--rule);border-radius:2px;background:#FAF7F0;padding:9px 11px;font-size:12.5px;line-height:1.6;">保留教材 §3.2 载体构象原图对照，第 3 题强化「呼吸抑制剂 + 低温」双因素对照分析。</textarea>
+        </div>
+
+        <div style="margin-top:auto;border-top:1px solid var(--rule);padding-top:14px;display:flex;flex-direction:column;gap:8px;">
+          <button id="holdApproveBtn" class="btn btn-primary" style="width:100%;padding:12px 16px;position:relative;overflow:hidden;">
+            <span id="holdFill" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:rgba(255,255,255,0.25);"></span>
+            <span id="holdLabel" style="position:relative;">确认需求方案并生成 Stage 2 资料（可长按蓄力）</span>
+          </button>
+          <button id="refreshBtn" class="btn" style="width:100%;">仅刷新右侧清样预览 (blur(2px) + 40ms 错峰)</button>
+        </div>
+      </section>
+
+      <!-- Right Widescreen Canvas -->
+      <main class="canvas-bg">
+        <div class="folio-sheet">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--ink);padding-bottom:12px;margin-bottom:18px;gap:12px;flex-wrap:wrap;">
+            <div>
+              <h1 id="sheetTitle" class="serif" style="font-size:24px;font-weight:700;margin:0;">随堂练习 ·《第 3 章 物质跨膜运输》</h1>
+              <div id="sheetMeta" class="tabular" style="font-size:12px;color:var(--graphite);margin-top:4px;">已选章节：3.1, 3.2 · 认知比例 30% / 50% / 20%</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span id="stageBadge" class="tabular" style="font-size:12px;font-weight:600;padding:3px 10px;border:1px solid var(--ochre);color:var(--ochre);">STAGE 1 · 方案校对草样</span>
+              <button id="toggleAnsBtn" class="btn" style="padding:5px 10px;font-size:12px;">隐藏参考答案</button>
+            </div>
+          </div>
+          <div id="canvasBody"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Audit Drawer -->
+  <div id="auditDrawer" class="drawer-backdrop">
+    <aside class="drawer-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ink);padding-bottom:12px;margin-bottom:16px;">
+        <h2 class="serif" style="font-size:20px;font-weight:700;margin:0;">Impeccable PC 桌面端 × (fwc-swiftui + Emil) 联合审计表</h2>
+        <button id="auditClose" class="btn">关闭</button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;line-height:1.55;">
+        <thead><tr style="border-bottom:2px solid var(--ink);text-align:left;"><th style="padding:8px 6px;">Before</th><th style="padding:8px 6px;">After</th><th style="padding:8px 6px;">Why</th></tr></thead>
+        <tbody id="auditTbody"></tbody>
+      </table>
+    </aside>
+  </div>
+
+  <!-- 0ms Command Modal -->
+  <div id="cmdModal" class="cmd-backdrop">
+    <div class="cmd-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--rule);">
+        <span style="font-size:12.5px;font-weight:600;">⌘K 桌面端快捷指令面板（0ms 零延迟响应）</span>
+        <button id="cmdClose" class="btn" style="padding:3px 8px;font-size:11.5px;">ESC</button>
+      </div>
+      <div id="cmdList" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <script>
+    const PRESETS = [
+      { id:'in_class', code:'01 · 随堂', label:'随堂练习', timing:'12 分钟 · 当堂闭环', ratio:[30,50,20], items:[
+        { no:'01', tag:'概念辨析', score:'4 分', cog:'理解', ref:'教材 P66 · 图 4-6', stem:'结合教材第 3.2 节图谱，区分「主动转运」与「协助扩散」在能量消耗与载体饱和动力学上的根本差异，并举出教材中的一个典型生理实例。', key:'主动转运消耗 ATP 并可逆浓度梯度进行；协助扩散顺浓度梯度且不耗能。', note:'教材原文锚点：P66 明确指出载体转运出现饱和上限。' },
+        { no:'02', tag:'坐标曲线', score:'6 分', cog:'理解', ref:'教材 P67 · 思考与讨论', stem:'在氧分压为 0 时，培养液中植物根细胞对 K⁺ 的吸收速率为何仍维持在一个较低的非零平台？若此时加入呼吸抑制剂，曲线拐点将如何迁移？', key:'低氧平台由无氧呼吸产生少量 ATP 维持；加入呼吸抑制剂后主动吸收降至近零。', note:'易错诊断：忽略无氧呼吸贡献。' },
+        { no:'03', tag:'微实验迁移', score:'8 分', cog:'迁移', ref:'教材 P69 · 探究拓展', stem:'设计对照实验验证低温 (4 °C) 对植物根毛细胞吸收 NO₃⁻ 速率的抑制效应究竟主要作用于膜磷脂流动性，还是呼吸酶催化活性。', key:'分别测定 25 °C 与 4 °C 下充氧组与呼吸抑制组的吸收差值，剥离被动扩散分量。', note:'评分锚点：写出双因素交叉对照得 4 分。' }
+      ]},
+      { id:'sync_practice', code:'02 · 同步', label:'同步练习', timing:'30 分钟 · 课后巩固', ratio:[25,45,30], items:[
+        { no:'01', tag:'基础梳理', score:'6 分', cog:'记忆', ref:'教材 P63–67 综述', stem:'构建物质跨膜运输三种主要方式的对比矩阵，标注各方式对「浓度梯度」「转运蛋白」「ATP 消耗」的依赖关系。', key:'自由扩散（顺/无/否）；协助扩散（顺/有/否）；主动运输（可逆/有/是）。', note:'区分通道蛋白与载体蛋白结合特征。' }
+      ]},
+      { id:'self_test', code:'03 · 自测', label:'自测卷', timing:'45 分钟 · 闭卷评分', ratio:[20,40,40], items:[
+        { no:'01', tag:'单选 · 采分', score:'6 分', cog:'记忆', ref:'教材 P68 · 流动镶嵌模型', stem:'下列关于生物膜流动镶嵌模型与物质跨膜运输的叙述，哪一项与教材「人鼠细胞融合荧光标记」实验证据直接相悖？', key:'错项常误称“膜蛋白对称均匀分布于内外两侧”。', note:'考查膜结构不对称性。' }
+      ]},
+      { id:'self_study', code:'04 · 学案', label:'自学案', timing:'40 分钟 · 课前导学', ratio:[30,50,20], items:[
+        { no:'导学 1', tag:'问题探讨', score:'预习锚点', cog:'理解', ref:'教材 P64 问题探讨', stem:'通读 P64 人工无蛋白脂双层透过性实验：为何甘油自由穿过而葡萄糖受阻？这一反差迫使科学家提出什么假设？', key:'亲水溶质需要膜上专一转运蛋白协助穿膜。', note:'康奈尔笔记检索提示。' }
+      ]},
+      { id:'cram_pack', code:'05 · 速记', label:'考前速记包', timing:'10 分钟 · 高频易错', ratio:[45,35,20], items:[
+        { no:'反例 A', tag:'高频陷阱', score:'必看', cog:'记忆', ref:'拓展 · 协同转运', stem:'排雷：「凡是逆浓度梯度的主动运输，必然直接伴随 ATP 水解。」请用教材拓展实例推翻这一表述。', key:'继发性主动运输可间接利用 Na⁺ 电化学势能驱动（如 SGLT1）。', note:'高频考场陷阱词辨析。' }
+      ]},
+      { id:'custom', code:'06 · 定制', label:'自由定制', timing:'实时定制编排', ratio:[20,40,40], items:[
+        { no:'定制 1', tag:'专项变式', score:'10 分', cog:'迁移', ref:'教师定制 · §3.2', stem:'结合教师批注要求，分析密闭容器中心肌细胞加入氰化物后，Na⁺ 泵与 Ca²⁺ 排出速率的先后跌落顺序。', key:'ATP 耗竭先使 Na⁺-K⁺ 泵停摆，继而破坏 Na⁺ 梯度使 Na⁺-Ca²⁺ 交换受阻。', note:'自定义批注直出匹配。' }
+      ]}
+    ];
+
+    const AUDIT = [
+      ['移动端折叠模拟布局', '100vw × 100vh PC 桌面三栏编辑室架构（目录 290px + Stage 1 395px + Stage 2 宽屏清样与右栏页边注记）', '桌面端最大化并行审校效率且折栏保留状态'],
+      ['fwc-swiftui · Liquid Glass', '三栏滚动区 100% 实底纸张 (#FDFBF7)；仅顶部工具栏和弹出层使用轻透 Chrome', 'Glass 绝不侵入可滚动正文行'],
+      ['fwc-swiftui · Adaptive Grid', '预设网格 repeat(auto-fill, minmax(110px, 1fr))；题干严格锁定 65ch + 右栏 210px 页边注记', '兼顾宽屏空间与学术最佳阅读宽度'],
+      ['emil · No transition: all', '零 transition: all；切预设/切画布触发 180ms blur(2px) + 40ms 错峰落位（从 scale(0.96) 起跳）', '禁用 transition: all 与 scale(0)'],
+      ['emil · Asymmetric Hold', '全按钮 :active scale(0.97)；Stage 1 主按钮支持 850ms 线性蓄力 / 160ms 快速弹回', '物理按压回馈 + 误触防护'],
+      ['emil · Origin & 0ms Keys', 'Router Popover 从 top right 展开；⌘K 指令面板 0ms 零延迟开合', '锚定触发原点；键盘响应零阻塞'],
+      ['emil · Device & A11y Gates', 'Hover 收口在 (hover: hover) and (pointer: fine)；支持 prefers-reduced-motion', '跨设备交互洁净与系统无障碍兼容']
+    ];
+
+    let activePreset = 'in_class', approved = false, showAns = true, activeTab = 'sheet', sidebarOpen = true;
+
+    function getSelectedChapters() {
+      return Array.from(document.querySelectorAll('.ch-chk:checked')).map(c => c.value);
+    }
+
+    function render() {
+      const p = PRESETS.find(x => x.id === activePreset) || PRESETS[0];
+      const ratios = [document.getElementById('r0').value, document.getElementById('r1').value, document.getElementById('r2').value];
+      document.getElementById('ratioReadout').textContent = ratios.join('% / ') + '%';
+      document.getElementById('presetTiming').textContent = p.timing;
+      document.getElementById('sheetTitle').textContent = `${p.label} ·《第 3 章 物质跨膜运输》`;
+      document.getElementById('sheetMeta').textContent = `已选章节：${getSelectedChapters().join(', ')} · 认知比例 ${ratios.join('% / ')}%`;
+
+      const pGrid = document.getElementById('presetGrid');
+      pGrid.innerHTML = '';
+      PRESETS.forEach(item => {
+        const b = document.createElement('button');
+        b.className = 'stamp';
+        b.dataset.active = String(item.id === activePreset);
+        b.innerHTML = `<div class="tabular" style="font-size:10.5px;font-weight:600;color:${item.id===activePreset?'var(--vermilion)':'var(--graphite)'}">${item.code}</div><div class="serif" style="font-size:14.5px;font-weight:700;margin-top:2px;">${item.label}</div>`;
+        b.onclick = () => {
+          activePreset = item.id;
+          [0,1,2].forEach(i => document.getElementById('r'+i).value = item.ratio[i]);
+          render();
+        };
+        pGrid.appendChild(b);
+      });
+
+      const body = document.getElementById('canvasBody');
+      body.innerHTML = '';
+      const note = document.getElementById('teacherNote').value;
+
+      if (activeTab === 'sheet') {
+        body.innerHTML = `<div style="border-left:3px solid var(--vermilion);padding-left:12px;max-width:65ch;margin-bottom:20px;"><div style="font-size:11.5px;font-weight:600;color:var(--vermilion);">当前生效的教师修订批注</div><div style="font-size:13px;color:var(--graphite);margin-top:2px;">“${note}”</div></div>`;
+        p.items.forEach((q, idx) => {
+          const art = document.createElement('article');
+          art.className = 'item-grid morph';
+          art.style.animationDelay = `${idx * 42}ms`;
+          art.style.marginBottom = '20px';
+          art.innerHTML = `
+            <div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                <span class="serif tabular" style="font-size:17px;font-weight:700;color:var(--vermilion);">${q.no}</span>
+                <span style="font-size:12.5px;font-weight:600;">${q.tag}</span>
+                <span class="tabular" style="font-size:11.5px;color:var(--graphite);">${q.score} · ${q.cog}</span>
+              </div>
+              <p style="font-size:14.5px;line-height:1.75;margin:0 0 8px;">${q.stem}</p>
+              ${showAns ? `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--rule);font-size:12.5px;line-height:1.65;color:var(--forest);"><strong>参考答案：</strong>${q.key}</div>` : ''}
+            </div>
+            <div style="background:#EDE7DA;"></div>
+            <aside style="font-size:12px;line-height:1.6;color:var(--graphite);"><div style="font-weight:700;color:var(--ink);margin-bottom:4px;">${q.ref}</div><div>${q.note}</div></aside>`;
+          body.appendChild(art);
+        });
+      } else if (activeTab === 'matrix') {
+        body.innerHTML = `<div class="morph"><h3 class="serif" style="margin:0 0 12px;">命题双向细目表</h3><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="border-bottom:2px solid var(--ink);text-align:left;"><th style="padding:8px;">题号</th><th style="padding:8px;">标签</th><th style="padding:8px;">认知层级</th><th style="padding:8px;">教材页码</th><th style="padding:8px;">分值</th></tr></thead><tbody>${p.items.map(q=>`<tr style="border-bottom:1px solid #EDE7DA;"><td class="tabular" style="padding:10px 8px;font-weight:700;color:var(--vermilion);">${q.no}</td><td style="padding:10px 8px;">${q.tag}</td><td style="padding:10px 8px;">${q.cog}</td><td style="padding:10px 8px;color:var(--graphite);">${q.ref}</td><td class="tabular" style="padding:10px 8px;color:var(--forest);font-weight:600;">${q.score}</td></tr>`).join('')}</tbody></table></div>`;
+      } else {
+        body.innerHTML = `<div class="morph" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;"><div style="border:1px solid var(--rule);padding:16px;background:#FAF7F0;"><div style="font-weight:700;margin-bottom:8px;">教材原文锚定片段（§3.2 P66–68）</div><p style="font-size:13px;line-height:1.7;color:var(--graphite);margin:0;">“物质逆浓度梯度进行跨膜运输，需要载体蛋白协助并消耗细胞内能量，这种方式叫做主动运输。”</p></div><div style="border:1px solid var(--rule);padding:16px;"><div style="font-weight:700;margin-bottom:8px;color:var(--vermilion);">教师修订批注映射</div><p style="font-size:13px;line-height:1.7;margin:0;">${note}</p></div></div>`;
+      }
+
+      const btn = document.getElementById('holdApproveBtn');
+      const badge = document.getElementById('stageBadge');
+      const status = document.getElementById('stageStatus');
+      if (approved) {
+        btn.className = 'btn btn-forest';
+        document.getElementById('holdLabel').textContent = 'Stage 2 已签发 · 点击退回修改方案';
+        badge.textContent = 'STAGE 2 · 正式定稿清样'; badge.style.borderColor = 'var(--forest)'; badge.style.color = 'var(--forest)';
+        status.textContent = '已签发锁定'; status.style.color = 'var(--forest)';
+      } else {
+        btn.className = 'btn btn-primary';
+        document.getElementById('holdLabel').textContent = '确认需求方案并生成 Stage 2 资料（可长按蓄力）';
+        badge.textContent = 'STAGE 1 · 方案校对草样'; badge.style.borderColor = 'var(--ochre)'; badge.style.color = 'var(--ochre)';
+        status.textContent = '待确认方案'; status.style.color = 'var(--vermilion)';
+      }
+    }
+
+    document.getElementById('toggleSidebarBtn').onclick = () => {
+      sidebarOpen = !sidebarOpen;
+      document.getElementById('workspace').dataset.sidebar = sidebarOpen ? 'open' : 'collapsed';
+      document.getElementById('sidebarBtnLabel').textContent = sidebarOpen ? '收起目录栏' : '展开目录栏';
+    };
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.onclick = () => {
+        activeTab = b.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(x => {
+          x.style.background = x.dataset.tab === activeTab ? 'var(--ink)' : 'transparent';
+          x.style.color = x.dataset.tab === activeTab ? '#FDFBF7' : 'var(--graphite)';
+        });
+        render();
+      };
+    });
+    document.getElementById('toggleAnsBtn').onclick = () => {
+      showAns = !showAns;
+      document.getElementById('toggleAnsBtn').textContent = showAns ? '隐藏参考答案' : '显示参考答案';
+      render();
+    };
+    ['r0','r1','r2'].forEach(id => document.getElementById(id).addEventListener('input', render));
+    document.getElementById('teacherNote').addEventListener('input', render);
+    document.querySelectorAll('.ch-chk').forEach(c => c.addEventListener('change', render));
+    document.getElementById('refreshBtn').onclick = render;
+
+    document.getElementById('routerTrigger').onclick = () => document.getElementById('routerPopover').classList.toggle('open');
+    document.querySelectorAll('.router-opt').forEach(opt => {
+      opt.onclick = () => {
+        document.getElementById('routerBadge').textContent = opt.dataset.badge;
+        document.getElementById('engineLabel').textContent = opt.dataset.title;
+        document.querySelectorAll('.router-opt').forEach(o => { o.style.borderColor = 'var(--rule)'; o.style.background = 'var(--folio)'; });
+        opt.style.borderColor = 'var(--vermilion)'; opt.style.background = '#FDF3EF';
+        document.getElementById('routerPopover').classList.remove('open');
+      };
+    });
+
+    const holdBtn = document.getElementById('holdApproveBtn'), holdFill = document.getElementById('holdFill');
+    let holdRaf = null, holdStart = 0;
+    holdBtn.addEventListener('pointerdown', () => {
+      if (approved) { approved = false; holdFill.style.width = '0%'; render(); return; }
+      holdStart = performance.now();
+      const tick = (now) => {
+        const pct = Math.min(1, (now - holdStart) / 850);
+        holdFill.style.transition = 'none'; holdFill.style.width = `${Math.round(pct * 100)}%`;
+        document.getElementById('holdLabel').textContent = `蓄力确认签发中 ${Math.round(pct * 100)}%…`;
+        if (pct >= 1) { approved = true; render(); holdRaf = null; }
+        else { holdRaf = requestAnimationFrame(tick); }
+      };
+      holdRaf = requestAnimationFrame(tick);
+    });
+    ['pointerup','pointerleave','pointercancel'].forEach(ev => {
+      holdBtn.addEventListener(ev, () => {
+        if (holdRaf) {
+          cancelAnimationFrame(holdRaf); holdRaf = null;
+          if (ev === 'pointerup' && performance.now() - holdStart < 220) { approved = true; render(); }
+          else if (!approved) { holdFill.style.transition = 'width 160ms var(--ease-out)'; holdFill.style.width = '0%'; document.getElementById('holdLabel').textContent = '确认需求方案并生成 Stage 2 资料（可长按蓄力）'; }
+        }
+      });
+    });
+
+    const tbody = document.getElementById('auditTbody');
+    AUDIT.forEach(([b,a,w]) => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid #EDE7DA';
+      tr.innerHTML = `<td style="padding:10px 6px;color:var(--graphite);">${b}</td><td style="padding:10px 6px;">${a}</td><td style="padding:10px 6px;color:var(--forest);">${w}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('auditTrigger').onclick = () => document.getElementById('auditDrawer').classList.add('open');
+    document.getElementById('auditClose').onclick = () => document.getElementById('auditDrawer').classList.remove('open');
+
+    const cmdList = document.getElementById('cmdList');
+    PRESETS.forEach(p => {
+      const b = document.createElement('button');
+      b.className = 'btn'; b.style.justifyContent = 'space-between';
+      b.innerHTML = `<span>${p.label}</span><span style="font-size:11px;color:var(--graphite);">${p.timing}</span>`;
+      b.onclick = () => { activePreset = p.id; [0,1,2].forEach(i => document.getElementById('r'+i).value = p.ratio[i]); render(); document.getElementById('cmdModal').classList.remove('open'); };
+      cmdList.appendChild(b);
+    });
+    document.getElementById('cmdTrigger').onclick = () => document.getElementById('cmdModal').classList.add('open');
+    document.getElementById('cmdClose').onclick = () => document.getElementById('cmdModal').classList.remove('open');
+    window.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); document.getElementById('cmdModal').classList.toggle('open'); }
+      else if (e.key === 'Escape') { document.getElementById('cmdModal').classList.remove('open'); document.getElementById('auditDrawer').classList.remove('open'); document.getElementById('routerPopover').classList.remove('open'); }
+    });
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>示范界面 1 · Impeccable 学术典藏版 (Auto Study Folio)</title>
+  <style>
+    :root {
+      --paper: #F6F3EC;
+      --paper-elevated: #FBF9F4;
+      --paper-tint: #EFECE3;
+      --ink: #141413;
+      --graphite: #57534E;
+      --vermilion: #C83E1D;
+      --forest: #1F4E3D;
+      --hairline: rgba(20, 20, 19, 0.18);
+    }
+    * { box-sizing: border-box; }
+    ::selection { background: var(--vermilion); color: var(--paper); }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .serif { font-family: Georgia, "Noto Serif SC", "Songti SC", serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .topbar { border-bottom: 1px solid var(--hairline); padding: 16px 28px; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .topbar h1 { margin: 0; font-size: 26px; letter-spacing: -0.03em; }
+    .route-group { display: inline-flex; border: 1px solid rgba(20,20,19,0.28); }
+    .route-btn { border: 0; border-right: 1px solid var(--hairline); background: transparent; padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--graphite); }
+    .route-btn:last-child { border-right: 0; }
+    .route-btn.active { background: var(--ink); color: var(--paper); font-weight: 600; }
+    .broadsheet { max-width: 1320px; margin: 0 auto; display: grid; grid-template-columns: 360px 1fr; border-left: 1px solid var(--hairline); border-right: 1px solid var(--hairline); min-height: calc(100vh - 68px); }
+    @media (max-width: 920px) { .broadsheet { grid-template-columns: 1fr; } }
+    .aside { border-right: 1px solid var(--hairline); padding: 24px; }
+    .main { padding: 24px 32px; }
+    .source-box { border: 1px solid var(--hairline); background: var(--paper-tint); padding: 14px; margin-top: 12px; font-size: 12px; }
+    .chapter-list { border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); margin-top: 12px; }
+    .chapter-item { display: flex; gap: 10px; padding: 11px 6px; border-bottom: 1px solid rgba(20,20,19,0.1); cursor: pointer; background: transparent; border-left: 0; border-right: 0; border-top: 0; width: 100%; text-align: left; }
+    .chapter-item:last-child { border-bottom: 0; }
+    .chapter-item:hover { background: var(--paper-tint); }
+    .box-check { width: 14px; height: 14px; border: 1px solid var(--ink); margin-top: 3px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; }
+    .box-check.on { background: var(--ink); color: var(--paper); }
+    .preset-strip { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid rgba(20,20,19,0.28); background: var(--paper-elevated); margin-top: 12px; }
+    .preset-btn { border: 0; border-right: 1px solid var(--hairline); padding: 10px 8px; background: transparent; cursor: pointer; font-size: 12px; color: var(--ink); }
+    .preset-btn:last-child { border-right: 0; }
+    .preset-btn.active { background: var(--vermilion); color: var(--paper); font-weight: 600; }
+    .tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--hairline); margin: 22px 0 18px; }
+    .tab-btn { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 0 0 10px; font-size: 13px; cursor: pointer; color: var(--graphite); }
+    .tab-btn.active { border-bottom-color: var(--vermilion); color: var(--ink); font-weight: 600; }
+    .proof-sheet { border: 1px solid rgba(20,20,19,0.25); background: var(--paper-elevated); padding: 20px; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 12px; }
+    th, td { border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); padding: 9px 6px; text-align: left; }
+    th { color: var(--graphite); font-weight: 500; }
+    .approve-btn { background: var(--forest); color: var(--paper); border: 0; padding: 10px 18px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .approve-btn:hover { background: #16392C; }
+    .option-row { display: flex; justify-content: space-between; width: 100%; text-align: left; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--hairline); background: var(--paper-elevated); cursor: pointer; font-size: 12px; }
+    .option-row.sel { background: var(--paper-tint); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div style="display:flex; align-items:baseline; gap:14px;">
+      <h1 class="serif">Auto Study Folio</h1>
+      <span style="font-size:12px; color:var(--graphite);">示范界面 1 · Impeccable 学术典藏版（Editorial Craft Floor）</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div class="route-group" id="routeGroup">
+        <button class="route-btn active" onclick="setRoute(this, 'CLAUDE-CLI')">Claude CLI Harness</button>
+        <button class="route-btn" onclick="setRoute(this, 'DEEPSEEK-API')">DeepSeek Cloud API</button>
+        <button class="route-btn" onclick="setRoute(this, 'OLLAMA-QWEN')">Ollama 本地模型</button>
+      </div>
+      <span id="routeBadge" class="mono" style="font-size:11px; color:var(--forest); border:1px solid rgba(31,78,61,0.35); padding:4px 9px;">ACTIVE · CLAUDE-CLI</span>
+    </div>
+  </header>
+
+  <div class="broadsheet">
+    <aside class="aside">
+      <h2 class="serif" style="margin:0; font-size:18px; letter-spacing:-0.02em;">文献来源与章节索引</h2>
+      <div class="source-box">
+        <div style="display:flex; justify-content:space-between; font-weight:600;">
+          <span>深度学习与神经网络导论.pdf</span>
+          <span class="mono" style="color:var(--vermilion);">142 pp</span>
+        </div>
+        <div style="margin-top:6px; color:var(--graphite);">已关联课件：《Transformer_Core.pptx》（38 张幻灯片 · 含备注与插图）</div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:22px;">
+        <h3 class="serif" style="margin:0; font-size:16px;">章节目录清单</h3>
+        <span id="chCount" class="mono" style="font-size:11px; color:var(--graphite);">已选 3 / 4</span>
+      </div>
+      <div class="chapter-list" id="chapterList"></div>
+    </aside>
+
+    <main class="main">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+        <h2 class="serif" style="margin:0; font-size:22px; letter-spacing:-0.02em;">资料体裁预设与双阶段方案编排</h2>
+        <span style="font-size:12px; color:var(--graphite);">AI 解析需求 → 校对确认 → 排印生成</span>
+      </div>
+
+      <div class="preset-strip" id="presetStrip">
+        <button class="preset-btn" onclick="setPreset('随堂练习', 5, 2, 1, 50, 15, this)">随堂练习</button>
+        <button class="preset-btn" onclick="setPreset('同步练习', 6, 3, 2, 100, 35, this)">同步练习</button>
+        <button class="preset-btn" onclick="setPreset('自测卷', 8, 4, 3, 100, 60, this)">自测卷</button>
+        <button class="preset-btn active" onclick="setPreset('自学案', 4, 2, 2, 60, 25, this)">自学案</button>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('proof', this)">一、AI 需求解析校对单</button>
+        <button class="tab-btn" onclick="switchTab('notes', this)">二、导学案精要讲义</button>
+        <button class="tab-btn" onclick="switchTab('quiz', this)">三、分层题库与自测卷</button>
+      </div>
+
+      <div id="tab-proof" class="proof-sheet">
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--hairline); padding-bottom:10px;">
+          <strong class="serif" id="proofTitle" style="font-size:18px;">生成方案校对单 · 自学案</strong>
+          <span class="mono" id="proofMeta" style="font-size:12px; color:var(--forest);">3 章入选 · 60 分 · 25 分钟</span>
+        </div>
+        <p style="font-size:13px; max-width:66ch; margin-top:14px;">
+          模型已比对教材目录与您的要求：将重点辨析 <u style="text-underline-offset:4px; text-decoration-color:var(--vermilion);">Sigmoid 梯度消失 vs ReLU 死区</u> 与 <u style="text-underline-offset:4px; text-decoration-color:var(--vermilion);">缩放因子 1/√d_k 的方差归一化</u>。
+        </p>
+        <table>
+          <thead><tr><th>产出模块</th><th>编排规格</th><th style="text-align:right;">路由</th></tr></thead>
+          <tbody>
+            <tr><td>导学精要讲义</td><td>学习目标 + 费曼类比 + 例题剖析</td><td class="mono" style="text-align:right; color:var(--forest);" id="r1">CLAUDE-CLI</td></tr>
+            <tr><td>配套练习题库</td><td id="quizSpec">单选 4 题 · 填空 2 题 · 简答 2 题（共 60 分）</td><td class="mono" style="text-align:right; color:var(--forest);" id="r2">CLAUDE-CLI</td></tr>
+          </tbody>
+        </table>
+        <div style="display:flex; justify-content:flex-end;">
+          <button class="approve-btn" onclick="switchTab('notes', document.querySelectorAll('.tab-btn')[1])">批准方案并排印生成 →</button>
+        </div>
+      </div>
+
+      <div id="tab-notes" style="display:none; max-width:66ch;">
+        <h3 class="serif" style="font-size:22px; margin-top:0;">第三章自学案：缩放点积注意力的数学直觉</h3>
+        <p style="font-size:14px;">Transformer 彻底摒弃了递归结构，通过计算任意两个词元间的点积相似度实现全序列并行交互。除以 √d_k 可将点积方差稳定回 1，避免 Softmax 进入梯度几乎为零的饱和区。</p>
+      </div>
+
+      <div id="tab-quiz" style="display:none; max-width:66ch;">
+        <p style="font-size:14px; font-weight:600;">1. [能力提升 · 5分] 在 Scaled Dot-Product Attention 中，除以 √d_k 的主要目的是什么？</p>
+        <div style="border:1px solid rgba(20,20,19,0.25);">
+          <button class="option-row" onclick="pickOpt(this, false)"><span>A. 降低矩阵乘法的空间复杂度</span></button>
+          <button class="option-row sel" onclick="pickOpt(this, true)"><span>B. 维持点积方差为 1，防止 Softmax 进入梯度饱和区</span><span class="mono" style="color:var(--forest);">✓ 正确</span></button>
+          <button class="option-row" onclick="pickOpt(this, false)"><span>C. 替代位置编码注入绝对位置</span></button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const chapters = [
+      { id: 1, title: '第一章 · 神经网络前向传播与非线性激活机制', pages: 'pp. 1–28', on: true },
+      { id: 2, title: '第二章 · 卷积核局部感受野与残差网络', pages: 'pp. 29–64', on: true },
+      { id: 3, title: '第三章 · 缩放点积注意力与 Transformer', pages: 'pp. 65–108', on: true },
+      { id: 4, title: '第四章 · 泛化误差界与 Dropout 调优', pages: 'pp. 109–142', on: false }
+    ];
+    function renderChapters() {
+      const el = document.getElementById('chapterList');
+      el.innerHTML = chapters.map((c, idx) => `
+        <button class="chapter-item" onclick="toggleCh(${idx})">
+          <span class="box-check ${c.on ? 'on' : ''}">${c.on ? '✓' : ''}</span>
+          <div style="flex:1">
+            <div style="font-size:12px; font-weight:${c.on ? 600 : 400}; color:${c.on ? 'var(--ink)' : 'var(--graphite)'}">${c.title}</div>
+            <div class="mono" style="font-size:11px; color:var(--graphite); margin-top:2px;">${c.pages}</div>
+          </div>
+        </button>`).join('');
+      document.getElementById('chCount').textContent = `已选 ${chapters.filter(c=>c.on).length} / ${chapters.length}`;
+    }
+    function toggleCh(i) { chapters[i].on = !chapters[i].on; renderChapters(); }
+    function setRoute(btn, label) {
+      document.querySelectorAll('.route-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('routeBadge').textContent = 'ACTIVE · ' + label;
+      document.getElementById('r1').textContent = label;
+      document.getElementById('r2').textContent = label;
+    }
+    function setPreset(name, mcq, fill, sh, score, mins, btn) {
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('proofTitle').textContent = '生成方案校对单 · ' + name;
+      document.getElementById('proofMeta').textContent = `${chapters.filter(c=>c.on).length} 章入选 · ${score} 分 · ${mins} 分钟`;
+      document.getElementById('quizSpec').textContent = `单选 ${mcq} 题 · 填空 ${fill} 题 · 简答 ${sh} 题（共 ${score} 分）`;
+    }
+    function switchTab(id, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      ['proof', 'notes', 'quiz'].forEach(k => document.getElementById('tab-' + k).style.display = k === id ? 'block' : 'none');
+    }
+    function pickOpt(btn, right) {
+      document.querySelectorAll('.option-row').forEach(r => r.classList.remove('sel'));
+      btn.classList.add('sel');
+    }
+    renderChapters();
+  </script>
+</body>
+</html>

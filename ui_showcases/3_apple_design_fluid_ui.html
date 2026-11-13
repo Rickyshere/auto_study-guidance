@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>示范界面 3 · Apple Design 流体物理版 (StudyFlow)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding-bottom: 140px;
+      color: #1D1D1F;
+      background: radial-gradient(circle at 18% 12%, #E8F1FF 0%, #F5F5F7 45%, #ECECF2 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      overflow-x: hidden;
+    }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .apple-btn { transition: transform 100ms ease-out, opacity 120ms ease; cursor: pointer; }
+    .apple-btn:active { transform: scale(0.96); opacity: 0.85; }
+    .material {
+      background: rgba(255, 255, 255, 0.70);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    }
+    header {
+      position: sticky; top: 0; z-index: 20;
+      padding: 12px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-radius: 0 !important; border-left: 0 !important; border-right: 0 !important; border-top: 0 !important;
+    }
+    .island {
+      background: #1D1D1F; color: #fff; border: 0; border-radius: 999px;
+      padding: 8px 16px; font-size: 12px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 8px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.18);
+    }
+    .island-menu {
+      position: absolute; right: 24px; top: 56px; width: 260px;
+      background: rgba(29,29,31,0.95); backdrop-filter: blur(24px); color: #fff;
+      border-radius: 24px; padding: 10px; border: 1px solid rgba(255,255,255,0.15);
+      display: none; z-index: 30;
+    }
+    .island-menu.open { display: block; }
+    .container { max-width: 1120px; margin: 28px auto; padding: 0 20px; display: grid; grid-template-columns: 360px 1fr; gap: 22px; transform-origin: top center; }
+    @media (max-width: 880px) { .container { grid-template-columns: 1fr; } }
+    .card { border-radius: 28px; padding: 22px; }
+    .preset-pills { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
+    .pill { border: 0; border-radius: 16px; padding: 10px 8px; font-size: 12px; font-weight: 600; background: rgba(255,255,255,0.65); color: #1D1D1F; }
+    .pill.active { background: #1D1D1F; color: #fff; box-shadow: 0 6px 14px rgba(0,0,0,0.14); }
+    .sheet-wrap { position: fixed; inset-x: 0; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; justify-content: center; pointer-events: none; }
+    .sheet {
+      width: 100%; max-width: 860px; pointer-events: auto;
+      border-top-left-radius: 32px; border-top-right-radius: 32px;
+      box-shadow: 0 -16px 48px rgba(0,0,0,0.14);
+      overflow: hidden;
+    }
+    .grab { padding: 12px 24px 16px; border-bottom: 1px solid rgba(0,0,0,0.06); cursor: grab; user-select: none; touch-action: none; }
+    .grab:active { cursor: grabbing; }
+    .handle-bar { width: 44px; height: 5px; border-radius: 999px; background: rgba(0,0,0,0.2); margin: 0 auto 10px; }
+    .scrim { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 35; }
+    @media (prefers-reduced-motion: reduce) { * { transition: opacity 200ms ease !important; } }
+    @media (prefers-reduced-transparency: reduce) { .material { background: #fff !important; backdrop-filter: none !important; } }
+  </style>
+</head>
+<body>
+  <header class="material">
+    <div>
+      <div style="font-size:17px; font-weight:700; letter-spacing:-0.022em;">StudyFlow · Apple Fluid Design 示范版</div>
+      <div style="font-size:11px; color:#6E6E73;">物理弹簧阻尼 · 1:1 指针拖拽与橡皮筋边界 · 动量投影 · 灵动岛胶囊</div>
+    </div>
+    <button class="island apple-btn" onclick="toggleIsland()">
+      <span style="width:8px;height:8px;border-radius:99px;background:#34C759;display:inline-block;"></span>
+      <span id="routeLabel">Claude Code CLI</span>
+    </button>
+    <div class="island-menu" id="islandMenu">
+      <div style="font-size:11px; color:rgba(255,255,255,0.55); padding:4px 10px;">多模 Harness 智能路由</div>
+      <button class="apple-btn" onclick="setRoute('Claude Code CLI')" style="width:100%;text-align:left;background:transparent;border:0;color:#fff;padding:9px 12px;border-radius:14px;font-size:12px;">Claude Code CLI Harness</button>
+      <button class="apple-btn" onclick="setRoute('DeepSeek R1 API')" style="width:100%;text-align:left;background:transparent;border:0;color:#fff;padding:9px 12px;border-radius:14px;font-size:12px;">DeepSeek Cloud API</button>
+      <button class="apple-btn" onclick="setRoute('Ollama Local')" style="width:100%;text-align:left;background:transparent;border:0;color:#fff;padding:9px 12px;border-radius:14px;font-size:12px;">Ollama 本地模型</button>
+    </div>
+  </header>
+
+  <main class="container" id="mainBg">
+    <aside class="material card">
+      <div style="font-size:14px; font-weight:700;">深度学习核心架构讲义.pptx</div>
+      <div class="tabular" style="font-size:12px; color:#6E6E73; margin-top:4px;">38 张幻灯片 · 6 张配图 · 已选 3/4 章</div>
+      <div style="margin-top:14px; display:flex; flex-direction:column; gap:8px;">
+        <div style="background:rgba(255,255,255,0.85); padding:10px 12px; border-radius:16px; font-size:12px; font-weight:600;">✓ 第 1 章 · 神经网络基础</div>
+        <div style="background:rgba(255,255,255,0.85); padding:10px 12px; border-radius:16px; font-size:12px; font-weight:600;">✓ 第 2 章 · 卷积网络与 ResNet</div>
+        <div style="background:rgba(255,255,255,0.85); padding:10px 12px; border-radius:16px; font-size:12px; font-weight:600;">✓ 第 3 章 · 注意力与 Transformer</div>
+      </div>
+    </aside>
+
+    <section style="display:flex; flex-direction:column; gap:18px;">
+      <div class="material card" id="swipeCard" style="cursor:grab; user-select:none; touch-action:pan-y;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h2 id="presetTitle" style="margin:0; font-size:24px; letter-spacing:-0.025em; line-height:1.1;">自学案</h2>
+            <p id="presetSub" style="margin:4px 0 0; font-size:12px; color:#6E6E73;">零基础预习导学 · 费曼类比 + 边学边练</p>
+          </div>
+          <span id="presetBadge" class="tabular" style="background:#34C759; color:#fff; padding:5px 12px; border-radius:999px; font-size:12px; font-weight:600;">60 分 · 25 分钟</span>
+        </div>
+
+        <div class="preset-pills">
+          <button class="pill apple-btn" onclick="selectPreset(0, this)">随堂练习</button>
+          <button class="pill apple-btn" onclick="selectPreset(1, this)">同步练习</button>
+          <button class="pill apple-btn" onclick="selectPreset(2, this)">自测卷</button>
+          <button class="pill apple-btn active" onclick="selectPreset(3, this)">自学案</button>
+        </div>
+
+        <div style="background:rgba(255,255,255,0.72); border-radius:18px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:12px; color:#6E6E73;">提示：可左右拖拽此卡片感受橡皮筋边界，或上拉底部确认抽屉</span>
+          <button class="apple-btn" onclick="setSheet(true)" style="background:#007AFF; color:#fff; border:0; border-radius:999px; padding:8px 16px; font-size:12px; font-weight:600;">打开 AI 确认抽屉</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="scrim" id="scrim" onclick="setSheet(false)"></div>
+
+  <div class="sheet-wrap">
+    <div class="material sheet" id="fluidSheet" style="transform: translate3d(0, 290px, 0);">
+      <div class="grab" id="grabZone">
+        <div class="handle-bar"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="font-size:14px;">阶段一：AI 需求解析与确认抽屉（1:1 物理拖拽）</strong>
+          <span style="font-size:12px; color:#007AFF; font-weight:600;" onclick="toggleSheet()">上拉 / 收起</span>
+        </div>
+      </div>
+      <div style="padding:22px; background:rgba(255,255,255,0.6);">
+        <div id="sheetInfo" style="background:rgba(255,255,255,0.88); border-radius:18px; padding:14px; font-size:12px; line-height:1.6;">
+          已解析您的定制需求：针对前 3 章生成【自学案】（4单选 · 2填空 · 2简答）。松手时将根据滑动速度进行动量投影并平稳阻尼回弹。
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+          <button class="apple-btn" onclick="setSheet(false)" style="border:0; background:transparent; padding:8px 16px; font-size:12px; color:#6E6E73;">收起</button>
+          <button class="apple-btn" onclick="setSheet(false)" style="border:0; background:#34C759; color:#fff; border-radius:999px; padding:9px 20px; font-size:12px; font-weight:700;">确认方案并生成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const PRESETS = [
+      { name: '随堂练习', sub: '15 分钟即时检测 · 当堂核心概念辨析', badge: '50 分 · 15 分钟', color: '#FF9500' },
+      { name: '同步练习', sub: '课后三级分层作业 · 基础 / 提升 / 探究', badge: '100 分 · 35 分钟', color: '#007AFF' },
+      { name: '自测卷', sub: '标准 100 分闭卷测评 · 计时交卷判分', badge: '100 分 · 60 分钟', color: '#FF3B30' },
+      { name: '自学案', sub: '零基础预习导学 · 费曼类比 + 边学边练', badge: '60 分 · 25 分钟', color: '#34C759' }
+    ];
+    let curPreset = 3;
+
+    function toggleIsland() { document.getElementById('islandMenu').classList.toggle('open'); }
+    function setRoute(name) { document.getElementById('routeLabel').textContent = name; document.getElementById('islandMenu').classList.remove('open'); }
+    function selectPreset(i, btn) {
+      curPreset = i;
+      document.querySelectorAll('.pill').forEach((b, idx) => b.classList.toggle('active', idx === i));
+      const p = PRESETS[i];
+      document.getElementById('presetTitle').textContent = p.name;
+      document.getElementById('presetSub').textContent = p.sub;
+      const badge = document.getElementById('presetBadge');
+      badge.textContent = p.badge; badge.style.background = p.color;
+    }
+
+    function rubberband(over, dim, c = 0.55) { return (over * dim * c) / (dim + c * Math.abs(over)); }
+    function project(v, d = 0.996) { return (v / 1000) * d / (1 - d); }
+
+    const SHEET_MAX = 290;
+    let sheetY = SHEET_MAX, sheetVel = 0, sheetTarget = SHEET_MAX, sheetOpen = false, dragging = false, raf = null;
+    const sheetEl = document.getElementById('fluidSheet');
+    const bgEl = document.getElementById('mainBg');
+    const scrimEl = document.getElementById('scrim');
+
+    function applySheetTransform(y) {
+      sheetEl.style.transform = `translate3d(0, ${y}px, 0)`;
+      const prog = Math.max(0, Math.min(1, 1 - y / SHEET_MAX));
+      bgEl.style.transform = `scale(${1 - prog * 0.03})`;
+      bgEl.style.opacity = String(1 - prog * 0.18);
+      scrimEl.style.opacity = String(prog * 0.28);
+      scrimEl.style.pointerEvents = prog > 0.05 ? 'auto' : 'none';
+    }
+
+    function runSpring() {
+      const stiffness = Math.pow(2 * Math.PI / 0.34, 2);
+      const damping = 4 * Math.PI * 0.84 / 0.34;
+      let last = performance.now();
+      function tick(now) {
+        if (dragging) return;
+        const dt = Math.min(0.032, (now - last) / 1000); last = now;
+        const accel = -stiffness * (sheetY - sheetTarget) - damping * sheetVel;
+        sheetVel += accel * dt; sheetY += sheetVel * dt;
+        applySheetTransform(sheetY);
+        if (Math.abs(sheetVel) < 0.1 && Math.abs(sheetTarget - sheetY) < 0.1) {
+          sheetY = sheetTarget; sheetVel = 0; applySheetTransform(sheetY); return;
+        }
+        raf = requestAnimationFrame(tick);
+      }
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(tick);
+    }
+
+    function setSheet(open) { sheetOpen = open; sheetTarget = open ? 0 : SHEET_MAX; runSpring(); }
+    function toggleSheet() { setSheet(!sheetOpen); }
+
+    let startY = 0, startPos = 0, hist = [];
+    const grab = document.getElementById('grabZone');
+    grab.addEventListener('pointerdown', (e) => {
+      grab.setPointerCapture(e.pointerId);
+      dragging = true; startY = e.clientY; startPos = sheetY; hist = [{ y: e.clientY, t: performance.now() }];
+    });
+    grab.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      let raw = startPos + (e.clientY - startY);
+      if (raw < 0) raw = -rubberband(-raw, 260);
+      else if (raw > SHEET_MAX) raw = SHEET_MAX + rubberband(raw - SHEET_MAX, 240);
+      sheetY = raw; applySheetTransform(sheetY);
+      hist.push({ y: e.clientY, t: performance.now() }); if (hist.length > 5) hist.shift();
+    });
+    grab.addEventListener('pointerup', () => {
+      if (!dragging) return; dragging = false;
+      let vel = 0;
+      if (hist.length >= 2) {
+        const dt = Math.max(0.016, (hist[hist.length - 1].t - hist[0].t) / 1000);
+        vel = (hist[hist.length - 1].y - hist[0].y) / dt;
+      }
+      sheetVel = vel;
+      const proj = sheetY + project(vel);
+      setSheet(proj < SHEET_MAX * 0.5);
+    });
+
+    // Card horizontal rubber-band swipe
+    const swipeCard = document.getElementById('swipeCard');
+    let cDrag = false, cStartX = 0, cX = 0;
+    swipeCard.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button')) return;
+      swipeCard.setPointerCapture(e.pointerId); cDrag = true; cStartX = e.clientX;
+    });
+    swipeCard.addEventListener('pointermove', (e) => {
+      if (!cDrag) return;
+      const dx = e.clientX - cStartX;
+      cX = dx >= 0 ? rubberband(dx, 260) : -rubberband(-dx, 260);
+      swipeCard.style.transform = `translate3d(${cX}px, 0, 0)`;
+    });
+    swipeCard.addEventListener('pointerup', () => {
+      if (!cDrag) return; cDrag = false;
+      if (cX < -35 && curPreset < 3) selectPreset(curPreset + 1);
+      else if (cX > 35 && curPreset > 0) selectPreset(curPreset - 1);
+      cX = 0;
+      swipeCard.style.transition = 'transform 260ms cubic-bezier(0.23, 1, 0.32, 1)';
+      swipeCard.style.transform = 'translate3d(0, 0, 0)';
+      setTimeout(() => { swipeCard.style.transition = ''; }, 270);
+    });
+  </script>
+</body>
+</html>

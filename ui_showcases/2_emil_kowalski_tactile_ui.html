@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>示范界面 2 · Emil Kowalski 精工微交互版 (StudyCraft)</title>
+  <style>
+    :root {
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --bg: #FAFAFA;
+      --ink: #111111;
+      --muted: #666666;
+      --border: rgba(0, 0, 0, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .press {
+      transition: transform 150ms var(--ease-out), background-color 160ms ease, border-color 160ms ease;
+    }
+    .press:active { transform: scale(0.97); }
+    header {
+      position: sticky; top: 0; z-index: 20;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.9);
+      backdrop-filter: blur(12px);
+      height: 56px;
+      padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .layout { max-width: 1220px; margin: 24px auto; padding: 0 20px; display: grid; grid-template-columns: 350px 1fr; gap: 24px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .preset-card {
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+      background: #FAFAFA; cursor: pointer; text-align: left;
+      display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600;
+    }
+    .preset-card.active { background: #111111; color: #fff; border-color: #111111; }
+    .segmented { display: inline-flex; background: #EFEFEF; padding: 4px; border-radius: 12px; }
+    .seg-btn { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; color: #666; }
+    .seg-btn.active { background: #fff; color: #111; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+    .blur-stage {
+      transition: filter 150ms ease, opacity 150ms ease, transform 180ms var(--ease-out);
+    }
+    .blur-stage.switching { filter: blur(2px); opacity: 0.6; transform: scale(0.99); }
+    .popover {
+      position: absolute; right: 24px; top: 52px; width: 270px;
+      background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 8px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.08);
+      transform-origin: top right;
+      transition: transform 180ms var(--ease-out), opacity 160ms var(--ease-out);
+      opacity: 0; transform: scale(0.95); pointer-events: none;
+    }
+    .popover.open { opacity: 1; transform: scale(1); pointer-events: auto; }
+    .toast-stack { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; width: 300px; z-index: 40; }
+    .toast {
+      background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      animation: toastIn 240ms var(--ease-out) forwards;
+    }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateY(100%) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .cmd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 50; display: none; justify-content: center; padding-top: 96px; }
+    .cmd-overlay.open { display: flex; }
+    .cmd-box { width: 420px; max-width: 92vw; background: #fff; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 24px 48px rgba(0,0,0,0.16); height: fit-content; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div style="font-size:13px; font-weight:600; letter-spacing:-0.02em;">StudyCraft · Emil Kowalski 精工微交互示范版</div>
+      <div style="font-size:11px; color:var(--muted);">cubic-bezier(0.23,1,0.32,1) · scale(0.97) 触感反馈 · Blur 过渡 · ⌘K 零动画快开</div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button class="press" onclick="toggleCmd()" style="border:1px solid var(--border); background:#F4F4F5; padding:6px 10px; border-radius:8px; font-size:12px; cursor:pointer;">
+        快速命令 <kbd style="background:#fff; padding:1px 5px; border-radius:4px; border:1px solid var(--border); font-size:10px;">⌘K</kbd>
+      </button>
+      <button class="press" onclick="togglePop()" id="routeBtn" style="border:1px solid var(--border); background:#fff; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:500; cursor:pointer;">
+        路由：Claude CLI
+      </button>
+    </div>
+    <div class="popover" id="routePopover">
+      <div style="font-size:11px; color:var(--muted); padding:6px 10px;">选择路由引擎（origin: top right）</div>
+      <button class="press" onclick="pickRoute('Claude CLI')" style="width:100%; text-align:left; border:0; background:transparent; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:12px;">Claude Code CLI Harness</button>
+      <button class="press" onclick="pickRoute('DeepSeek API')" style="width:100%; text-align:left; border:0; background:transparent; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:12px;">DeepSeek R1 Cloud API</button>
+      <button class="press" onclick="pickRoute('Ollama')" style="width:100%; text-align:left; border:0; background:transparent; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:12px;">Ollama 本地模型</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside style="display:flex; flex-direction:column; gap:16px;">
+      <div class="panel">
+        <div style="font-size:12px; font-weight:600;">已加载课件：Transformer架构精讲.pptx</div>
+        <div class="tabular" style="font-size:11px; color:var(--muted); margin-top:4px;">38 张幻灯片 · 15.5k 字 · 6 张配图</div>
+      </div>
+
+      <div class="panel">
+        <div style="font-size:12px; font-weight:600;">教学预设模板（点击即时弹出 Sonner Toast）</div>
+        <div class="preset-grid">
+          <button class="preset-card press" onclick="pickPreset('随堂练习', 5, 2, 1, this)"><span>随堂练习</span><span class="tabular" style="opacity:.7">15m</span></button>
+          <button class="preset-card press" onclick="pickPreset('同步练习', 6, 3, 2, this)"><span>同步练习</span><span class="tabular" style="opacity:.7">分层</span></button>
+          <button class="preset-card press" onclick="pickPreset('自测卷', 8, 4, 3, this)"><span>自测卷</span><span class="tabular" style="opacity:.7">100分</span></button>
+          <button class="preset-card press active" onclick="pickPreset('自学案', 4, 2, 2, this)"><span>自学案</span><span class="tabular" style="opacity:.7">导学</span></button>
+        </div>
+      </div>
+    </aside>
+
+    <section style="display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="segmented">
+          <button class="seg-btn press active" onclick="switchStage('neg', this)">阶段一：AI 需求解析确认单</button>
+          <button class="seg-btn press" onclick="switchStage('stu', this)">阶段二：学习资料工作台</button>
+        </div>
+        <span id="summaryMeta" class="tabular" style="font-size:11px; color:var(--muted);">单选 4 · 填空 2 · 简答 2</span>
+      </div>
+
+      <div class="panel blur-stage" id="stageBox">
+        <div id="stage-neg">
+          <h2 style="margin:0; font-size:16px; letter-spacing:-0.02em;">AI 需求解析反馈 · <span id="presetTitle">自学案</span>方案</h2>
+          <p style="font-size:12px; color:var(--muted); max-width:65ch; line-height:1.65;">
+            拖动下方滑块时数字保持 <code class="tabular">tabular-nums</code> 等宽对齐不抖动；点击确认时通过 2px blur 遮罩完成状态过渡。
+          </p>
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:14px; background:#FAFAFA; border:1px solid var(--border); border-radius:12px; padding:14px; margin:14px 0;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px;"><span>单选题</span><strong class="tabular" id="vMcq">4 题</strong></div>
+              <input type="range" min="0" max="15" value="4" oninput="upd()" id="rMcq" style="width:100%; accent-color:#111;">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px;"><span>填空题</span><strong class="tabular" id="vFill">2 题</strong></div>
+              <input type="range" min="0" max="10" value="2" oninput="upd()" id="rFill" style="width:100%; accent-color:#111;">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px;"><span>简答题</span><strong class="tabular" id="vShort">2 题</strong></div>
+              <input type="range" min="0" max="8" value="2" oninput="upd()" id="rShort" style="width:100%; accent-color:#111;">
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end;">
+            <button class="press" onclick="confirmGen()" style="background:#111; color:#fff; border:0; border-radius:10px; padding:10px 18px; font-size:12px; font-weight:600; cursor:pointer;">
+              确认方案并生成 →
+            </button>
+          </div>
+        </div>
+
+        <div id="stage-stu" style="display:none;">
+          <h2 style="margin:0 0 10px; font-size:16px; letter-spacing:-0.02em;">互动样题预览（按压选项体验 150ms scale(0.97)）</h2>
+          <button class="press" onclick="toast('回答正确', '通过 scale(0.97) 触感反馈确认作答')" style="width:100%; text-align:left; border:1px solid var(--border); background:#FAFAFA; padding:11px 14px; border-radius:10px; font-size:12px; cursor:pointer; margin-bottom:8px;">
+            B. 通过除以 √d_k 防止内积过大导致 Softmax 进入梯度饱和区 ✓
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 0ms Command Palette -->
+  <div class="cmd-overlay" id="cmdOverlay" onclick="toggleCmd()">
+    <div class="cmd-box" onclick="event.stopPropagation()">
+      <div style="padding:12px 16px; border-bottom:1px solid var(--border); font-size:12px; font-weight:600;">
+        命令面板（键盘触发 · 0ms 无动画直出）
+      </div>
+      <div style="padding:8px;">
+        <button onclick="pickPreset('随堂练习',5,2,1,document.querySelectorAll('.preset-card')[0]); toggleCmd()" style="width:100%; text-align:left; border:0; background:transparent; padding:9px 12px; border-radius:8px; font-size:12px; cursor:pointer;">切换预设：随堂练习</button>
+        <button onclick="pickPreset('自测卷',8,4,3,document.querySelectorAll('.preset-card')[2]); toggleCmd()" style="width:100%; text-align:left; border:0; background:transparent; padding:9px 12px; border-radius:8px; font-size:12px; cursor:pointer;">切换预设：自测卷 (100分)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+
+  <script>
+    function toast(title, detail) {
+      const box = document.getElementById('toastStack');
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.innerHTML = `<div style="font-size:12px;font-weight:600">${title}</div><div style="font-size:11px;color:#666;margin-top:2px">${detail}</div>`;
+      box.appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+    function togglePop() { document.getElementById('routePopover').classList.toggle('open'); }
+    function pickRoute(name) {
+      document.getElementById('routeBtn').textContent = '路由：' + name;
+      document.getElementById('routePopover').classList.remove('open');
+      toast('路由引擎已切换', name);
+    }
+    function toggleCmd() { document.getElementById('cmdOverlay').classList.toggle('open'); }
+    function upd() {
+      const m = document.getElementById('rMcq').value;
+      const f = document.getElementById('rFill').value;
+      const s = document.getElementById('rShort').value;
+      document.getElementById('vMcq').textContent = m + ' 题';
+      document.getElementById('vFill').textContent = f + ' 题';
+      document.getElementById('vShort').textContent = s + ' 题';
+      document.getElementById('summaryMeta').textContent = `单选 ${m} · 填空 ${f} · 简答 ${s}`;
+    }
+    function pickPreset(name, m, f, s, btn) {
+      document.querySelectorAll('.preset-card').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      document.getElementById('presetTitle').textContent = name;
+      document.getElementById('rMcq').value = m;
+      document.getElementById('rFill').value = f;
+      document.getElementById('rShort').value = s;
+      upd();
+      toast('已加载预设：' + name, `单选 ${m} · 填空 ${f} · 简答 ${s}`);
+    }
+    function switchStage(target, btn) {
+      document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      const box = document.getElementById('stageBox');
+      box.classList.add('switching');
+      setTimeout(() => {
+        document.getElementById('stage-neg').style.display = target === 'neg' ? 'block' : 'none';
+        document.getElementById('stage-stu').style.display = target === 'stu' ? 'block' : 'none';
+        box.classList.remove('switching');
+      }, 140);
+    }
+    function confirmGen() {
+      switchStage('stu', document.querySelectorAll('.seg-btn')[1]);
+      toast('学习资料已排布完成', '已完成 Blur 遮罩过渡切换');
+    }
+    window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); toggleCmd(); }
+      if (e.key === 'Escape') { document.getElementById('cmdOverlay').classList.remove('open'); document.getElementById('routePopover').classList.remove('open'); }
+    });
+  </script>
+</body>
+</html>

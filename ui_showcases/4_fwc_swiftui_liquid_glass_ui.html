@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>示范界面 4 · fwc-swiftui-skills (Liquid Glass &amp; iPhone Duo)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; padding-bottom: 110px;
+      color: #0F172A;
+      background: linear-gradient(135deg, #DCEBFF 0%, #EFF4FA 38%, #E7F0F9 68%, #DCE7F5 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+    }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .glass-container {
+      background: linear-gradient(180deg, rgba(255,255,255,0.68) 0%, rgba(255,255,255,0.44) 100%);
+      backdrop-filter: blur(28px) saturate(190%);
+      -webkit-backdrop-filter: blur(28px) saturate(190%);
+      border: 1px solid rgba(255,255,255,0.78);
+      box-shadow: 0 10px 30px rgba(15,23,42,0.08), inset 0 1.5px 0 rgba(255,255,255,0.95);
+    }
+    .btn-glass {
+      background: rgba(255,255,255,0.56);
+      backdrop-filter: blur(18px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.8);
+      box-shadow: 0 3px 12px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,0.9);
+      padding: 10px 18px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .btn-glass:active, .btn-prominent:active { transform: scale(0.96); }
+    .btn-prominent {
+      background-color: #007AFF; color: #fff;
+      border: 1px solid rgba(255,255,255,0.45);
+      box-shadow: 0 8px 20px rgba(0,122,255,0.28), inset 0 1px 0 rgba(255,255,255,0.45);
+      padding: 10px 20px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    header { max-width: 1260px; margin: 0 auto; padding: 16px 24px 12px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+    .spread-wrap { max-width: 1260px; margin: 0 auto; padding: 0 24px; transition: max-width 250ms ease; }
+    .spread-wrap.medium { max-width: 920px; }
+    .spread-wrap.compact { max-width: 460px; }
+    .book {
+      display: grid; grid-template-columns: 1fr 14px 1fr;
+      border-radius: 32px; border: 1px solid rgba(255,255,255,0.85);
+      background: rgba(242,242,247,0.94); box-shadow: 0 24px 60px rgba(15,23,42,0.10); overflow: hidden;
+    }
+    .spread-wrap.compact .book { grid-template-columns: 1fr; }
+    .spread-wrap.compact .spine { display: none; }
+    .spine { background: linear-gradient(90deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.15) 48%, rgba(255,255,255,0.65) 52%, rgba(15,23,42,0.03) 100%); }
+    .page-left { padding: 24px; background: #F2F2F7; display: flex; flex-direction: column; gap: 16px; }
+    .page-right { padding: 24px; background: #FFFFFF; display: flex; flex-direction: column; gap: 16px; }
+    .inset-list { background: #FFFFFF; border-radius: 18px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .inset-row { width: 100%; text-align: left; border: 0; border-bottom: 1px solid #E5E5EA; background: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 12px; }
+    .inset-row:last-child { border-bottom: 0; }
+    .safe-area-bar { position: fixed; left: 0; right: 0; bottom: 16px; display: flex; justify-content: center; padding: 0 16px; pointer-events: none; z-index: 30; }
+    .safe-area-bar > div { pointer-events: auto; border-radius: 999px; padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pose-pill { border: 0; background: transparent; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; color: #334155; }
+    .pose-pill.active { background: #0F172A; color: #fff; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 style="margin:0; font-size:18px; letter-spacing:-0.02em;">StudyBook · SwiftUI Liquid Glass &amp; iPhone Duo 示范版</h1>
+      <div style="font-size:11px; color:#475569;">GlassEffectContainer 胶囊 · ScrollView 内纯实色列表 · Book-Spine 双页折叠布局</div>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <div class="glass-container" style="border-radius:999px; padding:4px; display:flex; gap:4px;">
+        <button class="pose-pill active" onclick="setPose('duo', this)">Duo 展开双页</button>
+        <button class="pose-pill" onclick="setPose('medium', this)">中等分栏</button>
+        <button class="pose-pill" onclick="setPose('compact', this)">紧凑单页</button>
+      </div>
+      <button class="btn-glass" onclick="cycleRoute()" id="routeBtn">路由：Claude CLI</button>
+    </div>
+  </header>
+
+  <div class="spread-wrap" id="spreadWrap">
+    <div class="book">
+      <div class="page-left">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="font-size:15px;">左页：课本目录与 AI 需求解析单</strong>
+          <span id="chCount" class="tabular" style="font-size:12px; color:#636366;">已选 3/4 章</span>
+        </div>
+        <div class="inset-list" id="chList"></div>
+        <div style="background:#fff; border-radius:18px; padding:16px; font-size:12px; line-height:1.6;">
+          <strong>阶段一：AI 需求解析反馈</strong>
+          <p id="bpSummary" style="margin:6px 0 0; color:#48484A;">将按【自学案】规格为选中章节生成：单选 4 题 · 填空 2 题 · 简答 2 题（共 60 分，25 分钟）。</p>
+        </div>
+      </div>
+
+      <div class="spine"></div>
+
+      <div class="page-right">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #E5E5EA; padding-bottom:10px;">
+          <strong id="rightTitle" style="font-size:15px;">右页：自学案 · 排印预览</strong>
+          <span id="rightMeta" class="tabular" style="font-size:11px; background:#F2F2F7; padding:4px 8px; border-radius:8px; font-weight:600;">25 min</span>
+        </div>
+        <div style="background:#F2F2F7; border-radius:16px; padding:14px; font-size:12px; line-height:1.65;">
+          <strong>核心概念导读 · Scaled Dot-Product Attention</strong>
+          <p style="margin:6px 0 0; color:#3A3A3C;">当向量维度 d_k 增大时，Query 与 Key 点积方差放大为 d_k，易推入 Softmax 饱和区。除以 √d_k 可使点积方差重新稳定为 1。</p>
+        </div>
+        <div class="inset-list" style="border:1px solid #E5E5EA;">
+          <button class="inset-row" onclick="pickOpt(this, false)"><span>A. 降低自注意力矩阵的显存占用</span></button>
+          <button class="inset-row" onclick="pickOpt(this, true)" style="background:#EBF4FF; color:#007AFF; font-weight:600;"><span>B. 稳定点积方差为 1，防止 Softmax 梯度消失</span><span style="color:#34C759;">✓</span></button>
+          <button class="inset-row" onclick="pickOpt(this, false)"><span>C. 为词元注入绝对位置编码信息</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="safe-area-bar">
+    <div class="glass-container">
+      <button class="btn-glass" onclick="pickPreset('随堂练习',5,2,1,50,15,this)">随堂练习</button>
+      <button class="btn-glass" onclick="pickPreset('同步练习',6,3,2,100,35,this)">同步练习</button>
+      <button class="btn-glass" onclick="pickPreset('自测卷',8,4,3,100,60,this)">自测卷</button>
+      <button class="btn-glass" style="background:#1C1C1E;color:#fff;" onclick="pickPreset('自学案',4,2,2,60,25,this)">自学案</button>
+      <button class="btn-prominent" id="confirmBtn" onclick="confirmPlan()">+ 确认方案并生成</button>
+    </div>
+  </div>
+
+  <script>
+    const chapters = [
+      { title: '第 1 章 · 神经网络与激活函数', on: true },
+      { title: '第 2 章 · 卷积感受野与 ResNet', on: true },
+      { title: '第 3 章 · 注意力与 Transformer', on: true },
+      { title: '第 4 章 · 泛化误差与正则化', on: false }
+    ];
+    const routes = ['Claude CLI', 'DeepSeek API', 'Ollama'];
+    let rIdx = 0;
+
+    function renderChapters() {
+      document.getElementById('chList').innerHTML = chapters.map((c, i) => `
+        <button class="inset-row" onclick="toggleCh(${i})">
+          <span style="font-weight:${c.on ? 600 : 400}; color:${c.on ? '#1C1C1E' : '#636366'}">${c.title}</span>
+          <span style="color:${c.on ? '#007AFF' : '#C7C7CC'}; font-weight:700;">${c.on ? '✓' : '○'}</span>
+        </button>`).join('');
+      document.getElementById('chCount').textContent = `已选 ${chapters.filter(c=>c.on).length}/4 章`;
+    }
+    function toggleCh(i) { chapters[i].on = !chapters[i].on; renderChapters(); }
+    function setPose(p, btn) {
+      document.querySelectorAll('.pose-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const w = document.getElementById('spreadWrap');
+      w.className = 'spread-wrap ' + (p === 'duo' ? '' : p);
+    }
+    function cycleRoute() {
+      rIdx = (rIdx + 1) % routes.length;
+      document.getElementById('routeBtn').textContent = '路由：' + routes[rIdx];
+    }
+    function pickPreset(name, m, f, s, score, mins, btn) {
+      document.querySelectorAll('.safe-area-bar .btn-glass').forEach(b => { b.style.background = 'rgba(255,255,255,0.56)'; b.style.color = '#0F172A'; });
+      btn.style.background = '#1C1C1E'; btn.style.color = '#fff';
+      document.getElementById('rightTitle').textContent = `右页：${name} · 排印预览`;
+      document.getElementById('rightMeta').textContent = mins + ' min';
+      document.getElementById('bpSummary').textContent = `将按【${name}】规格为选中章节生成：单选 ${m} 题 · 填空 ${f} 题 · 简答 ${s} 题（共 ${score} 分，${mins} 分钟）。`;
+    }
+    function confirmPlan() {
+      const btn = document.getElementById('confirmBtn');
+      btn.textContent = '✓ 已确认生成';
+      btn.style.backgroundColor = '#34C759';
+    }
+    function pickOpt(btn) {
+      btn.parentElement.querySelectorAll('.inset-row').forEach(r => { r.style.background = '#fff'; r.style.color = '#1C1C1E'; r.style.fontWeight = 400; });
+      btn.style.background = '#EBF4FF'; btn.style.color = '#007AFF'; btn.style.fontWeight = 600;
+    }
+    renderChapters();
+  </script>
+</body>
+</html>

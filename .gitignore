@@ -1,0 +1,18 @@
+# Python / Backend
+backend/.venv/
+backend/.pytest_cache/
+**/__pycache__/
+*.py[cod]
+backend/data/projects/
+backend/data/settings.json
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Environment & OS
+.env
+.env.*
+.DS_Store
+Thumbs.db
