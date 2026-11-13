@@ -371,3 +371,44 @@ def test_math_normalization_study_guide_examples_and_pdf_exports():
         doc_g.close()
     finally:
         client.delete(f"/api/projects/{pid}")
+
+
+def test_security_api_key_redaction_and_path_traversal():
+    from app.config import DATA_DIR, SETTINGS_FILE, load_settings
+
+    had_file = SETTINGS_FILE.exists()
+    backup_text = SETTINGS_FILE.read_text(encoding="utf-8") if had_file else ""
+    try:
+        current = load_settings()
+        secret = "sk-testsecretkey1234567890"
+        updated = current.model_copy(
+            update={
+                "cloud_config": current.cloud_config.model_copy(update={"api_key": secret}),
+            }
+        )
+        post_res = client.post("/api/providers/settings", json=updated.model_dump())
+        assert post_res.status_code == 200
+        returned_key = post_res.json()["cloud_config"]["api_key"]
+        assert "****" in returned_key
+        assert secret not in returned_key
+
+        status_res = client.get("/api/providers/status")
+        assert status_res.status_code == 200
+        status_settings = status_res.json()["settings"]
+        assert status_settings["cloud_config"]["api_key"] == "sk-t****7890"
+        assert secret not in json.dumps(status_settings)
+
+        # Round-tripping the masked settings must preserve the real secret on disk
+        roundtrip_res = client.post("/api/providers/settings", json=status_settings)
+        assert roundtrip_res.status_code == 200
+        assert load_settings().cloud_config.api_key == secret
+
+        # Path traversal guards
+        assert client.get("/api/projects/..%5Cdata").status_code in {400, 404}
+        assert client.delete("/api/projects/..%5Cdata").status_code in {400, 404}
+        assert DATA_DIR.exists()
+    finally:
+        if had_file:
+            SETTINGS_FILE.write_text(backup_text, encoding="utf-8")
+        elif SETTINGS_FILE.exists():
+            SETTINGS_FILE.unlink(missing_ok=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -31,6 +32,13 @@ def _load_deepseek_credentials() -> Dict[str, str]:
     return {"api_key": api_key, "base_url": base_url.rstrip("/"), "model": model}
 
 
+def _scrub_secret(msg: str, api_key: str) -> str:
+    cleaned = msg or ""
+    if api_key and len(api_key) >= 6:
+        cleaned = cleaned.replace(api_key, "[REDACTED_KEY]")
+    return re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]", cleaned)
+
+
 def main() -> int:
     prompt_text = sys.stdin.read().strip() if not sys.stdin.isatty() else " ".join(sys.argv[1:]).strip()
     if not prompt_text:
@@ -57,7 +65,7 @@ def main() -> int:
             sys.stdout.write(content)
             return 0
     except Exception as exc:
-        print(f"dsh error: {exc}", file=sys.stderr)
+        print(f"dsh error: {_scrub_secret(str(exc), creds['api_key'])}", file=sys.stderr)
         return 3
 
 

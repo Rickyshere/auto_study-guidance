@@ -13,7 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import PROJECTS_DIR, get_project_dir, load_settings, save_settings
+from app.config import (
+    PROJECTS_DIR,
+    get_project_dir,
+    load_settings,
+    redact_settings,
+    resolve_safe_project_dir,
+    save_settings,
+)
 from app.parsers import SUPPORTED_EXTENSIONS, parse_uploaded_file
 from app.parsers.ocr_engine import (
     detect_gpu_vram,
@@ -71,17 +78,31 @@ app = FastAPI(
     version="1.0.0",
 )
 
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
 )
 
 
+def _safe_project_dir(project_id: str) -> Path:
+    try:
+        return resolve_safe_project_dir(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法项目 ID")
+
+
 def _load_project_ir(project_id: str) -> DocumentIR:
-    ir_path = PROJECTS_DIR / project_id / "document_ir.json"
+    ir_path = _safe_project_dir(project_id) / "document_ir.json"
     if not ir_path.exists():
         raise HTTPException(status_code=404, detail=f"项目 {project_id} 不存在")
     return DocumentIR.model_validate_json(ir_path.read_text(encoding="utf-8"))
@@ -93,7 +114,7 @@ def _save_project_ir(doc_ir: DocumentIR) -> None:
 
 
 def _load_blueprint(project_id: str) -> Optional[StudyBlueprint]:
-    bp_path = PROJECTS_DIR / project_id / "blueprint.json"
+    bp_path = _safe_project_dir(project_id) / "blueprint.json"
     if bp_path.exists():
         return StudyBlueprint.model_validate_json(bp_path.read_text(encoding="utf-8"))
     return None
@@ -105,7 +126,7 @@ def _save_blueprint(project_id: str, blueprint: StudyBlueprint) -> None:
 
 
 def _load_package(project_id: str) -> Optional[StudyPackage]:
-    pkg_path = PROJECTS_DIR / project_id / "study_package.json"
+    pkg_path = _safe_project_dir(project_id) / "study_package.json"
     if pkg_path.exists():
         pkg = StudyPackage.model_validate_json(pkg_path.read_text(encoding="utf-8"))
         return pkg.model_copy(
@@ -136,7 +157,7 @@ async def get_providers_status() -> ProviderStatusResponse:
     gpu_vram = detect_gpu_vram(settings.ocr_config.vram_override_gb)
     ocr_engines = await get_ocr_engines_status(settings)
     return ProviderStatusResponse(
-        settings=settings,
+        settings=redact_settings(settings),
         harnesses=harnesses,
         ollama_available=ollama_ok,
         ollama_models=ollama_models,
@@ -219,7 +240,7 @@ async def uninstall_harness_cli(payload: Dict[str, Any]) -> Any:
 
 @app.post("/api/providers/settings", response_model=RouterSettings)
 async def update_provider_settings(settings: RouterSettings) -> RouterSettings:
-    return save_settings(settings)
+    return redact_settings(save_settings(settings))
 
 
 @app.post("/api/providers/test")
@@ -339,7 +360,7 @@ async def get_project_detail(project_id: str) -> ProjectDetailResponse:
 
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str) -> Dict[str, str]:
-    pdir = PROJECTS_DIR / project_id
+    pdir = _safe_project_dir(project_id)
     if not pdir.exists():
         raise HTTPException(status_code=404, detail="项目不存在")
     shutil.rmtree(pdir, ignore_errors=True)
@@ -350,7 +371,7 @@ async def delete_project(project_id: str) -> Dict[str, str]:
 async def revoke_project_package(project_id: str) -> Dict[str, Any]:
     """Revoke Stage 2 study package and unlock Stage 1 blueprint refinement."""
     _load_project_ir(project_id)
-    pdir = PROJECTS_DIR / project_id
+    pdir = _safe_project_dir(project_id)
     pkg_path = pdir / "study_package.json"
     if pkg_path.exists():
         pkg_path.unlink(missing_ok=True)
@@ -363,7 +384,7 @@ async def revoke_project_package(project_id: str) -> Dict[str, Any]:
 
 @app.get("/api/projects/{project_id}/assets/{filename}")
 async def get_project_asset(project_id: str, filename: str) -> FileResponse:
-    asset_path = PROJECTS_DIR / project_id / "assets" / Path(filename).name
+    asset_path = _safe_project_dir(project_id) / "assets" / Path(filename).name
     if not asset_path.exists():
         raise HTTPException(status_code=404, detail="图片资源不存在")
     return FileResponse(asset_path)
@@ -541,7 +562,7 @@ def _build_pdf_export_response(
         raise HTTPException(status_code=404, detail="该项目尚未生成学习资料包，请先完成生成")
 
     size = "a3" if paper_size.lower() == "a3" else "a4"
-    assets_dir = PROJECTS_DIR / project_id / "assets"
+    assets_dir = _safe_project_dir(project_id) / "assets"
     base_name = Path(doc_ir.filename).stem
 
     if doc_type == "quiz":

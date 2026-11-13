@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 import httpx
 
 from app.schemas import CloudConfig
+
+
+def _scrub_secret(msg: str, api_key: str) -> str:
+    cleaned = msg or ""
+    if api_key and len(api_key) >= 6:
+        cleaned = cleaned.replace(api_key, "[REDACTED_KEY]")
+    return re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]", cleaned)
 
 
 async def call_cloud_llm(
@@ -35,7 +43,7 @@ async def call_cloud_llm(
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code >= 400:
-                raise RuntimeError(f"Anthropic API 错误 {resp.status_code}: {resp.text[:300]}")
+                raise RuntimeError(f"Anthropic API 错误 {resp.status_code}: {_scrub_secret(resp.text[:300], config.api_key)}")
             data = resp.json()
             blocks = data.get("content", [])
             return "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
@@ -58,6 +66,6 @@ async def call_cloud_llm(
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(url, json=payload, headers=headers)
         if resp.status_code >= 400:
-            raise RuntimeError(f"Cloud API 错误 {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Cloud API 错误 {resp.status_code}: {_scrub_secret(resp.text[:300], config.api_key)}")
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()

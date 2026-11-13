@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -450,17 +451,24 @@ async def run_cli_harness(
         tmpl = harness_config.custom_command_template.strip()
         if not tmpl:
             raise RuntimeError("未配置自定义 CLI 命令模板")
+        raw_tokens = shlex.split(tmpl, posix=(sys.platform != "win32"))
+        if not raw_tokens:
+            raise RuntimeError("自定义 CLI 命令模板无效")
+        tokens = [t.strip("\"'") if sys.platform == "win32" else t for t in raw_tokens]
+        first_bin = Path(tokens[0]).name.lower()
+        if first_bin in {"cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "sh", "bash"} and os.environ.get("ASG_ALLOW_CUSTOM_SHELL") != "1":
+            raise RuntimeError("出于安全限制，自定义 CLI 模板禁止直接调用系统 Shell 解释器")
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", encoding="utf-8", delete=False
         ) as tf:
             tf.write(combined_prompt)
             tmp_path = tf.name
         try:
-            cmd_str = tmpl.replace("{prompt_file}", f'"{tmp_path}"')
+            cmd_args = [tok.replace("{prompt_file}", tmp_path) for tok in tokens]
             res = await asyncio.to_thread(
                 subprocess.run,
-                cmd_str,
-                shell=True,
+                cmd_args,
+                shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,

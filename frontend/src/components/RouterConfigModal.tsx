@@ -1513,7 +1513,7 @@ export const RouterConfigModal: React.FC<Props> = ({
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '11px', color: '#636366', marginBottom: '2px' }}>
-                  API Key（DSH Harness 亦可复用此密钥）
+                  API Key（已脱敏保护，未修改将自动保留原密钥；DSH 亦可复用）
                 </label>
                 <input
                   type="password"
