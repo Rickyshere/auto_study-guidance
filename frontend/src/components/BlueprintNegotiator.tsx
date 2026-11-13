@@ -14,6 +14,8 @@ import {
   Minus,
   X,
   Wand2,
+  PauseCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   DifficultyLevel,
@@ -38,6 +40,7 @@ interface Props {
   onAiFillParams: () => Promise<void>;
   onConfirmAndGenerate: (bp: StudyBlueprint) => Promise<void>;
   onQuickGenerate: (presetId: string) => Promise<void>;
+  onCancelGenerate?: () => void;
   negotiating: boolean;
   aiFilling: boolean;
   generating: boolean;
@@ -61,6 +64,7 @@ export const BlueprintNegotiator: React.FC<Props> = ({
   onAiFillParams,
   onConfirmAndGenerate,
   onQuickGenerate,
+  onCancelGenerate,
   negotiating,
   aiFilling,
   generating,
@@ -68,9 +72,16 @@ export const BlueprintNegotiator: React.FC<Props> = ({
 }) => {
   const [userPrompt, setUserPrompt] = useState('');
   const [newTag, setNewTag] = useState('');
+  const [pauseConfirmOpen, setPauseConfirmOpen] = useState(false);
   const [selectedChipId, setSelectedChipId] = useState<string>(
     blueprint?.preset_id || 'self_study_guide'
   );
+
+  useEffect(() => {
+    if (!generating) {
+      setPauseConfirmOpen(false);
+    }
+  }, [generating]);
 
   // Asymmetric Press-and-Hold Confirm State (also supports quick tap <220ms)
   const [holdPct, setHoldPct] = useState(0);
@@ -869,7 +880,7 @@ export const BlueprintNegotiator: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Live SSE Progress */}
+          {/* Live SSE Progress + Anytime Pause Button */}
           {progressInfo && (
             <div
               style={{
@@ -884,6 +895,8 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                 style={{
                   display: 'flex',
                   justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '8px',
                   fontSize: '12px',
                   fontWeight: 600,
                   color: '#007AFF',
@@ -891,7 +904,32 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                 }}
               >
                 <span>{progressInfo.message}</span>
-                <span>{progressInfo.percent}%</span>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  <span>{progressInfo.percent}%</span>
+                  {generating && onCancelGenerate && (
+                    <SpringButton
+                      springLabel="暂停生成"
+                      onClick={() => setPauseConfirmOpen(true)}
+                      maxShift={4}
+                      style={{
+                        borderRadius: '999px',
+                        border: '1px solid rgba(255, 59, 48, 0.35)',
+                        backgroundColor: 'rgba(255, 59, 48, 0.1)',
+                        color: '#C62828',
+                        padding: '3px 10px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <PauseCircle className="w-3.5 h-3.5" />
+                      <span>暂停生成</span>
+                    </SpringButton>
+                  )}
+                </div>
               </div>
               <div
                 style={{
@@ -914,76 +952,171 @@ export const BlueprintNegotiator: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Primary Confirm & Generate Prominent Spring Button */}
-          <SpringButton
-            springLabel="确认方案生成"
-            disabled={
-              generating || negotiating || blueprint.selected_chapter_ids.length === 0
-            }
-            onPointerDown={beginHold}
-            onPointerUp={() => finishHold(true)}
-            onPointerLeave={() => finishHold(false)}
-            onPointerCancel={() => finishHold(false)}
-            maxShift={6}
-            style={{
-              position: 'relative',
-              overflow: 'hidden',
-              width: '100%',
-              borderRadius: '999px',
-              border: 'none',
-              backgroundColor: generating ? '#34C759' : '#007AFF',
-              color: '#FFFFFF',
-              fontSize: '13.5px',
-              fontWeight: 700,
-              padding: '12px 18px',
-              boxShadow: '0 8px 22px -6px rgba(0, 122, 255, 0.5)',
-              cursor:
-                generating || negotiating || blueprint.selected_chapter_ids.length === 0
-                  ? 'not-allowed'
-                  : 'pointer',
-              opacity: blueprint.selected_chapter_ids.length === 0 ? 0.45 : 1,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '7px',
-            }}
-          >
-            <span
+          {/* Two-Step Confirmation Overlay before Pausing Generation */}
+          {generating && pauseConfirmOpen && onCancelGenerate && (
+            <div
               style={{
-                position: 'absolute',
-                inset: 0,
-                width: `${Math.round(holdPct * 100)}%`,
-                background: 'rgba(255, 255, 255, 0.24)',
-                pointerEvents: 'none',
+                borderRadius: '13px',
+                border: '1.5px solid rgba(255, 149, 0, 0.45)',
+                backgroundColor: '#FFFBEB',
+                padding: '12px 14px',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
               }}
-            />
-            <span
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: '1 1 280px' }}>
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#92400E' }}>
+                    二次确认：确定要暂停并中止当前资料生成吗？
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#B45309', marginTop: '2px' }}>
+                    当前进度 {progressInfo?.percent ?? 0}% 。确认暂停后将立即中断后台请求，您勾选的章节与题量参数会完整保留在第一阶段。
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <SpringButton
+                  springLabel="继续生成"
+                  onClick={() => setPauseConfirmOpen(false)}
+                  maxShift={4}
+                  style={{
+                    borderRadius: '999px',
+                    border: '1px solid rgba(60, 60, 67, 0.16)',
+                    backgroundColor: '#FFFFFF',
+                    color: '#1C1C1E',
+                    padding: '6px 12px',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  继续生成
+                </SpringButton>
+                <SpringButton
+                  springLabel="确认暂停生成"
+                  onClick={() => {
+                    setPauseConfirmOpen(false);
+                    onCancelGenerate();
+                  }}
+                  maxShift={4}
+                  style={{
+                    borderRadius: '999px',
+                    border: 'none',
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    padding: '6px 13px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  确认暂停生成
+                </SpringButton>
+              </div>
+            </div>
+          )}
+
+          {/* Primary Confirm & Generate / Pause Action Row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <SpringButton
+              springLabel="确认方案生成"
+              disabled={
+                generating || negotiating || blueprint.selected_chapter_ids.length === 0
+              }
+              onPointerDown={beginHold}
+              onPointerUp={() => finishHold(true)}
+              onPointerLeave={() => finishHold(false)}
+              onPointerCancel={() => finishHold(false)}
+              maxShift={6}
               style={{
                 position: 'relative',
-                zIndex: 2,
+                overflow: 'hidden',
+                flex: 1,
+                borderRadius: '999px',
+                border: 'none',
+                backgroundColor: generating ? '#34C759' : '#007AFF',
+                color: '#FFFFFF',
+                fontSize: '13.5px',
+                fontWeight: 700,
+                padding: '12px 18px',
+                boxShadow: '0 8px 22px -6px rgba(0, 122, 255, 0.5)',
+                cursor:
+                  generating || negotiating || blueprint.selected_chapter_ids.length === 0
+                    ? 'not-allowed'
+                    : 'pointer',
+                opacity: blueprint.selected_chapter_ids.length === 0 ? 0.45 : 1,
                 display: 'inline-flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '7px',
               }}
             >
-              {generating ? (
-                <>
-                  <Play className="w-4 h-4 animate-pulse" />
-                  正在流式生成全套学习资料...
-                </>
-              ) : isHolding ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  按住确认正式生成 ({Math.round(holdPct * 100)}%)
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  确认方案并进入 Stage 2 生成全部学习资料
-                </>
-              )}
-            </span>
-          </SpringButton>
+              <span
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: `${Math.round(holdPct * 100)}%`,
+                  background: 'rgba(255, 255, 255, 0.24)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <span
+                style={{
+                  position: 'relative',
+                  zIndex: 2,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                }}
+              >
+                {generating ? (
+                  <>
+                    <Play className="w-4 h-4 animate-pulse" />
+                    正在流式生成全套学习资料...
+                  </>
+                ) : isHolding ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    按住确认正式生成 ({Math.round(holdPct * 100)}%)
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    确认方案并进入 Stage 2 生成全部学习资料
+                  </>
+                )}
+              </span>
+            </SpringButton>
+
+            {generating && onCancelGenerate && (
+              <SpringButton
+                springLabel="随时暂停生成"
+                onClick={() => setPauseConfirmOpen(true)}
+                maxShift={5}
+                style={{
+                  borderRadius: '999px',
+                  border: '1px solid rgba(220, 38, 38, 0.35)',
+                  backgroundColor: '#FEF2F2',
+                  color: '#DC2626',
+                  padding: '12px 18px',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <PauseCircle className="w-4 h-4" />
+                <span>暂停生成</span>
+              </SpringButton>
+            )}
+          </div>
         </div>
       )}
     </div>

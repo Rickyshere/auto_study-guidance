@@ -59,6 +59,11 @@ from app.workflows.pdf_exporter import (
     export_quiz_pdf_bytes,
     export_study_guide_pdf_bytes,
 )
+from app.workflows.updater import (
+    get_update_status,
+    pull_and_apply_update_stream,
+    record_push_webhook,
+)
 
 app = FastAPI(
     title="Auto Study Guidance API",
@@ -341,6 +346,21 @@ async def delete_project(project_id: str) -> Dict[str, str]:
     return {"status": "deleted", "project_id": project_id}
 
 
+@app.delete("/api/projects/{project_id}/package")
+async def revoke_project_package(project_id: str) -> Dict[str, Any]:
+    """Revoke Stage 2 study package and unlock Stage 1 blueprint refinement."""
+    _load_project_ir(project_id)
+    pdir = PROJECTS_DIR / project_id
+    pkg_path = pdir / "study_package.json"
+    if pkg_path.exists():
+        pkg_path.unlink(missing_ok=True)
+    bp = _load_blueprint(project_id)
+    if bp is not None:
+        bp = bp.model_copy(update={"confirmed": False})
+        _save_blueprint(project_id, bp)
+    return {"status": "revoked", "project_id": project_id, "blueprint": bp}
+
+
 @app.get("/api/projects/{project_id}/assets/{filename}")
 async def get_project_asset(project_id: str, filename: str) -> FileResponse:
     asset_path = PROJECTS_DIR / project_id / "assets" / Path(filename).name
@@ -513,6 +533,7 @@ def _build_pdf_export_response(
     doc_type: str,
     paper_size: str,
     include_answers: bool,
+    inline: bool = False,
 ) -> Response:
     doc_ir = _load_project_ir(project_id)
     package = _load_package(project_id)
@@ -554,11 +575,12 @@ def _build_pdf_export_response(
 
     filename = f"{base_name}{suffix}"
     encoded_name = quote(filename)
+    disp_kind = "inline" if inline else "attachment"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=\"export.pdf\"; filename*=UTF-8''{encoded_name}"
+            "Content-Disposition": f"{disp_kind}; filename=\"export.pdf\"; filename*=UTF-8''{encoded_name}"
         },
     )
 
@@ -569,8 +591,9 @@ async def export_project_pdf_get(
     doc_type: str = Query("quiz"),
     paper_size: str = Query("a4"),
     include_answers: bool = Query(True),
+    inline: bool = Query(True),
 ) -> Response:
-    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers)
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=inline)
 
 
 @app.post("/api/projects/{project_id}/export-pdf")
@@ -578,7 +601,40 @@ async def export_project_pdf_post(project_id: str, payload: Dict[str, Any]) -> R
     doc_type = str(payload.get("doc_type") or "quiz")
     paper_size = str(payload.get("paper_size") or "a4")
     include_answers = bool(payload.get("include_answers", True))
-    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers)
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=False)
+
+
+@app.get("/api/system/update-status")
+async def system_update_status(fetch: bool = Query(False)) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_update_status, fetch)
+
+
+@app.post("/api/system/pull-update")
+async def system_pull_update(payload: Optional[Dict[str, Any]] = None) -> Any:
+    body = payload or {}
+    rebuild_frontend = bool(body.get("rebuild_frontend", True))
+    stream = bool(body.get("stream", True))
+    if stream:
+        return StreamingResponse(
+            pull_and_apply_update_stream(rebuild_frontend=rebuild_frontend),
+            media_type="text/event-stream",
+        )
+    last_result: Dict[str, Any] = {"ok": False}
+    async for chunk in pull_and_apply_update_stream(rebuild_frontend=rebuild_frontend):
+        if chunk.startswith("data:"):
+            try:
+                evt = json.loads(chunk.replace("data:", "", 1).strip())
+                if evt.get("type") == "complete" and isinstance(evt.get("result"), dict):
+                    last_result = evt["result"]
+            except Exception:
+                pass
+    return last_result
+
+
+@app.post("/api/system/webhook/push")
+async def system_webhook_push() -> Dict[str, Any]:
+    """Webhook endpoint to notify this instance immediately when a remote Push lands."""
+    return await asyncio.to_thread(record_push_webhook)
 
 
 # Serve built frontend bundle on single port (8000) for standalone desktop EXE & production use

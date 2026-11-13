@@ -9,6 +9,7 @@ import {
   RouterSettings,
   StudyBlueprint,
   StudyPackage,
+  UpdateStatusResponse,
 } from './types';
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -218,6 +219,28 @@ export const api = {
   deleteProject: (projectId: string) =>
     requestJson<{ status: string }>(`/api/projects/${projectId}`, { method: 'DELETE' }),
 
+  revokeStudyPackage: (projectId: string) =>
+    requestJson<{ status: string; blueprint?: StudyBlueprint | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/package`,
+      { method: 'DELETE' }
+    ),
+
+  getUpdateStatus: (fetchRemote = false) =>
+    requestJson<UpdateStatusResponse>(
+      `/api/system/update-status?fetch=${fetchRemote ? 'true' : 'false'}`
+    ),
+
+  pullUpdateStream: (
+    rebuildFrontend: boolean,
+    onProgress: (evt: StreamProgressEvent) => void
+  ) =>
+    postSseStream<{
+      ok: boolean;
+      updated?: boolean;
+      message: string;
+      status?: UpdateStatusResponse;
+    }>('/api/system/pull-update', { rebuild_frontend: rebuildFrontend }, onProgress),
+
   negotiateBlueprint: (
     projectId: string,
     payload: {
@@ -252,23 +275,27 @@ export const api = {
       preset_id: string;
       selected_chapter_ids?: string[];
       user_prompt?: string;
-    }
+    },
+    signal?: AbortSignal
   ) =>
     requestJson<StudyPackage>(`/api/projects/${projectId}/quick-generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, stream: false }),
+      signal,
     }),
 
   generateStudyPackageStream: async (
     projectId: string,
     blueprint: StudyBlueprint,
-    onProgress: (stage: string, percent: number, message: string) => void
+    onProgress: (stage: string, percent: number, message: string) => void,
+    signal?: AbortSignal
   ): Promise<StudyPackage> => {
     const res = await fetch(`/api/projects/${projectId}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ blueprint, stream: true }),
+      signal,
     });
     if (!res.ok || !res.body) {
       throw new Error(`生成请求失败 (${res.status})`);
@@ -278,7 +305,22 @@ export const api = {
     let buffer = '';
     let finalPkg: StudyPackage | null = null;
 
+    if (signal) {
+      signal.addEventListener(
+        'abort',
+        () => {
+          reader.cancel().catch(() => {});
+        },
+        { once: true }
+      );
+    }
+
     while (true) {
+      if (signal?.aborted) {
+        const abortErr = new Error('已暂停生成');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });

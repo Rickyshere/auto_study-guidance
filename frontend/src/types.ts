@@ -237,3 +237,29 @@ export interface ProjectDetailResponse {
   blueprint: StudyBlueprint | null;
   study_package: StudyPackage | null;
 }
+
+export interface IncomingCommitItem {
+  hash: string;
+  message: string;
+  date: string;
+  author: string;
+}
+
+export interface UpdateStatusResponse {
+  repo_available: boolean;
+  branch: string;
+  remote_url: string;
+  local_commit: string;
+  local_message: string;
+  local_date: string;
+  remote_commit: string;
+  remote_message: string;
+  behind_count: number;
+  ahead_count: number;
+  has_update: boolean;
+  incoming_commits: IncomingCommitItem[];
+  dirty_count: number;
+  checked_at?: string | null;
+  push_notice_at?: string | null;
+  fetch_error?: string | null;
+}

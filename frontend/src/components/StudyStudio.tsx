@@ -1388,6 +1388,8 @@ export const StudyStudio: React.FC<Props> = ({
       {previewSpec && (
         <PrintPreviewModal
           projectId={studyPackage.project_id}
+          studyPackage={studyPackage}
+          documentIr={documentIr}
           docType={previewSpec.docType}
           paperSize={previewSpec.paperSize}
           includeAnswers={previewSpec.includeAnswers}
@@ -1426,7 +1428,8 @@ function MetricTile({ label, value }: { label: string; value: string }) {
 }
 
 function PrintPreviewModal({
-  projectId,
+  studyPackage,
+  documentIr,
   docType,
   paperSize,
   includeAnswers,
@@ -1436,6 +1439,8 @@ function PrintPreviewModal({
   onClose,
 }: {
   projectId: string;
+  studyPackage: StudyPackage;
+  documentIr?: DocumentIR | null;
   docType: 'quiz' | 'study_guide' | 'cheatsheet';
   paperSize: 'a4' | 'a3';
   includeAnswers: boolean;
@@ -1448,11 +1453,97 @@ function PrintPreviewModal({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const pdfUrl = `${api.getExportPdfUrl(projectId, {
-    doc_type: docType,
-    paper_size: paperSize,
-    include_answers: includeAnswers,
-  })}#view=FitH`;
+  const isA3 = paperSize === 'a3';
+  const quiz = studyPackage.quiz_paper;
+  const mcqs = quiz.questions.filter((q) => q.type === 'mcq');
+  const blanks = quiz.questions.filter((q) => q.type === 'fill_blank');
+  const shorts = quiz.questions.filter((q) => q.type === 'short_answer');
+
+  const mdPlugins = [remarkGfm, remarkMath];
+  const rehypePlugins = [rehypeKatex];
+
+  const renderMarkdownBlock = (md: string) => (
+    <div className="prose prose-slate max-w-none prose-sm prose-headings:font-bold prose-headings:text-slate-900 prose-p:leading-relaxed prose-table:text-xs">
+      <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
+        {normalizeMathMarkdown(md)}
+      </ReactMarkdown>
+    </div>
+  );
+
+  const renderQuestionList = (title: string, items: QuizQuestion[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div style={{ breakInside: 'avoid-column', marginBottom: '18px' }}>
+        <div
+          style={{
+            fontSize: '13.5px',
+            fontWeight: 800,
+            color: '#0F172A',
+            borderBottom: '1.5px solid #0F172A',
+            paddingBottom: '4px',
+            marginBottom: '10px',
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {items.map((q, idx) => (
+            <div
+              key={q.id}
+              style={{
+                breakInside: 'avoid',
+                fontSize: '12.5px',
+                lineHeight: 1.65,
+                color: '#1E293B',
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>
+                <span>{idx + 1}. </span>
+                <span style={{ color: '#475569', fontSize: '11px', marginRight: '4px' }}>
+                  [{q.score}分]
+                </span>
+                <span className="inline [&>p]:inline">
+                  <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
+                    {normalizeMathMarkdown(q.question)}
+                  </ReactMarkdown>
+                </span>
+              </div>
+              {q.options.length > 0 && (
+                <div
+                  style={{
+                    marginTop: '4px',
+                    paddingLeft: '14px',
+                    display: 'grid',
+                    gridTemplateColumns: isA3 ? '1fr 1fr' : '1fr',
+                    gap: '3px 12px',
+                    fontSize: '12px',
+                    color: '#334155',
+                  }}
+                >
+                  {q.options.map((opt, oi) => (
+                    <div key={oi}>
+                      <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
+                        {normalizeMathMarkdown(opt)}
+                      </ReactMarkdown>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {q.type === 'short_answer' && (
+                <div
+                  style={{
+                    marginTop: '8px',
+                    height: '46px',
+                    borderBottom: '1px dashed #CBD5E1',
+                  }}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -1471,8 +1562,8 @@ function PrintPreviewModal({
     >
       <div
         style={{
-          width: 'min(1180px, 96vw)',
-          height: '90vh',
+          width: 'min(1220px, 96vw)',
+          height: '92vh',
           borderRadius: '18px',
           backgroundColor: '#FFFFFF',
           border: '1px solid rgba(60, 60, 67, 0.16)',
@@ -1496,7 +1587,7 @@ function PrintPreviewModal({
         >
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>
-              独立印刷排版 PDF 预览
+              独立印刷排版预览（纯预览不自动下载）
             </span>
             <SpringSegmentedControl<'quiz' | 'study_guide' | 'cheatsheet'>
               compact
@@ -1572,11 +1663,11 @@ function PrintPreviewModal({
                 padding: '6px 14px',
                 fontSize: '12px',
                 fontWeight: 600,
-                cursor: 'pointer',
+                cursor: exporting ? 'wait' : 'pointer',
               }}
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{exporting ? '生成中...' : `下载 ${paperSize.toUpperCase()} PDF`}</span>
+              <span>{exporting ? '正在生成 PDF...' : `确认下载 ${paperSize.toUpperCase()} PDF`}</span>
             </SpringButton>
             <button
               onClick={onClose}
@@ -1597,13 +1688,207 @@ function PrintPreviewModal({
           </div>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, backgroundColor: '#E2E8F0' }}>
-          <iframe
-            key={pdfUrl}
-            src={pdfUrl}
-            title="印刷排版 PDF 预览"
-            style={{ width: '100%', height: '100%', border: 'none' }}
-          />
+        {/* Simulated Printed Paper Canvas (never triggers automatic PDF download) */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            backgroundColor: '#CBD5E1',
+            padding: '28px 24px 48px',
+          }}
+        >
+          <div
+            style={{
+              width: isA3 ? '1080px' : '780px',
+              maxWidth: '100%',
+              margin: '0 auto',
+              backgroundColor: '#FFFFFF',
+              boxShadow: '0 22px 50px -14px rgba(15, 23, 42, 0.28)',
+              border: '1px solid #94A3B8',
+              borderRadius: '4px',
+              display: 'flex',
+              minHeight: isA3 ? '740px' : '1040px',
+            }}
+          >
+            {/* Left Binding Sealed Column for A3 Exam Paper */}
+            {isA3 && (
+              <div
+                style={{
+                  width: '74px',
+                  flexShrink: 0,
+                  borderRight: '2px dashed #475569',
+                  padding: '24px 10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  backgroundColor: '#FAFAFC',
+                  color: '#334155',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                }}
+              >
+                <div style={{ writingMode: 'vertical-rl', letterSpacing: '0.28em' }}>
+                  学校：________ 班级：________ 姓名：________ 学号：________
+                </div>
+                <div
+                  style={{
+                    writingMode: 'vertical-rl',
+                    letterSpacing: '0.35em',
+                    color: '#0F172A',
+                    fontWeight: 800,
+                  }}
+                >
+                  装 订 密 封 线 · 严 禁 答 题
+                </div>
+              </div>
+            )}
+
+            {/* Main Sheet Body */}
+            <div style={{ flex: 1, minWidth: 0, padding: isA3 ? '30px 36px' : '40px 44px' }}>
+              {/* Paper Masthead */}
+              <div
+                style={{
+                  textAlign: 'center',
+                  borderBottom: '2px solid #0F172A',
+                  paddingBottom: '12px',
+                  marginBottom: '18px',
+                }}
+              >
+                <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, letterSpacing: '0.06em' }}>
+                  {isA3 ? 'A3 横向双栏独立印刷版式预览' : 'A4 竖版独立印刷版式预览'}
+                  {documentIr ? ` · 来源：《${documentIr.filename}》` : ''}
+                </div>
+                <h1
+                  style={{
+                    fontSize: '19px',
+                    fontWeight: 800,
+                    color: '#0F172A',
+                    marginTop: '4px',
+                  }}
+                >
+                  {docType === 'quiz'
+                    ? quiz.title
+                    : docType === 'cheatsheet'
+                    ? `${studyPackage.blueprint_used.blueprint_title} · 考前速记浓缩表`
+                    : `${studyPackage.blueprint_used.blueprint_title} · 自学导学印刷讲义`}
+                </h1>
+                {docType === 'quiz' && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      fontSize: '11.5px',
+                      color: '#334155',
+                      display: 'flex',
+                      justifyContent: 'center',
+                      gap: '18px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span>建议用时：{quiz.suggested_minutes} 分钟</span>
+                    <span>卷面满分：{quiz.total_score} 分</span>
+                    <span>题量：单选 {mcqs.length} / 填空 {blanks.length} / 简答 {shorts.length}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Paper Content Columns */}
+              <div
+                style={
+                  isA3
+                    ? {
+                        columnCount: 2,
+                        columnGap: '34px',
+                        columnRule: '1px dashed #CBD5E1',
+                      }
+                    : undefined
+                }
+              >
+                {docType === 'quiz' && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: '11.5px',
+                        color: '#475569',
+                        backgroundColor: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        padding: '8px 10px',
+                        borderRadius: '4px',
+                        marginBottom: '14px',
+                      }}
+                    >
+                      注意事项：{quiz.instructions}
+                    </div>
+                    {renderQuestionList('一、单项选择题', mcqs)}
+                    {renderQuestionList('二、填空题', blanks)}
+                    {renderQuestionList('三、简答与综合应用题', shorts)}
+
+                    {includeAnswers && quiz.questions.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: '22px',
+                          paddingTop: '14px',
+                          borderTop: '2px solid #0F172A',
+                        }}
+                      >
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginBottom: '10px' }}>
+                          参考答案与详细解析
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: '#1E293B' }}>
+                          {quiz.questions.map((q, idx) => (
+                            <div key={q.id} style={{ breakInside: 'avoid' }}>
+                              <strong>第 {idx + 1} 题答案：</strong>
+                              <span>{q.answer}</span>
+                              <div style={{ color: '#475569', marginTop: '2px' }}>
+                                解析：{q.explanation}（{q.source_chapter} {q.source_page}）
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {docType === 'study_guide' && (
+                  <>
+                    {renderMarkdownBlock(
+                      studyPackage.study_notes_markdown || '_本次方案未生成自学导学讲义正文_'
+                    )}
+                    {includeAnswers && quiz.questions.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: '22px',
+                          paddingTop: '14px',
+                          borderTop: '2px solid #0F172A',
+                        }}
+                      >
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginBottom: '10px' }}>
+                          随堂边学边练与参考解析
+                        </div>
+                        {quiz.questions.map((q, idx) => (
+                          <div key={q.id} style={{ marginBottom: '10px', fontSize: '12px', breakInside: 'avoid' }}>
+                            <div style={{ fontWeight: 600 }}>
+                              {idx + 1}. {q.question}
+                            </div>
+                            <div style={{ color: '#0369A1', marginTop: '2px' }}>
+                              答案：{q.answer} ｜ 解析：{q.explanation}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {docType === 'cheatsheet' &&
+                  renderMarkdownBlock(
+                    studyPackage.cheatsheet_markdown || '_本次方案未生成考前速记表_'
+                  )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

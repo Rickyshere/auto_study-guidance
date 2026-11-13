@@ -596,6 +596,7 @@ export function SpringSegmentedControl<T extends string>({
       ref: trackRef,
       style: {
         position: 'relative',
+        isolation: 'isolate',
         display: wrap ? 'flex' : 'inline-flex',
         flexWrap: wrap ? 'wrap' : 'nowrap',
         alignItems: 'center',
@@ -603,6 +604,7 @@ export function SpringSegmentedControl<T extends string>({
         borderRadius: wrap ? '11px' : '999px',
         padding: '3px',
         gap: '2px',
+        maxWidth: '100%',
         touchAction: 'none',
         userSelect: 'none',
         ...style,

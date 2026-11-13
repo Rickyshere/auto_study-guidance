@@ -7,8 +7,10 @@ import {
   PanelLeft,
   Search,
   Sparkles,
-  Gauge,
   ScanText,
+  RotateCcw,
+  HelpCircle,
+  DownloadCloud,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -20,11 +22,14 @@ import {
   RouterSettings,
   StudyBlueprint,
   StudyPackage,
+  UpdateStatusResponse,
 } from './types';
 import { RouterConfigModal } from './components/RouterConfigModal';
 import { UploadAndTocPanel } from './components/UploadAndTocPanel';
 import { BlueprintNegotiator } from './components/BlueprintNegotiator';
 import { StudyStudio, StudioTabKey } from './components/StudyStudio';
+import { OnboardingGuideModal } from './components/OnboardingGuideModal';
+import { UpdatePushModal } from './components/UpdatePushModal';
 import { ImpeccableShowcase } from './components/showcases/ImpeccableShowcase';
 import { EmilShowcase } from './components/showcases/EmilShowcase';
 import { AppleDesignShowcase } from './components/showcases/AppleDesignShowcase';
@@ -36,9 +41,7 @@ import {
   Spring1D,
   SpringButton,
   SpringSegmentedControl,
-  SpringTelemetry,
   SpringTelemetryProvider,
-  project,
 } from './utils/springPhysics';
 
 type AppViewMode =
@@ -75,9 +78,19 @@ export function App() {
   const [activeMainView, setActiveMainView] = useState<MainViewKey>('stage1_negotiate');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('asg_onboarding_seen_v1') !== '1';
+    } catch {
+      return false;
+    }
+  });
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [autoCheckPush, setAutoCheckPush] = useState(true);
   const [routerPopoverOpen, setRouterPopoverOpen] = useState(false);
   const [spotlightOpen, setSpotlightOpen] = useState(false);
-  const [hudVisible, setHudVisible] = useState(true);
 
   const [uploading, setUploading] = useState(false);
   const [negotiating, setNegotiating] = useState(false);
@@ -88,35 +101,14 @@ export function App() {
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [telemetry, setTelemetry] = useState<SpringTelemetry>({
-    vx: 0,
-    vy: 0,
-    note: 'ζ = 1.00 临界阻尼就绪',
-  });
-
-  const reportPhysics = useCallback((vx: number, vy: number, msg: string) => {
-    setTelemetry({ vx: Math.round(vx), vy: Math.round(vy), note: msg });
+  const reportPhysics = useCallback((_vx: number, _vy: number, _msg: string) => {
+    // Telemetry HUD removed per user preference
   }, []);
 
-  // Refs for Focused 2-Pane Split & Floating HUD ζ=1.0 springs
+  // Refs for Focused 2-Pane Split & Generation Cancellation
   const splitRef = useRef<HTMLDivElement | null>(null);
-  const hudRef = useRef<HTMLDivElement | null>(null);
   const sidebarSpringRef = useRef<Spring1D | null>(null);
-
-  const hudXRef = useRef<Spring1D | null>(null);
-  const hudYRef = useRef<Spring1D | null>(null);
-  const hudDragRef = useRef({
-    active: false,
-    sx: 0,
-    sy: 0,
-    bx: 0,
-    by: 0,
-    lx: 0,
-    ly: 0,
-    lt: 0,
-    vx: 0,
-    vy: 0,
-  });
+  const generateAbortRef = useRef<AbortController | null>(null);
 
   // Backend initialization (includes startup GPU VRAM & OCR auto-detection)
   const refreshProviderStatus = async () => {
@@ -137,11 +129,33 @@ export function App() {
     }
   };
 
+  const refreshUpdateStatus = useCallback(async (fetchRemote = false) => {
+    setCheckingUpdate(true);
+    try {
+      const st = await api.getUpdateStatus(fetchRemote);
+      setUpdateStatus(st);
+    } catch {
+      // ignore background git check error
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
+
   useEffect(() => {
     refreshProviderStatus();
     api.getPresets().then(setPresets).catch(() => {});
     refreshProjects();
-  }, []);
+    refreshUpdateStatus(true);
+  }, [refreshUpdateStatus]);
+
+  // Periodic background remote push check every 60s
+  useEffect(() => {
+    if (!autoCheckPush) return;
+    const timer = setInterval(() => {
+      refreshUpdateStatus(true);
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [autoCheckPush, refreshUpdateStatus]);
 
   // Sidebar ζ=1.0 spring (280px <-> 0px in Focused 2-Pane NavigationSplitView)
   useEffect(() => {
@@ -191,7 +205,6 @@ export function App() {
       ];
     }
     return [
-      { value: 'stage1_negotiate', label: '① 方案微调' },
       { value: 'notes', label: '导学笔记' },
       { value: 'quiz', label: '互动题库' },
       { value: 'cheatsheet', label: '考前速记' },
@@ -210,35 +223,6 @@ export function App() {
     }
     setActiveMainView(nextTab);
   }, []);
-
-  // HUD 2D ζ=1.0 springs
-  useEffect(() => {
-    if (viewMode !== 'functional') return;
-    const syncHud = () => {
-      if (!hudRef.current || !hudXRef.current || !hudYRef.current) return;
-      hudRef.current.style.transform = `translate3d(${hudXRef.current.value.toFixed(2)}px, ${hudYRef.current.value.toFixed(2)}px, 0)`;
-    };
-    hudXRef.current = new Spring1D({
-      value: 0,
-      response: 0.3,
-      bounds: [-620, 0],
-      bounceFactor: 0.58,
-      onUpdate: syncHud,
-      onRebound: (v) => reportPhysics(v, 0, 'HUD 撞击水平边界回弹!'),
-    });
-    hudYRef.current = new Spring1D({
-      value: 0,
-      response: 0.3,
-      bounds: [-420, 0],
-      bounceFactor: 0.58,
-      onUpdate: syncHud,
-      onRebound: (v) => reportPhysics(0, v, 'HUD 撞击垂直边界回弹!'),
-    });
-    return () => {
-      hudXRef.current?.stop();
-      hudYRef.current?.stop();
-    };
-  }, [viewMode, reportPhysics]);
 
   // ⌘K Spotlight & Escape keyboard shortcuts
   useEffect(() => {
@@ -382,26 +366,65 @@ export function App() {
     }
   };
 
+  const handleCancelGenerate = () => {
+    if (generateAbortRef.current) {
+      generateAbortRef.current.abort();
+      generateAbortRef.current = null;
+    }
+    setGenerating(false);
+    setProgressInfo({ percent: 0, message: '已暂停并中止当前生成，可继续调整阶段 1 参数' });
+    setTimeout(() => setProgressInfo(null), 2200);
+  };
+
+  const handleRevokeGeneration = async () => {
+    if (!documentIr) return;
+    setErrorMsg(null);
+    setStudyPackage(null);
+    setActiveMainView('stage1_negotiate');
+    if (blueprint) {
+      setBlueprint({ ...blueprint, confirmed: false });
+    }
+    try {
+      const res = await api.revokeStudyPackage(documentIr.project_id);
+      if (res.blueprint) {
+        setBlueprint(res.blueprint);
+      }
+      await refreshProjects();
+    } catch (e: any) {
+      setErrorMsg(e?.message || '撤销生成状态同步失败');
+    }
+  };
+
   const handleConfirmAndGenerate = async (confirmedBp: StudyBlueprint) => {
     if (!documentIr) return;
     setErrorMsg(null);
     setGenerating(true);
     setProgressInfo({ percent: 5, message: '已确认定制方案，正在调度路由引擎...' });
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     try {
       const pkg = await api.generateStudyPackageStream(
         documentIr.project_id,
         confirmedBp,
         (_stage, percent, message) => {
           setProgressInfo({ percent, message });
-        }
+        },
+        controller.signal
       );
       setBlueprint(pkg.blueprint_used);
       setStudyPackage(pkg);
       autoSwitchTabForPackage(pkg);
       await refreshProjects();
     } catch (e: any) {
-      setErrorMsg(e.message);
+      if (e?.name === 'AbortError' || controller.signal.aborted) {
+        setProgressInfo({ percent: 0, message: '已暂停并中止当前生成' });
+      } else {
+        setErrorMsg(e.message);
+      }
     } finally {
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null;
+      }
       setGenerating(false);
       setTimeout(() => setProgressInfo(null), 1200);
     }
@@ -412,18 +435,31 @@ export function App() {
     setErrorMsg(null);
     setGenerating(true);
     setProgressInfo({ percent: 35, message: '正在按所选预设模板一键生成学习资料...' });
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     try {
-      const pkg = await api.quickGenerate(documentIr.project_id, {
-        preset_id: presetId,
-        selected_chapter_ids: blueprint?.selected_chapter_ids,
-      });
+      const pkg = await api.quickGenerate(
+        documentIr.project_id,
+        {
+          preset_id: presetId,
+          selected_chapter_ids: blueprint?.selected_chapter_ids,
+        },
+        controller.signal
+      );
       setBlueprint(pkg.blueprint_used);
       setStudyPackage(pkg);
       autoSwitchTabForPackage(pkg);
       await refreshProjects();
     } catch (e: any) {
-      setErrorMsg(e.message);
+      if (e?.name === 'AbortError' || controller.signal.aborted) {
+        setProgressInfo({ percent: 0, message: '已暂停并中止当前生成' });
+      } else {
+        setErrorMsg(e.message);
+      }
     } finally {
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null;
+      }
       setGenerating(false);
       setTimeout(() => setProgressInfo(null), 800);
     }
@@ -580,25 +616,6 @@ export function App() {
             padding: 24px 32px 120px;
             min-width: 0;
           }
-          .mac-sp-hud {
-            position: fixed;
-            right: 22px;
-            bottom: 22px;
-            width: 315px;
-            border-radius: 18px;
-            padding: 11px 14px;
-            z-index: 40;
-            background-color: rgba(255, 255, 255, 0.82);
-            backdrop-filter: blur(22px) saturate(180%);
-            -webkit-backdrop-filter: blur(22px) saturate(180%);
-            border: 1px solid rgba(255, 255, 255, 0.9);
-            box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.22);
-            cursor: grab;
-            touch-action: none;
-            user-select: none;
-            will-change: transform;
-          }
-          .mac-sp-hud:active { cursor: grabbing; }
           @media print {
             .mac-asg-root {
               height: auto !important;
@@ -670,8 +687,8 @@ export function App() {
             </div>
           </div>
 
-          {/* Center: Contextual ζ=1.0 Spring Stage / Studio Switcher (no dead buttons before generation) */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {/* Center: Contextual ζ=1.0 Spring Stage / Studio Switcher + Undo Generation */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             <SpringSegmentedControl<MainViewKey>
               compact
               springLabel="工作区阶段"
@@ -682,10 +699,91 @@ export function App() {
               }}
               options={topbarViewOptions}
             />
+            {studyPackage && (
+              <SpringButton
+                springLabel="撤销生成"
+                onClick={handleRevokeGeneration}
+                maxShift={5}
+                style={{
+                  borderRadius: '999px',
+                  border: '1px solid rgba(255, 149, 0, 0.35)',
+                  backgroundColor: 'rgba(255, 149, 0, 0.1)',
+                  color: '#B45309',
+                  padding: '5px 11px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+                title="撤销当前生成的 Stage 2 学习资料，返回 Stage 1 方案定制页面"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>撤销生成</span>
+              </SpringButton>
+            )}
           </div>
 
-          {/* Right: Startup VRAM/OCR Badge + Spotlight + HUD + 3-Tier Router */}
+          {/* Right: First-Time Guide + Push Receiver + VRAM Badge + Spotlight + 3-Tier Router */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+            <SpringButton
+              springLabel="第一次使用"
+              onClick={() => setOnboardingOpen(true)}
+              maxShift={4}
+              style={{
+                borderRadius: '999px',
+                border: '1px solid rgba(0, 122, 255, 0.25)',
+                backgroundColor: 'rgba(0, 122, 255, 0.08)',
+                padding: '5px 10px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#007AFF',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+              title="查看新手指引与 3 分钟快速上手配置"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">第一次使用？</span>
+            </SpringButton>
+
+            <SpringButton
+              springLabel="接收Push更新"
+              onClick={() => setUpdateModalOpen(true)}
+              maxShift={4}
+              style={{
+                borderRadius: '999px',
+                border: updateStatus?.has_update
+                  ? '1px solid rgba(52, 199, 89, 0.45)'
+                  : '1px solid rgba(60, 60, 67, 0.12)',
+                backgroundColor: updateStatus?.has_update
+                  ? 'rgba(52, 199, 89, 0.14)'
+                  : 'rgba(255, 255, 255, 0.88)',
+                padding: '5px 9px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: updateStatus?.has_update ? '#15803D' : '#475569',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+              title="检查并随时接收远端 Git Push 新版本"
+            >
+              <DownloadCloud className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">
+                {updateStatus?.has_update
+                  ? `新 Push (+${updateStatus.behind_count})`
+                  : '版本同步'}
+              </span>
+            </SpringButton>
+
             {vramPillLabel() && (
               <SpringButton
                 springLabel="显存与OCR识别"
@@ -731,29 +829,6 @@ export function App() {
             >
               <Search className="w-3 h-3 text-[#636366]" />
               <span className="hidden md:inline">⌘K</span>
-            </SpringButton>
-
-            <SpringButton
-              springLabel="遥测HUD"
-              onClick={() => setHudVisible((v) => !v)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.12)',
-                backgroundColor: hudVisible ? 'rgba(0, 122, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 9px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                color: hudVisible ? '#007AFF' : '#636366',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer',
-              }}
-              title="切换物理遥测悬浮舱"
-            >
-              <Gauge className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">HUD</span>
             </SpringButton>
 
             <SpringButton
@@ -1013,6 +1088,28 @@ export function App() {
                   </SpringButton>
 
                   <SpringButton
+                    springLabel="第一次使用引导"
+                    onClick={() => setOnboardingOpen(true)}
+                    maxShift={6}
+                    style={{
+                      borderRadius: '999px',
+                      border: '1px solid rgba(0, 122, 255, 0.25)',
+                      backgroundColor: 'rgba(0, 122, 255, 0.08)',
+                      color: '#007AFF',
+                      padding: '11px 18px',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                    <span>第一次使用？3 分钟引导上手</span>
+                  </SpringButton>
+
+                  <SpringButton
                     springLabel="打开OCR与CLI设置"
                     onClick={() => setConfigOpen(true)}
                     maxShift={6}
@@ -1045,6 +1142,7 @@ export function App() {
                   onAiFillParams={handleAiFillParams}
                   onConfirmAndGenerate={handleConfirmAndGenerate}
                   onQuickGenerate={handleQuickGenerate}
+                  onCancelGenerate={handleCancelGenerate}
                   negotiating={negotiating}
                   aiFilling={aiFilling}
                   generating={generating}
@@ -1061,90 +1159,6 @@ export function App() {
             )}
           </main>
         </div>
-
-        {/* 2D Free-Draggable Floating Glass HUD (ζ=1.0 + Release Velocity + Viewport Rebound) */}
-        {hudVisible && (
-          <aside
-            ref={hudRef}
-            className="mac-sp-hud no-print"
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              hudXRef.current?.stop();
-              hudYRef.current?.stop();
-              if (hudXRef.current) hudXRef.current.dragging = true;
-              if (hudYRef.current) hudYRef.current.dragging = true;
-              hudDragRef.current = {
-                active: true,
-                sx: e.clientX,
-                sy: e.clientY,
-                bx: hudXRef.current?.value ?? 0,
-                by: hudYRef.current?.value ?? 0,
-                lx: e.clientX,
-                ly: e.clientY,
-                lt: performance.now(),
-                vx: 0,
-                vy: 0,
-              };
-            }}
-            onPointerMove={(e) => {
-              const hd = hudDragRef.current;
-              if (!hd.active || !hudXRef.current || !hudYRef.current) return;
-              const now = performance.now();
-              const dt = Math.max(1, now - hd.lt) / 1000;
-              hd.vx = (e.clientX - hd.lx) / dt;
-              hd.vy = (e.clientY - hd.ly) / dt;
-              hd.lx = e.clientX;
-              hd.ly = e.clientY;
-              hd.lt = now;
-              hudXRef.current.setImmediate(Math.max(-620, Math.min(0, hd.bx + (e.clientX - hd.sx))), hd.vx);
-              hudYRef.current.setImmediate(Math.max(-420, Math.min(0, hd.by + (e.clientY - hd.sy))), hd.vy);
-            }}
-            onPointerUp={() => {
-              const hd = hudDragRef.current;
-              if (!hd.active || !hudXRef.current || !hudYRef.current) return;
-              hd.active = false;
-              hudXRef.current.dragging = false;
-              hudYRef.current.dragging = false;
-              const tx = Math.max(-620, Math.min(0, hudXRef.current.value + project(hd.vx, 0.992) * 0.25));
-              const ty = Math.max(-420, Math.min(0, hudYRef.current.value + project(hd.vy, 0.992) * 0.25));
-              hudXRef.current.setTarget(tx, hd.vx);
-              hudYRef.current.setTarget(ty, hd.vy);
-              reportPhysics(hd.vx, hd.vy, 'HUD 惯性滑行与边界碰撞');
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#1C1C1E' }}>
-                ζ=1.00 弹簧物理与题量 HUD
-              </span>
-              <span className="mac-sp-tabular" style={{ fontSize: '10px', color: '#007AFF', fontWeight: 700 }}>
-                {blueprint
-                  ? `${blueprint.deliverables.mcq_count}选 · ${blueprint.deliverables.fill_blank_count}填 · ${blueprint.deliverables.short_answer_count}简`
-                  : '待加载文档'}
-              </span>
-            </div>
-            <div
-              className="mac-sp-tabular"
-              style={{
-                padding: '6px 8px',
-                borderRadius: '10px',
-                backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                border: '1px solid rgba(0, 122, 255, 0.16)',
-                fontSize: '10.5px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '2px',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#007AFF' }}>
-                <span>{telemetry.note}</span>
-                <span>ζ = 1.00</span>
-              </div>
-              <div style={{ color: '#636366' }}>
-                松手速度 v₀: ({telemetry.vx}, {telemetry.vy}) px/s · 可拖抛撞边回弹
-              </div>
-            </div>
-          </aside>
-        )}
 
         {/* Spotlight ⌘K Instant Command Modal */}
         {spotlightOpen && (
@@ -1231,6 +1245,29 @@ export function App() {
             }
           }}
           onRefreshStatus={refreshProviderStatus}
+        />
+
+        <OnboardingGuideModal
+          open={onboardingOpen}
+          onClose={() => setOnboardingOpen(false)}
+          status={providerStatus}
+          onSavedSettings={(settings: RouterSettings) => {
+            if (providerStatus) {
+              setProviderStatus({ ...providerStatus, settings });
+            }
+          }}
+          onOpenFullConfig={() => setConfigOpen(true)}
+          onLoadDemo={handleLoadDemo}
+        />
+
+        <UpdatePushModal
+          open={updateModalOpen}
+          onClose={() => setUpdateModalOpen(false)}
+          updateStatus={updateStatus}
+          autoCheckEnabled={autoCheckPush}
+          onToggleAutoCheck={setAutoCheckPush}
+          onRefreshStatus={refreshUpdateStatus}
+          checking={checkingUpdate}
         />
       </div>
     </SpringTelemetryProvider>

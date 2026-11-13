@@ -358,7 +358,9 @@ export const RouterConfigModal: React.FC<Props> = ({
           width: '100%',
           maxWidth: '1040px',
           maxHeight: '92vh',
-          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           borderRadius: '20px',
           backgroundColor: '#FFFFFF',
           boxShadow: '0 28px 70px -16px rgba(0, 0, 0, 0.35)',
@@ -368,14 +370,14 @@ export const RouterConfigModal: React.FC<Props> = ({
         {/* Header */}
         <div
           style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 10,
+            position: 'relative',
+            flexShrink: 0,
+            zIndex: 20,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             borderBottom: '1px solid rgba(60, 60, 67, 0.12)',
-            backgroundColor: 'rgba(255, 255, 255, 0.92)',
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
             backdropFilter: 'blur(18px)',
             padding: '14px 22px',
           }}
@@ -438,14 +440,26 @@ export const RouterConfigModal: React.FC<Props> = ({
           </div>
         </div>
 
-        <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            position: 'relative',
+            zIndex: 1,
+            padding: '20px 22px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '18px',
+          }}
+        >
           {/* Sticky Real-Time Install / Uninstall Progress Banner */}
           {taskProgress && (
             <div
               style={{
                 position: 'sticky',
-                top: '74px',
-                zIndex: 9,
+                top: 0,
+                zIndex: 15,
                 borderRadius: '14px',
                 backgroundColor:
                   taskProgress.status === 'success'
@@ -1684,8 +1698,9 @@ export const RouterConfigModal: React.FC<Props> = ({
         {/* Footer */}
         <div
           style={{
-            position: 'sticky',
-            bottom: 0,
+            position: 'relative',
+            flexShrink: 0,
+            zIndex: 20,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'flex-end',
