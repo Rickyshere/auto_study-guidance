@@ -618,13 +618,19 @@ export function App() {
 
         {/* Top Liquid Glass Window Toolbar */}
         <header className="mac-sp-topbar mac-sp-glass no-print">
-          {/* Left: Traffic Lights + Collapsible Sidebar Toggle + Title */}
+          {/* Left: Brand Logo + Collapsible Sidebar Toggle + Title */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }} aria-hidden="true">
-              <span style={{ width: 11, height: 11, borderRadius: '999px', backgroundColor: '#FF5F57' }} />
-              <span style={{ width: 11, height: 11, borderRadius: '999px', backgroundColor: '#FEBC2E' }} />
-              <span style={{ width: 11, height: 11, borderRadius: '999px', backgroundColor: '#28C840' }} />
-            </div>
+            <img
+              src="/logo.svg"
+              alt="Auto Study Guidance Logo"
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: '7px',
+                flexShrink: 0,
+                boxShadow: '0 2px 6px rgba(0, 102, 255, 0.25)',
+              }}
+            />
 
             <SpringButton
               springLabel="边栏折叠"

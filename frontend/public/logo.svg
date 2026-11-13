@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">Auto Study Guidance — App Icon</title>
+  <defs>
+    <linearGradient id="asgTileBg" x1="24" y1="16" x2="232" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0A84FF"/>
+      <stop offset="100%" stop-color="#0044CC"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#asgTileBg)"/>
+  <path fill="#FFFFFF" d="M 128 52 H 116 L 48 188 L 60 200 L 128 166 V 123 L 102 136 L 128 84 Z"/>
+  <path fill="#C9E6FF" d="M 128 52 H 140 L 208 188 L 196 200 L 128 166 V 123 L 154 136 L 128 84 Z"/>
+</svg>

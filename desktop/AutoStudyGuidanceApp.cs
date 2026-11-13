@@ -24,14 +24,11 @@ namespace AutoStudyGuidanceDesktop
     internal sealed class MainWindow : Form
     {
         private const string ServerUrl = "http://127.0.0.1:8000";
+        private const string ReadyTitle = "Auto Study Guidance · 智能导学与题库工作台";
+
         private readonly WebView2 _webView;
-        private readonly Panel _topBar;
-        private readonly Label _statusLabel;
         private readonly Panel _loadingPanel;
         private readonly Label _loadingLabel;
-        private readonly Button _refreshBtn;
-        private readonly Button _dataDirBtn;
-        private readonly Button _printBtn;
 
         private string _projectRoot;
         private Process _ownedBackendProc;
@@ -41,92 +38,49 @@ namespace AutoStudyGuidanceDesktop
         {
             _projectRoot = ResolveProjectRoot();
 
-            Text = "Auto Study Guidance - 桌面独立版";
+            Text = ReadyTitle;
             Width = 1440;
             Height = 900;
             MinimumSize = new Size(1060, 700);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.FromArgb(242, 242, 247);
+            KeyPreview = true;
 
-            _topBar = new Panel();
-            _topBar.Dock = DockStyle.Top;
-            _topBar.Height = 36;
-            _topBar.BackColor = Color.FromArgb(248, 250, 252);
-            _topBar.Padding = new Padding(10, 4, 10, 4);
-
-            var titleLbl = new Label();
-            titleLbl.Text = "Auto Study Guidance 独立桌面端";
-            titleLbl.Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
-            titleLbl.ForeColor = Color.FromArgb(28, 28, 30);
-            titleLbl.AutoSize = true;
-            titleLbl.Location = new Point(12, 8);
-
-            _statusLabel = new Label();
-            _statusLabel.Text = "正在检测本地服务...";
-            _statusLabel.Font = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Regular);
-            _statusLabel.ForeColor = Color.FromArgb(99, 99, 102);
-            _statusLabel.AutoSize = true;
-            _statusLabel.Location = new Point(240, 10);
-
-            _printBtn = CreateToolButton("打印当前页", new Point(0, 5));
-            _printBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _printBtn.Location = new Point(ClientSize.Width - 310, 5);
-            _printBtn.Click += new EventHandler(OnPrintClicked);
-
-            _dataDirBtn = CreateToolButton("项目与导出目录", new Point(0, 5));
-            _dataDirBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _dataDirBtn.Location = new Point(ClientSize.Width - 205, 5);
-            _dataDirBtn.Click += new EventHandler(OnOpenDataDirClicked);
-
-            _refreshBtn = CreateToolButton("刷新", new Point(0, 5));
-            _refreshBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _refreshBtn.Width = 72;
-            _refreshBtn.Location = new Point(ClientSize.Width - 84, 5);
-            _refreshBtn.Click += new EventHandler(OnRefreshClicked);
-
-            _topBar.Controls.Add(titleLbl);
-            _topBar.Controls.Add(_statusLabel);
-            _topBar.Controls.Add(_printBtn);
-            _topBar.Controls.Add(_dataDirBtn);
-            _topBar.Controls.Add(_refreshBtn);
+            try
+            {
+                Icon exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (exeIcon != null)
+                {
+                    Icon = exeIcon;
+                }
+            }
+            catch
+            {
+                // fallback to default form icon
+            }
 
             _webView = new WebView2();
             _webView.Dock = DockStyle.Fill;
 
             _loadingPanel = new Panel();
             _loadingPanel.Dock = DockStyle.Fill;
-            _loadingPanel.BackColor = Color.White;
+            _loadingPanel.BackColor = Color.FromArgb(248, 250, 252);
 
             _loadingLabel = new Label();
-            _loadingLabel.Text = "正在静默初始化 Auto Study Guidance 引擎并加载桌面工作台，请稍候...";
+            _loadingLabel.Text = "正在静默初始化 Auto Study Guidance 引擎并加载工作台，请稍候...";
             _loadingLabel.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Regular);
-            _loadingLabel.ForeColor = Color.FromArgb(51, 65, 85);
+            _loadingLabel.ForeColor = Color.FromArgb(30, 41, 59);
             _loadingLabel.TextAlign = ContentAlignment.MiddleCenter;
             _loadingLabel.Dock = DockStyle.Fill;
             _loadingPanel.Controls.Add(_loadingLabel);
 
-            Controls.Add(_loadingPanel);
             Controls.Add(_webView);
-            Controls.Add(_topBar);
+            Controls.Add(_loadingPanel);
+            _loadingPanel.BringToFront();
 
             Load += new EventHandler(OnFormLoad);
+            KeyDown += new KeyEventHandler(OnWindowKeyDown);
             FormClosing += new FormClosingEventHandler(OnWindowClosing);
-        }
-
-        private static Button CreateToolButton(string text, Point loc)
-        {
-            var btn = new Button();
-            btn.Text = text;
-            btn.Font = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Regular);
-            btn.Height = 25;
-            btn.Width = 100;
-            btn.Location = loc;
-            btn.FlatStyle = FlatStyle.Flat;
-            btn.FlatAppearance.BorderColor = Color.FromArgb(210, 214, 220);
-            btn.BackColor = Color.White;
-            btn.ForeColor = Color.FromArgb(28, 28, 30);
-            btn.Cursor = Cursors.Hand;
-            return btn;
         }
 
         private static string ResolveProjectRoot()
@@ -159,7 +113,7 @@ namespace AutoStudyGuidanceDesktop
             {
                 if (!CheckBackendAlive())
                 {
-                    SetStatusSafe("正在后台静默启动 FastAPI 服务...");
+                    SetStatusSafe("正在后台静默启动本地服务...");
                     StartBackendSilent();
 
                     bool ready = false;
@@ -180,7 +134,7 @@ namespace AutoStudyGuidanceDesktop
                     }
                 }
 
-                SetStatusSafe("服务已就绪 · http://127.0.0.1:8000");
+                SetStatusSafe("正在加载工作台...");
                 BeginInvoke(new MethodInvoker(InitializeWebViewUi));
             }
             catch (Exception ex)
@@ -254,6 +208,7 @@ namespace AutoStudyGuidanceDesktop
             catch (Exception ex)
             {
                 _loadingLabel.Text = "WebView2 初始化失败：" + ex.Message + "\n请确认系统已安装 Microsoft Edge WebView2 Runtime。";
+                SetStatusSafe("WebView2 初始化失败");
             }
         }
 
@@ -261,8 +216,7 @@ namespace AutoStudyGuidanceDesktop
         {
             _loadingPanel.Visible = false;
             _webView.BringToFront();
-            _topBar.BringToFront();
-            SetStatusSafe(e.IsSuccess ? "独立桌面模式运行中 · 非浏览器内核承载" : "页面加载完成（存在网络提示）");
+            SetTitleSafe(e.IsSuccess ? ReadyTitle : (ReadyTitle + " (页面加载提示)"));
         }
 
         private void OnNewWindowRequested(object sender, CoreWebView2NewWindowRequestedEventArgs e)
@@ -295,7 +249,6 @@ namespace AutoStudyGuidanceDesktop
                 }
                 e.ResultFilePath = target;
                 e.Handled = false;
-                SetStatusSafe("正在导出保存：" + Path.GetFileName(target));
             }
             catch
             {
@@ -303,30 +256,18 @@ namespace AutoStudyGuidanceDesktop
             }
         }
 
-        private void OnRefreshClicked(object sender, EventArgs e)
+        private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
-            if (_webView.CoreWebView2 != null)
+            if (_webView.CoreWebView2 == null) return;
+
+            if (e.KeyCode == Keys.F5)
             {
+                e.Handled = true;
                 _webView.CoreWebView2.Reload();
             }
-        }
-
-        private void OnOpenDataDirClicked(object sender, EventArgs e)
-        {
-            string downloads = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "Downloads"
-            );
-            if (Directory.Exists(downloads))
+            else if (e.Control && e.KeyCode == Keys.P)
             {
-                Process.Start("explorer.exe", downloads);
-            }
-        }
-
-        private void OnPrintClicked(object sender, EventArgs e)
-        {
-            if (_webView.CoreWebView2 != null)
-            {
+                e.Handled = true;
                 _webView.CoreWebView2.ExecuteScriptAsync("window.print();");
             }
         }
@@ -352,16 +293,21 @@ namespace AutoStudyGuidanceDesktop
 
         private void SetStatusSafe(string text)
         {
+            SetTitleSafe("Auto Study Guidance — " + text);
+        }
+
+        private void SetTitleSafe(string titleText)
+        {
             if (_closing || IsDisposed) return;
             try
             {
                 if (InvokeRequired)
                 {
-                    BeginInvoke(new Action<string>(SetStatusSafe), text);
+                    BeginInvoke(new Action<string>(SetTitleSafe), titleText);
                 }
                 else
                 {
-                    _statusLabel.Text = text;
+                    Text = titleText;
                 }
             }
             catch
