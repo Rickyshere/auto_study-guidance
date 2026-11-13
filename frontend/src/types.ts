@@ -4,7 +4,8 @@ export type StageName =
   | 'requirement_negotiation'
   | 'notes_and_cheatsheet'
   | 'quiz_generation'
-  | 'mindmap_generation';
+  | 'mindmap_generation'
+  | 'global_quality_audit';
 
 export type RoutingMode = 'single' | 'smart_stage';
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'exam_sprint';
@@ -63,6 +64,7 @@ export interface RouterSettings {
   routing_mode: RoutingMode;
   active_provider: ProviderType;
   enable_fallback: boolean;
+  enable_quality_audit?: boolean;
   cloud_config: CloudConfig;
   local_config: LocalConfig;
   harness_config: HarnessConfig;
@@ -215,6 +217,7 @@ export interface StudyPackage {
   blueprint_used: StudyBlueprint;
   generated_at: string;
   routing_trace: Record<string, string>;
+  quality_audit_report?: string;
   study_notes_markdown: string;
   cheatsheet_markdown: string;
   quiz_paper: QuizPaper;

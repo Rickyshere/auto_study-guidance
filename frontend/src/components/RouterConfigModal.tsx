@@ -45,6 +45,7 @@ const STAGE_LABELS: Record<StageName, string> = {
   notes_and_cheatsheet: '3. 导学案笔记 & 速记表生成',
   quiz_generation: '4. 随堂/同步/自测题库生成',
   mindmap_generation: '5. 可视化知识图谱生成',
+  global_quality_audit: '6. 全局质量验收 (仅非内置规则引擎时启用)',
 };
 
 const PROVIDER_OPTIONS: { value: ProviderType; label: string }[] = [
@@ -119,6 +120,18 @@ export const RouterConfigModal: React.FC<Props> = ({
 
   const currentVram = liveVram || status.gpu_vram;
   const currentOcrEngines = liveOcrEngines.length > 0 ? liveOcrEngines : status.ocr_engines;
+  const isNonHeuristicActive =
+    draft.routing_mode === 'single'
+      ? draft.active_provider !== 'heuristic'
+      : (
+          [
+            'requirement_negotiation',
+            'notes_and_cheatsheet',
+            'quiz_generation',
+            'mindmap_generation',
+          ] as StageName[]
+        ).some((st) => (draft.stage_mapping[st]?.provider || 'heuristic') !== 'heuristic');
+  const auditEnabled = isNonHeuristicActive && (draft.enable_quality_audit ?? true);
 
   const handleSave = async () => {
     setSaving(true);
@@ -1113,49 +1126,143 @@ export const RouterConfigModal: React.FC<Props> = ({
                 <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#636366' }}>
                   按任务阶段分配路由通道：
                 </div>
-                {(Object.keys(STAGE_LABELS) as StageName[]).map((stage) => (
-                  <div
-                    key={stage}
-                    style={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '8px',
-                      backgroundColor: '#FFFFFF',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(60, 60, 67, 0.1)',
-                      padding: '8px 11px',
-                    }}
-                  >
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#1C1C1E' }}>
-                      {STAGE_LABELS[stage]}
-                    </span>
-                    <SpringSegmentedControl<ProviderType>
-                      springLabel={`阶段:${stage}`}
-                      compact
-                      wrap
-                      value={draft.stage_mapping[stage]?.provider || 'heuristic'}
-                      onChange={(val) =>
-                        setDraft({
-                          ...draft,
-                          stage_mapping: {
-                            ...draft.stage_mapping,
-                            [stage]: { provider: val },
-                          },
-                        })
-                      }
-                      options={[
-                        { value: 'heuristic', label: '规则引擎' },
-                        { value: 'harness', label: 'CLI Harness' },
-                        { value: 'cloud', label: '云端 API' },
-                        { value: 'local', label: '本地模型' },
-                      ]}
-                    />
-                  </div>
-                ))}
+                {(Object.keys(STAGE_LABELS) as StageName[]).map((stage) => {
+                  const isAuditStage = stage === 'global_quality_audit';
+                  const auditLocked = isAuditStage && !isNonHeuristicActive;
+                  return (
+                    <div
+                      key={stage}
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        backgroundColor: '#FFFFFF',
+                        borderRadius: '10px',
+                        border: '1px solid rgba(60, 60, 67, 0.1)',
+                        padding: '8px 11px',
+                        opacity: auditLocked ? 0.65 : 1,
+                      }}
+                    >
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#1C1C1E' }}>
+                        {STAGE_LABELS[stage]}
+                      </span>
+                      {auditLocked ? (
+                        <span
+                          style={{
+                            borderRadius: '999px',
+                            backgroundColor: 'rgba(142, 142, 147, 0.14)',
+                            color: '#636366',
+                            padding: '4px 10px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          未启用（需至少一个生成阶段使用非内置规则引擎）
+                        </span>
+                      ) : (
+                        <SpringSegmentedControl<ProviderType>
+                          springLabel={`阶段:${stage}`}
+                          compact
+                          wrap
+                          value={
+                            isAuditStage &&
+                            (draft.stage_mapping[stage]?.provider || 'heuristic') === 'heuristic'
+                              ? 'harness'
+                              : draft.stage_mapping[stage]?.provider || 'heuristic'
+                          }
+                          onChange={(val) =>
+                            setDraft({
+                              ...draft,
+                              stage_mapping: {
+                                ...draft.stage_mapping,
+                                [stage]: { provider: val },
+                              },
+                            })
+                          }
+                          options={
+                            isAuditStage
+                              ? [
+                                  { value: 'harness', label: 'CLI Harness' },
+                                  { value: 'cloud', label: '云端 API' },
+                                  { value: 'local', label: '本地模型' },
+                                ]
+                              : [
+                                  { value: 'heuristic', label: '规则引擎' },
+                                  { value: 'harness', label: 'CLI Harness' },
+                                  { value: 'cloud', label: '云端 API' },
+                                  { value: 'local', label: '本地模型' },
+                                ]
+                          }
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
+
+            {/* Global Quality Audit Gate (Only Active when Non-Heuristic Engine is Used) */}
+            <div
+              style={{
+                borderRadius: '12px',
+                border: auditEnabled
+                  ? '1px solid rgba(52, 199, 89, 0.35)'
+                  : '1px solid rgba(142, 142, 147, 0.25)',
+                backgroundColor: auditEnabled
+                  ? 'rgba(52, 199, 89, 0.08)'
+                  : 'rgba(142, 142, 147, 0.08)',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                }}
+              >
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#1C1C1E' }}>
+                  全局质量验收通道 (Global Quality Audit)
+                </span>
+                <span
+                  style={{
+                    borderRadius: '999px',
+                    padding: '2px 9px',
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    backgroundColor: auditEnabled
+                      ? 'rgba(52, 199, 89, 0.18)'
+                      : 'rgba(142, 142, 147, 0.16)',
+                    color: auditEnabled ? '#15803D' : '#636366',
+                  }}
+                >
+                  {auditEnabled
+                    ? '✓ 已启用 · 非内置引擎生效中'
+                    : isNonHeuristicActive
+                    ? '已手动暂停'
+                    : '待命 · 仅在使用非内置规则引擎时启用'}
+                </span>
+              </div>
+              {isNonHeuristicActive ? (
+                <SpringToggleSwitch
+                  checked={draft.enable_quality_audit ?? true}
+                  onChange={(val) => setDraft({ ...draft, enable_quality_audit: val })}
+                  label="启用生成后全局质量验收（通过非内置引擎自动复核公式规范、题量契约、例题解析与图谱语法，缺失项自动修补）"
+                  springLabel="全局质量验收开关"
+                />
+              ) : (
+                <div style={{ fontSize: '11px', color: '#636366', lineHeight: 1.5 }}>
+                  当前完全使用「内置智能规则引擎」，无需额外全局验收。将任意生成通道切换为「CLI Harness / 云端 API / 本地模型」后自动激活。
+                </div>
+              )}
+            </div>
 
             <SpringToggleSwitch
               checked={draft.enable_fallback}

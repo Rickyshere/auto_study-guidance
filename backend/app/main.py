@@ -662,13 +662,28 @@ async def system_webhook_push() -> Dict[str, Any]:
 FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if FRONTEND_DIST_DIR.exists() and (FRONTEND_DIST_DIR / "index.html").exists():
     assets_sub = FRONTEND_DIST_DIR / "assets"
-    if assets_sub.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets_sub)), name="frontend_assets")
+
+    @app.get("/assets/{asset_name:path}")
+    async def serve_frontend_asset(asset_name: str) -> Response:
+        safe_name = Path(asset_name).name
+        if not safe_name or not assets_sub.exists():
+            raise HTTPException(status_code=404, detail="Asset not found")
+        exact = assets_sub / safe_name
+        if exact.is_file():
+            return FileResponse(exact)
+        # Fallback for stale hashed chunk names when an open tab references an older build hash
+        if "-" in safe_name and "." in safe_name:
+            stem, ext = safe_name.rsplit(".", 1)
+            prefix = stem.rsplit("-", 1)[0]
+            matches = sorted(assets_sub.glob(f"{prefix}-*.{ext}"))
+            if matches and matches[0].is_file():
+                return FileResponse(matches[0])
+        raise HTTPException(status_code=404, detail="Asset not found")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str) -> FileResponse:
-        if full_path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="API endpoint not found")
+        if full_path.startswith("api/") or full_path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Resource not found")
         candidate = FRONTEND_DIST_DIR / full_path
         if full_path and candidate.is_file():
             return FileResponse(candidate)

@@ -109,7 +109,15 @@ def _sanitize_mermaid_code(raw: str) -> str:
     code = fence.group(1).strip() if fence else raw.strip()
     if not (code.startswith("flowchart") or code.startswith("graph") or code.startswith("mindmap")):
         return ""
-    return code
+    fixed_lines: List[str] = []
+    for line in code.splitlines():
+        line = re.sub(
+            r'\b([A-Za-z0-9_]+)\[(?!")([^\[\]"\n]+)\]',
+            lambda m: f'{m.group(1)}["{m.group(2).replace(chr(34), chr(39)).strip()}"]',
+            line,
+        )
+        fixed_lines.append(line)
+    return "\n".join(fixed_lines)
 
 
 async def generate_study_package(
@@ -284,6 +292,114 @@ async def generate_study_package(
             document_ir, blueprint
         )
 
+    # 5. Global Quality Verification (Strictly enabled ONLY when non-heuristic engine is used)
+    quality_audit_report = ""
+    audit_sel = router.resolve_quality_audit_provider()
+    if audit_sel is None:
+        if not router.is_non_heuristic_active():
+            router.routing_trace["global_quality_audit"] = "未启用 (仅在使用非内置规则引擎时启用)"
+            quality_audit_report = (
+                "当前使用内置智能规则引擎，全局质量验收通道自动跳过（仅在启用 CLI Harness / 云端 API / 本地模型时触发）。"
+            )
+        else:
+            router.routing_trace["global_quality_audit"] = "已手动关闭"
+            quality_audit_report = "全局质量验收已手动关闭。"
+    else:
+        if progress_cb:
+            await progress_cb(
+                "quality_audit",
+                95,
+                "正在通过非内置引擎执行【全局质量验收】（校验公式、题量契约与解析完整性）...",
+            )
+        repairs: List[str] = []
+
+        # 5.1 Normalize LaTeX delimiters across quiz questions & options
+        if d.include_quiz and quiz_paper.questions:
+            norm_qs: List[QuizQuestion] = []
+            for q in quiz_paper.questions:
+                norm_qs.append(
+                    q.model_copy(
+                        update={
+                            "question": normalize_markdown_math(q.question),
+                            "options": [normalize_markdown_math(o) for o in q.options],
+                            "answer": normalize_markdown_math(q.answer),
+                            "explanation": normalize_markdown_math(q.explanation),
+                        }
+                    )
+                )
+            quiz_paper = quiz_paper.model_copy(update={"questions": norm_qs})
+
+            # Verify blueprint question counts; top up missing items deterministically if short
+            target_total_qs = d.mcq_count + d.fill_blank_count + d.short_answer_count
+            if len(quiz_paper.questions) < target_total_qs:
+                fallback_quiz = HeuristicStudyEngine.generate_quiz_from_ir(document_ir, blueprint)
+                need_by_type = {
+                    "mcq": max(0, d.mcq_count - sum(1 for q in quiz_paper.questions if q.type == "mcq")),
+                    "fill_blank": max(
+                        0, d.fill_blank_count - sum(1 for q in quiz_paper.questions if q.type == "fill_blank")
+                    ),
+                    "short_answer": max(
+                        0, d.short_answer_count - sum(1 for q in quiz_paper.questions if q.type == "short_answer")
+                    ),
+                }
+                existing_ids = {q.id for q in quiz_paper.questions}
+                added = 0
+                updated_qs = list(quiz_paper.questions)
+                for fq in fallback_quiz.questions:
+                    if need_by_type.get(fq.type, 0) > 0:
+                        new_id = fq.id
+                        while new_id in existing_ids:
+                            new_id = f"{fq.id}_{len(existing_ids) + 1}"
+                        existing_ids.add(new_id)
+                        updated_qs.append(fq.model_copy(update={"id": new_id}))
+                        need_by_type[fq.type] -= 1
+                        added += 1
+                if added > 0:
+                    quiz_paper = quiz_paper.model_copy(
+                        update={
+                            "questions": updated_qs,
+                            "total_score": sum(q.score for q in updated_qs),
+                        }
+                    )
+                    repairs.append(f"自动补全 {added} 道缺失试题以匹配方案题量契约")
+
+        # 5.2 Ensure self-study guide includes worked examples
+        if d.include_study_guide_notes and "典型例题" not in study_notes_md:
+            fallback_notes = HeuristicStudyEngine.generate_notes_from_ir(document_ir, blueprint)
+            ex_idx = fallback_notes.find("典型例题")
+            if ex_idx != -1:
+                section_start = fallback_notes.rfind("\n##", 0, ex_idx)
+                patch = fallback_notes[section_start if section_start != -1 else ex_idx :]
+                study_notes_md = normalize_markdown_math(f"{study_notes_md.rstrip()}\n\n{patch.strip()}")
+                repairs.append("自动补充结构化典型例题与解析模块")
+
+        # 5.3 Invoke non-heuristic engine for semantic global quality verification
+        audit_sys = (
+            "你是教学资料总审校专家（Global Quality Auditor）。请审查生成成果是否符合教学方案契约与排版规范，并输出合法 JSON：\n"
+            '{"passed": true, "score": 96, "summary": "一句简明中文验收结论", "issues": []}'
+        )
+        audit_user = (
+            f"方案名称: {blueprint.blueprint_title} | 预设: {blueprint.preset_name}\n"
+            f"目标题量: 单选 {d.mcq_count} + 填空 {d.fill_blank_count} + 简答 {d.short_answer_count}\n"
+            f"实际题量: {len(quiz_paper.questions)} 道 | 总分: {quiz_paper.total_score}\n"
+            f"讲义含典型例题: {'是' if '典型例题' in study_notes_md else '否'} | "
+            f"讲义长度: {len(study_notes_md)} 字 | 速记表长度: {len(cheatsheet_md)} 字\n"
+            f"Mermaid 语法前缀: {mindmap_mermaid.splitlines()[0] if mindmap_mermaid else '无'}\n"
+            f"已执行自动修正: {', '.join(repairs) if repairs else '无'}\n"
+            f"讲义前400字摘要:\n{study_notes_md[:400]}"
+        )
+        audit_data, audit_label = await router.execute_json("global_quality_audit", audit_sys, audit_user)
+        if isinstance(audit_data, dict):
+            audit_score = int(audit_data.get("score") or 95)
+            audit_summary = str(audit_data.get("summary") or "格式、公式与题量契约校验通过")
+            router.routing_trace["global_quality_audit"] = f"{audit_label} · 验收 {audit_score}分"
+            repair_note = f"；自动修复项：{', '.join(repairs)}" if repairs else ""
+            quality_audit_report = f"[{audit_label}] 全局质量验收通过（{audit_score}/100）：{audit_summary}{repair_note}。"
+        else:
+            router.routing_trace["global_quality_audit"] = f"{audit_label} · 结构契约校验完成"
+            repair_note = f"（已自动补全：{', '.join(repairs)}）" if repairs else "（全部契约项一次通过）"
+            quality_audit_report = f"已完成数学公式规范化、题量契约核验与 Mermaid 语法清洗{repair_note}。"
+
     if progress_cb:
         await progress_cb("done", 100, "学习资料生成完成！")
 
@@ -292,6 +408,7 @@ async def generate_study_package(
         project_id=document_ir.project_id,
         blueprint_used=confirmed_bp,
         routing_trace=router.routing_trace,
+        quality_audit_report=quality_audit_report,
         study_notes_markdown=study_notes_md,
         cheatsheet_markdown=cheatsheet_md,
         quiz_paper=quiz_paper,

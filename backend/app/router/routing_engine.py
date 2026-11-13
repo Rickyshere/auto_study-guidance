@@ -54,7 +54,47 @@ class ModelRouter:
         self.settings = settings
         self.routing_trace: Dict[str, str] = {}
 
+    def is_non_heuristic_active(self) -> bool:
+        """Return True only when a non-heuristic engine (cloud / local / harness) is active."""
+        if self.settings.routing_mode == "single":
+            return self.settings.active_provider != "heuristic"
+        for st in (
+            "requirement_negotiation",
+            "notes_and_cheatsheet",
+            "quiz_generation",
+            "mindmap_generation",
+            "global_quality_audit",
+        ):
+            sel = self.settings.stage_mapping.get(st)
+            if sel and sel.provider != "heuristic":
+                return True
+        return False
+
+    def resolve_quality_audit_provider(self) -> Optional[ProviderSelection]:
+        """Resolve provider for global quality audit. Active ONLY when non-heuristic engine is used."""
+        if not getattr(self.settings, "enable_quality_audit", True):
+            return None
+        if not self.is_non_heuristic_active():
+            return None
+        if self.settings.routing_mode == "single":
+            return ProviderSelection(provider=self.settings.active_provider)
+        sel = self.settings.stage_mapping.get("global_quality_audit")
+        if sel and sel.provider != "heuristic":
+            return sel
+        for st in (
+            "notes_and_cheatsheet",
+            "quiz_generation",
+            "requirement_negotiation",
+            "mindmap_generation",
+        ):
+            cand = self.settings.stage_mapping.get(st)
+            if cand and cand.provider != "heuristic":
+                return cand
+        return None
+
     def resolve_stage(self, stage: StageName) -> ProviderSelection:
+        if stage == "global_quality_audit":
+            return self.resolve_quality_audit_provider() or ProviderSelection(provider="heuristic")
         if self.settings.routing_mode == "smart_stage":
             return self.settings.stage_mapping.get(
                 stage, ProviderSelection(provider=self.settings.active_provider)

@@ -412,3 +412,42 @@ def test_security_api_key_redaction_and_path_traversal():
             SETTINGS_FILE.write_text(backup_text, encoding="utf-8")
         elif SETTINGS_FILE.exists():
             SETTINGS_FILE.unlink(missing_ok=True)
+
+
+def test_global_quality_audit_activation_rule():
+    from app.router.routing_engine import ModelRouter
+    from app.schemas import ProviderSelection, RouterSettings
+
+    # 1. Pure heuristic mode -> global_quality_audit MUST be disabled
+    s_heur = RouterSettings(routing_mode="single", active_provider="heuristic", enable_quality_audit=True)
+    r_heur = ModelRouter(s_heur)
+    assert r_heur.is_non_heuristic_active() is False
+    assert r_heur.resolve_quality_audit_provider() is None
+
+    # 2. Smart stage with all generation stages set to heuristic -> disabled even if global_quality_audit is harness
+    s_smart_heur = RouterSettings(
+        routing_mode="smart_stage",
+        active_provider="heuristic",
+        enable_quality_audit=True,
+        stage_mapping={
+            "vision_ocr": ProviderSelection(provider="heuristic"),
+            "requirement_negotiation": ProviderSelection(provider="heuristic"),
+            "notes_and_cheatsheet": ProviderSelection(provider="heuristic"),
+            "quiz_generation": ProviderSelection(provider="heuristic"),
+            "mindmap_generation": ProviderSelection(provider="heuristic"),
+            "global_quality_audit": ProviderSelection(provider="heuristic"),
+        },
+    )
+    r_smart_heur = ModelRouter(s_smart_heur)
+    assert r_smart_heur.is_non_heuristic_active() is False
+    assert r_smart_heur.resolve_quality_audit_provider() is None
+
+    # 3. Non-heuristic single provider (e.g. cloud / harness / local) -> enabled when switch is True, disabled when False
+    s_cloud = RouterSettings(routing_mode="single", active_provider="cloud", enable_quality_audit=True)
+    r_cloud = ModelRouter(s_cloud)
+    assert r_cloud.is_non_heuristic_active() is True
+    resolved = r_cloud.resolve_quality_audit_provider()
+    assert resolved is not None and resolved.provider == "cloud"
+
+    s_cloud_off = s_cloud.model_copy(update={"enable_quality_audit": False})
+    assert ModelRouter(s_cloud_off).resolve_quality_audit_provider() is None

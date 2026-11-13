@@ -11,6 +11,8 @@ import {
   RotateCcw,
   HelpCircle,
   DownloadCloud,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -91,6 +93,28 @@ export function App() {
   const [autoCheckPush, setAutoCheckPush] = useState(true);
   const [routerPopoverOpen, setRouterPopoverOpen] = useState(false);
   const [spotlightOpen, setSpotlightOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('asg_theme_dark') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('asg_theme_dark', darkMode ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    if (darkMode) {
+      document.documentElement.classList.add('dark-theme');
+      document.body.classList.add('dark-theme');
+    } else {
+      document.documentElement.classList.remove('dark-theme');
+      document.body.classList.remove('dark-theme');
+    }
+  }, [darkMode]);
 
   const [uploading, setUploading] = useState(false);
   const [negotiating, setNegotiating] = useState(false);
@@ -547,7 +571,7 @@ export function App() {
 
   return (
     <SpringTelemetryProvider onReport={reportPhysics}>
-      <div className="mac-asg-root">
+      <div className={`mac-asg-root ${darkMode ? 'dark-theme' : ''}`}>
         <style>{`
           .mac-asg-root {
             --bg-grouped: #F2F2F7;
@@ -728,6 +752,34 @@ export function App() {
 
           {/* Right: First-Time Guide + Push Receiver + VRAM Badge + Spotlight + 3-Tier Router */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+            <SpringButton
+              springLabel="深浅色切换"
+              onClick={() => setDarkMode((d) => !d)}
+              maxShift={4}
+              style={{
+                borderRadius: '999px',
+                border: '1px solid rgba(60, 60, 67, 0.14)',
+                backgroundColor: darkMode ? 'rgba(30, 41, 59, 0.92)' : 'rgba(255, 255, 255, 0.88)',
+                padding: '5px 9px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: darkMode ? '#F8FAFC' : '#1C1C1E',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+              title={darkMode ? '切换为浅色模式' : '切换为深色模式'}
+            >
+              {darkMode ? (
+                <Sun className="w-3.5 h-3.5 text-[#FBBF24]" />
+              ) : (
+                <Moon className="w-3.5 h-3.5 text-[#475569]" />
+              )}
+              <span className="hidden lg:inline">{darkMode ? '浅色' : '深色'}</span>
+            </SpringButton>
+
             <SpringButton
               springLabel="第一次使用"
               onClick={() => setOnboardingOpen(true)}
@@ -1155,6 +1207,7 @@ export function App() {
                 documentIr={documentIr}
                 activeTab={activeMainView}
                 onChangeTab={(tab) => setActiveMainView(tab)}
+                darkMode={darkMode}
               />
             )}
           </main>
@@ -1193,6 +1246,14 @@ export function App() {
                 ⌘K 聚焦快捷指令 (0ms 瞬时响应)
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <SpotlightRow
+                  label={darkMode ? '☀️ 切换为浅色模式' : '🌙 切换为深色模式'}
+                  hint="Theme"
+                  onClick={() => {
+                    setDarkMode((d) => !d);
+                    setSpotlightOpen(false);
+                  }}
+                />
                 <SpotlightRow
                   label="⚡ 加载示例 PPTX 课件（深度学习核心架构讲义）"
                   hint="Demo"

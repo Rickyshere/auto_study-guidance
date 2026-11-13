@@ -37,11 +37,28 @@ mermaid.initialize({
 
 export type StudioTabKey = 'notes' | 'quiz' | 'cheatsheet' | 'mindmap' | 'blueprint_trace';
 
-interface Props {
+export interface Props {
   studyPackage: StudyPackage;
   documentIr?: DocumentIR | null;
   activeTab: StudioTabKey;
   onChangeTab?: (tab: StudioTabKey) => void;
+  darkMode?: boolean;
+}
+
+function sanitizeMermaidClient(raw: string): string {
+  const cleaned = (raw || '')
+    .replace(/^```(?:mermaid)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  return cleaned
+    .split('\n')
+    .map((line) =>
+      line.replace(/\b([A-Za-z0-9_]+)\[(?!")([^\[\]"\n]+)\]/g, (_m, id, label) => {
+        const safe = String(label).replace(/"/g, "'").trim();
+        return `${id}["${safe}"]`;
+      })
+    )
+    .join('\n');
 }
 
 function downloadText(filename: string, content: string, mime = 'text/markdown;charset=utf-8') {
@@ -59,6 +76,7 @@ export const StudyStudio: React.FC<Props> = ({
   documentIr,
   activeTab,
   onChangeTab,
+  darkMode = false,
 }) => {
   const [quizStudyMode, setQuizStudyMode] = useState<'exam' | 'review'>('exam');
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
@@ -120,17 +138,26 @@ export const StudyStudio: React.FC<Props> = ({
     (async () => {
       try {
         setMermaidError(null);
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: darkMode ? 'dark' : 'default',
+          securityLevel: 'loose',
+        });
         const id = `mm_${Date.now()}`;
-        const { svg } = await mermaid.render(id, studyPackage.mindmap_mermaid);
+        const sanitized = sanitizeMermaidClient(studyPackage.mindmap_mermaid);
+        const { svg } = await mermaid.render(id, sanitized);
         if (!cancelled) setMermaidSvg(svg);
       } catch (e: any) {
-        if (!cancelled) setMermaidError(e?.message || 'Mermaid 语法渲染失败');
+        if (!cancelled) {
+          setMermaidSvg('');
+          setMermaidError(e?.message || 'Mermaid 语法渲染失败');
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [activeTab, studyPackage.mindmap_mermaid]);
+  }, [activeTab, studyPackage.mindmap_mermaid, darkMode]);
 
   const quiz = studyPackage.quiz_paper;
   const formatTime = (sec: number) =>
@@ -1242,31 +1269,25 @@ export const StudyStudio: React.FC<Props> = ({
               </div>
 
               {mermaidError ? (
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: 'rgba(255, 149, 0, 0.1)',
-                    border: '1px solid rgba(255, 149, 0, 0.3)',
-                    padding: '14px',
-                    fontSize: '12px',
-                    color: '#995700',
-                  }}
-                >
-                  <div style={{ fontWeight: 700, marginBottom: '6px' }}>
-                    <Network className="w-4 h-4 inline mr-1" />
-                    Mermaid 渲染提示：{mermaidError}
-                  </div>
-                  <pre
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <FallbackMindmapSvg
+                    mermaidCode={studyPackage.mindmap_mermaid}
+                    darkMode={darkMode}
+                    zoom={zoom}
+                  />
+                  <div
                     style={{
-                      backgroundColor: '#FFFFFF',
-                      padding: '10px',
-                      borderRadius: '8px',
-                      overflowX: 'auto',
-                      color: '#1C1C1E',
+                      borderRadius: '10px',
+                      backgroundColor: 'rgba(255, 149, 0, 0.08)',
+                      border: '1px solid rgba(255, 149, 0, 0.25)',
+                      padding: '10px 14px',
+                      fontSize: '11.5px',
+                      color: '#B45309',
                     }}
                   >
-                    {studyPackage.mindmap_mermaid}
-                  </pre>
+                    <Network className="w-3.5 h-3.5 inline mr-1" />
+                    已启用内置矢量图谱兜底渲染（若需切换 Mermaid 原生引擎，请按 Ctrl+F5 刷新一次页面）：{mermaidError}
+                  </div>
                 </div>
               ) : (
                 <div
@@ -1382,6 +1403,31 @@ export const StudyStudio: React.FC<Props> = ({
               </div>
             ))}
           </div>
+
+          {studyPackage.quality_audit_report && (
+            <div
+              style={{
+                borderRadius: '14px',
+                border: '1px solid rgba(52, 199, 89, 0.3)',
+                backgroundColor: 'rgba(52, 199, 89, 0.08)',
+                padding: '14px 16px',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '12.5px',
+                  fontWeight: 700,
+                  color: '#15803D',
+                  marginBottom: '4px',
+                }}
+              >
+                全局质量验收报告 (global_quality_audit)
+              </div>
+              <div style={{ fontSize: '12px', color: '#334155', lineHeight: 1.6 }}>
+                {studyPackage.quality_audit_report}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1408,6 +1454,181 @@ export const StudyStudio: React.FC<Props> = ({
     </div>
   );
 };
+
+function FallbackMindmapSvg({
+  mermaidCode,
+  darkMode,
+  zoom,
+}: {
+  mermaidCode: string;
+  darkMode: boolean;
+  zoom: number;
+}) {
+  const nodes = new Map<string, string>();
+  const edges: [string, string][] = [];
+  const inDegree = new Map<string, number>();
+
+  for (const rawLine of (mermaidCode || '').split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('flowchart') || line.startsWith('graph')) continue;
+
+    const nodeMatches = line.matchAll(/([A-Za-z0-9_]+)\s*\[["']?([^"'\]]+)["']?\]/g);
+    for (const m of nodeMatches) {
+      nodes.set(m[1], m[2].trim());
+    }
+
+    const edgeMatch = line.match(/([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s*--+>?\s*([A-Za-z0-9_]+)(?:\[[^\]]*\])?/);
+    if (edgeMatch) {
+      const from = edgeMatch[1];
+      const to = edgeMatch[2];
+      if (!nodes.has(from)) nodes.set(from, from);
+      if (!nodes.has(to)) nodes.set(to, to);
+      edges.push([from, to]);
+      inDegree.set(to, (inDegree.get(to) || 0) + 1);
+      if (!inDegree.has(from)) inDegree.set(from, 0);
+    }
+  }
+
+  if (nodes.size === 0) {
+    return (
+      <pre style={{ padding: '12px', borderRadius: '10px', fontSize: '12px', overflowX: 'auto' }}>
+        {mermaidCode}
+      </pre>
+    );
+  }
+
+  // BFS topological layering for horizontal LR layout
+  const layerMap = new Map<string, number>();
+  const queue: string[] = [];
+  for (const [id] of nodes) {
+    if ((inDegree.get(id) || 0) === 0) {
+      layerMap.set(id, 0);
+      queue.push(id);
+    }
+  }
+  if (queue.length === 0) {
+    const firstId = Array.from(nodes.keys())[0];
+    layerMap.set(firstId, 0);
+    queue.push(firstId);
+  }
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const curLayer = layerMap.get(cur) || 0;
+    for (const [f, t] of edges) {
+      if (f === cur && !layerMap.has(t)) {
+        layerMap.set(t, Math.min(3, curLayer + 1));
+        queue.push(t);
+      }
+    }
+  }
+  for (const [id] of nodes) {
+    if (!layerMap.has(id)) layerMap.set(id, 1);
+  }
+
+  const columns = new Map<number, string[]>();
+  for (const [id] of nodes) {
+    const col = layerMap.get(id) || 0;
+    const arr = columns.get(col) || [];
+    arr.push(id);
+    columns.set(col, arr);
+  }
+
+  const colCount = Math.max(1, ...Array.from(columns.keys())) + 1;
+  const maxRows = Math.max(1, ...Array.from(columns.values()).map((a) => a.length));
+  const nodeW = 190;
+  const nodeH = 42;
+  const colGap = 250;
+  const rowGap = 62;
+  const width = Math.max(680, colCount * colGap + 40);
+  const height = Math.max(280, maxRows * rowGap + 50);
+
+  const coords = new Map<string, { x: number; y: number }>();
+  for (const [colIdx, ids] of columns.entries()) {
+    const totalColH = ids.length * rowGap;
+    const startY = (height - totalColH) / 2 + rowGap / 2;
+    ids.forEach((id, rIdx) => {
+      coords.set(id, {
+        x: 30 + colIdx * colGap,
+        y: startY + rIdx * rowGap - nodeH / 2,
+      });
+    });
+  }
+
+  const strokeColor = darkMode ? '#475569' : '#94A3B8';
+  const nodeFill = darkMode ? '#1E293B' : '#FFFFFF';
+  const nodeBorder = darkMode ? '#38BDF8' : '#007AFF';
+  const textFill = darkMode ? '#F1F5F9' : '#0F172A';
+
+  return (
+    <div
+      style={{
+        overflow: 'auto',
+        borderRadius: '14px',
+        border: '1px solid rgba(60, 60, 67, 0.14)',
+        backgroundColor: darkMode ? '#0F172A' : '#FAFAFC',
+        padding: '20px',
+        minHeight: '340px',
+      }}
+    >
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', display: 'block' }}
+      >
+        {edges.map(([f, t], i) => {
+          const a = coords.get(f);
+          const b = coords.get(t);
+          if (!a || !b) return null;
+          const x1 = a.x + nodeW;
+          const y1 = a.y + nodeH / 2;
+          const x2 = b.x;
+          const y2 = b.y + nodeH / 2;
+          const mx = (x1 + x2) / 2;
+          return (
+            <path
+              key={`${f}-${t}-${i}`}
+              d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+              fill="none"
+              stroke={strokeColor}
+              strokeWidth={1.8}
+            />
+          );
+        })}
+        {Array.from(nodes.entries()).map(([id, label]) => {
+          const pt = coords.get(id);
+          if (!pt) return null;
+          const isRoot = (layerMap.get(id) || 0) === 0;
+          const short = label.length > 16 ? `${label.slice(0, 15)}…` : label;
+          return (
+            <g key={id}>
+              <rect
+                x={pt.x}
+                y={pt.y}
+                width={nodeW}
+                height={nodeH}
+                rx={10}
+                fill={isRoot ? (darkMode ? '#1D4ED8' : '#007AFF') : nodeFill}
+                stroke={isRoot ? '#60A5FA' : nodeBorder}
+                strokeWidth={1.5}
+              />
+              <text
+                x={pt.x + nodeW / 2}
+                y={pt.y + nodeH / 2 + 4}
+                textAnchor="middle"
+                fontSize="12"
+                fontWeight={isRoot ? '700' : '600'}
+                fill={isRoot ? '#FFFFFF' : textFill}
+              >
+                {short}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 function MetricTile({ label, value }: { label: string; value: string }) {
   return (
@@ -1699,6 +1920,7 @@ function PrintPreviewModal({
           }}
         >
           <div
+            className="print-paper-sheet"
             style={{
               width: isA3 ? '1080px' : '780px',
               maxWidth: '100%',

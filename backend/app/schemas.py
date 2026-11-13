@@ -11,6 +11,7 @@ StageName = Literal[
     "notes_and_cheatsheet",
     "quiz_generation",
     "mindmap_generation",
+    "global_quality_audit",
 ]
 RoutingMode = Literal["single", "smart_stage"]
 DifficultyLevel = Literal["beginner", "intermediate", "advanced", "exam_sprint"]
@@ -71,6 +72,7 @@ class RouterSettings(BaseModel):
     routing_mode: RoutingMode = "single"
     active_provider: ProviderType = "heuristic"
     enable_fallback: bool = True
+    enable_quality_audit: bool = True
     cloud_config: CloudConfig = Field(default_factory=CloudConfig)
     local_config: LocalConfig = Field(default_factory=LocalConfig)
     harness_config: HarnessConfig = Field(default_factory=HarnessConfig)
@@ -82,6 +84,7 @@ class RouterSettings(BaseModel):
             "notes_and_cheatsheet": ProviderSelection(provider="harness"),
             "quiz_generation": ProviderSelection(provider="harness"),
             "mindmap_generation": ProviderSelection(provider="harness"),
+            "global_quality_audit": ProviderSelection(provider="harness"),
         }
     )
 
@@ -249,6 +252,7 @@ class StudyPackage(BaseModel):
     blueprint_used: StudyBlueprint
     generated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     routing_trace: Dict[str, str] = Field(default_factory=dict)
+    quality_audit_report: str = ""
     study_notes_markdown: str = ""
     cheatsheet_markdown: str = ""
     quiz_paper: QuizPaper
