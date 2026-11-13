@@ -304,6 +304,8 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                   style={{
                     position: 'relative',
                     zIndex: 2,
+                    minWidth: 0,
+                    overflow: 'hidden',
                     borderRadius: '11px',
                     border: isSelected
                       ? '1px solid transparent'
@@ -316,13 +318,14 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                     gap: '6px',
                   }}
                 >
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
+                        flexDirection: 'column',
+                        alignItems: 'flex-start',
                         gap: '4px',
+                        minWidth: 0,
                       }}
                     >
                       <div
@@ -330,16 +333,34 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                           display: 'flex',
                           alignItems: 'center',
                           gap: '5px',
+                          width: '100%',
+                          minWidth: 0,
                           fontSize: '12.5px',
                           fontWeight: 700,
                           color: isSelected ? '#007AFF' : '#1C1C1E',
                         }}
                       >
-                        {PRESET_ICON[p.icon] || <Sparkles className="w-3.5 h-3.5 text-[#007AFF]" />}
-                        <span className="truncate">{p.name}</span>
+                        <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                          {PRESET_ICON[p.icon] || <Sparkles className="w-3.5 h-3.5 text-[#007AFF]" />}
+                        </span>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={p.name}
+                        >
+                          {p.name}
+                        </span>
                       </div>
                       <span
                         style={{
+                          display: 'inline-block',
+                          maxWidth: '100%',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
                           fontSize: '9.5px',
                           fontWeight: 600,
                           color: '#636366',
@@ -347,8 +368,8 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                           border: '1px solid rgba(60, 60, 67, 0.12)',
                           borderRadius: '999px',
                           padding: '1px 6px',
-                          flexShrink: 0,
                         }}
+                        title={p.badge}
                       >
                         {p.badge}
                       </span>
