@@ -18,6 +18,7 @@ from app.parsers.ocr_engine import (
     get_ocr_engines_status,
     is_rapidocr_available,
     setup_ocr_engine,
+    stream_setup_ocr_engine,
 )
 from app.router import (
     ModelRouter,
@@ -25,6 +26,8 @@ from app.router import (
     install_cli_harness,
     probe_lmstudio,
     probe_ollama,
+    stream_manage_cli_harness,
+    uninstall_cli_harness,
 )
 from app.router.fallback_provider import HeuristicStudyEngine
 from app.schemas import (
@@ -139,17 +142,51 @@ async def detect_ocr_vram_tier(vram_override_gb: Optional[float] = None) -> Dict
 
 
 @app.post("/api/ocr/setup")
-async def setup_ocr_backend(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def setup_ocr_backend(payload: Dict[str, Any]) -> Any:
     engine_id = str(payload.get("engine_id") or "mineru_pipeline")
     action = str(payload.get("action") or "install_and_start")
+    stream = bool(payload.get("stream", False))
     settings = load_settings()
+
+    if stream:
+        async def event_gen():
+            async for evt in stream_setup_ocr_engine(engine_id, settings, action=action):  # type: ignore
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
+
     return await setup_ocr_engine(engine_id, settings, action=action)  # type: ignore
 
 
 @app.post("/api/harnesses/install")
-async def install_harness_cli(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def install_harness_cli(payload: Dict[str, Any]) -> Any:
     cli_name = str(payload.get("cli_name") or "dsh")
-    return await install_cli_harness(cli_name)
+    action = str(payload.get("action") or "install")
+    stream = bool(payload.get("stream", False))
+
+    if stream:
+        async def event_gen():
+            async for evt in stream_manage_cli_harness(cli_name, action=action):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+    return await install_cli_harness(cli_name, action=action)
+
+
+@app.post("/api/harnesses/uninstall")
+async def uninstall_harness_cli(payload: Dict[str, Any]) -> Any:
+    cli_name = str(payload.get("cli_name") or "dsh")
+    stream = bool(payload.get("stream", False))
+
+    if stream:
+        async def event_gen():
+            async for evt in stream_manage_cli_harness(cli_name, action="uninstall"):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+    return await uninstall_cli_harness(cli_name)
 
 
 @app.post("/api/providers/settings", response_model=RouterSettings)

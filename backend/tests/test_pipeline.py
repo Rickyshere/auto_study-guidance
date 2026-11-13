@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -210,6 +211,50 @@ def test_vram_ocr_dsh_and_ai_fill():
     dsh_data = dsh_resp.json()
     assert dsh_data["ok"] is True
     assert dsh_data["available"] is True
+
+    # Streaming SSE install + uninstall + restore for DSH
+    with client.stream(
+        "POST",
+        "/api/harnesses/install",
+        json={"cli_name": "dsh", "action": "install", "stream": True},
+    ) as stream_res:
+        assert stream_res.status_code == 200
+        body = "".join(stream_res.iter_text())
+        events = [
+            json.loads(line.replace("data:", "", 1).strip())
+            for line in body.splitlines()
+            if line.strip().startswith("data:")
+        ]
+        assert any(e.get("type") == "progress" for e in events)
+        assert events[-1].get("type") == "complete"
+        assert events[-1]["result"]["available"] is True
+
+    uninst_resp = client.post("/api/harnesses/uninstall", json={"cli_name": "dsh"})
+    assert uninst_resp.status_code == 200
+    assert uninst_resp.json()["ok"] is True
+    assert not Path(r"D:\auto_study_guidance\backend\.venv\Scripts\dsh.cmd").exists()
+
+    # Restore project DSH shim after uninstall test
+    restore_resp = client.post("/api/harnesses/install", json={"cli_name": "dsh"})
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["available"] is True
+
+    # Streaming SSE for OCR setup (non-destructive cloud API target)
+    with client.stream(
+        "POST",
+        "/api/ocr/setup",
+        json={"engine_id": "somark_free_api", "action": "install_and_start", "stream": True},
+    ) as ocr_stream:
+        assert ocr_stream.status_code == 200
+        ocr_body = "".join(ocr_stream.iter_text())
+        ocr_events = [
+            json.loads(line.replace("data:", "", 1).strip())
+            for line in ocr_body.splitlines()
+            if line.strip().startswith("data:")
+        ]
+        assert any(e.get("type") == "progress" for e in ocr_events)
+        assert ocr_events[-1].get("type") == "complete"
+        assert ocr_events[-1]["result"]["ok"] is True
 
     demo = client.post("/api/projects/demo")
     assert demo.status_code == 200

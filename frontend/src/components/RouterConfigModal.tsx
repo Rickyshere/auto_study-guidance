@@ -11,8 +11,11 @@ import {
   Zap,
   ScanText,
   Download,
+  Trash2,
+  Play,
+  Loader2,
 } from 'lucide-react';
-import { api } from '../api';
+import { api, StreamProgressEvent } from '../api';
 import {
   GpuVramInfo,
   OcrEngineStatusItem,
@@ -53,6 +56,17 @@ const PROVIDER_OPTIONS: { value: ProviderType; label: string }[] = [
 
 type VramPresetKey = 'auto' | 'le_8gb' | 'gt_8_lt_48gb' | 'ge_48gb';
 
+interface TaskProgressState {
+  targetKey: string;
+  title: string;
+  action: 'install' | 'uninstall';
+  percent: number;
+  stage: string;
+  message: string;
+  logs: string[];
+  status: 'running' | 'success' | 'error';
+}
+
 function vramPresetFromOverride(override?: number | null): VramPresetKey {
   if (override === undefined || override === null) return 'auto';
   if (override >= 48) return 'ge_48gb';
@@ -78,6 +92,7 @@ export const RouterConfigModal: React.FC<Props> = ({
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [installingTarget, setInstallingTarget] = useState<string | null>(null);
+  const [taskProgress, setTaskProgress] = useState<TaskProgressState | null>(null);
 
   React.useEffect(() => {
     if (status && open) {
@@ -159,36 +174,142 @@ export const RouterConfigModal: React.FC<Props> = ({
     }
   };
 
-  const handleSetupOcr = async (engineId: OcrEngineType) => {
-    setInstallingTarget(`ocr:${engineId}`);
-    setTestResult(`正在静默执行 [${engineId}] 下载·安装·启动一条龙服务...`);
+  const applyStreamEvent = (evt: StreamProgressEvent) => {
+    setTaskProgress((prev) => {
+      if (!prev) return prev;
+      const nextLogs =
+        evt.log_line && evt.log_line.trim()
+          ? [...prev.logs, evt.log_line.trim()].slice(-40)
+          : prev.logs;
+      return {
+        ...prev,
+        percent: Math.max(prev.percent, Math.min(100, evt.percent ?? prev.percent)),
+        stage: evt.stage || prev.stage,
+        message: evt.message || prev.message,
+        logs: nextLogs,
+      };
+    });
+  };
+
+  const handleSetupOcr = async (
+    engineId: OcrEngineType,
+    action: 'install_and_start' | 'uninstall' = 'install_and_start',
+    displayName?: string
+  ) => {
+    const targetKey = `ocr:${engineId}`;
+    const isUninstall = action === 'uninstall';
+    setInstallingTarget(targetKey);
+    setTaskProgress({
+      targetKey,
+      title: displayName || engineId,
+      action: isUninstall ? 'uninstall' : 'install',
+      percent: 4,
+      stage: isUninstall ? '1/3 准备卸载' : '1/3 准备下载与安装',
+      message: isUninstall
+        ? `正在准备停止并卸载 ${displayName || engineId}...`
+        : `正在启动 [${displayName || engineId}] 静默下载·安装·启动流程...`,
+      logs: [`[start] ${action} ${engineId}`],
+      status: 'running',
+    });
+    setTestResult(null);
+
     try {
-      const res = await api.setupOcrEngine(engineId, 'install_and_start');
-      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}${res.log ? `\n${res.log}` : ''}`);
+      const res = await api.setupOcrEngineStream(engineId, action, applyStreamEvent);
+      setTaskProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              percent: 100,
+              stage: res.ok
+                ? isUninstall
+                  ? '✓ 卸载完成'
+                  : '✓ 安装完成'
+                : '操作未完成',
+              message: res.message,
+              logs: res.log
+                ? [...prev.logs, ...res.log.split('\n').filter(Boolean)].slice(-40)
+                : prev.logs,
+              status: res.ok ? 'success' : 'error',
+            }
+          : null
+      );
+      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}`);
       await onRefreshStatus();
       const vramRes = await api.detectOcrVram(draft.ocr_config.vram_override_gb);
       setLiveVram(vramRes.gpu_vram);
       setLiveOcrEngines(vramRes.ocr_engines);
-      if (res.ok) {
+      if (res.ok && !isUninstall) {
         setDraft((prev) =>
           prev ? { ...prev, ocr_config: { ...prev.ocr_config, active_engine: engineId } } : prev
         );
+      } else if (res.ok && isUninstall && draft.ocr_config.active_engine === engineId) {
+        setDraft((prev) =>
+          prev
+            ? { ...prev, ocr_config: { ...prev.ocr_config, active_engine: 'auto_recommend' } }
+            : prev
+        );
       }
     } catch (e: any) {
-      setTestResult(`❌ OCR 部署异常: ${e.message}`);
+      setTaskProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              stage: '操作异常',
+              message: e.message,
+              status: 'error',
+            }
+          : null
+      );
+      setTestResult(`❌ OCR 操作异常: ${e.message}`);
     } finally {
       setInstallingTarget(null);
     }
   };
 
-  const handleInstallHarness = async (cliName: string) => {
-    setInstallingTarget(`cli:${cliName}`);
-    setTestResult(`正在静默安装 ${cliName.toUpperCase()} CLI Harness...`);
+  const handleManageHarness = async (
+    cliName: string,
+    action: 'install' | 'uninstall' = 'install'
+  ) => {
+    const targetKey = `cli:${cliName}`;
+    const isUninstall = action === 'uninstall';
+    setInstallingTarget(targetKey);
+    setTaskProgress({
+      targetKey,
+      title: `${cliName.toUpperCase()} CLI`,
+      action,
+      percent: 6,
+      stage: isUninstall ? '1/3 准备卸载' : '1/3 准备安装',
+      message: isUninstall
+        ? `正在卸载 ${cliName.toUpperCase()} CLI Harness...`
+        : `正在静默安装 ${cliName.toUpperCase()} CLI Harness...`,
+      logs: [`[start] ${action} cli=${cliName}`],
+      status: 'running',
+    });
+    setTestResult(null);
+
     try {
-      const res = await api.installHarness(cliName);
-      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}${res.log ? `\n${res.log}` : ''}`);
+      const res = await api.manageHarnessStream(cliName, action, applyStreamEvent);
+      setTaskProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              percent: 100,
+              stage: res.ok
+                ? isUninstall
+                  ? '✓ 卸载完成'
+                  : '✓ 安装完成'
+                : '操作未完成',
+              message: res.message,
+              logs: res.log
+                ? [...prev.logs, ...res.log.split('\n').filter(Boolean)].slice(-40)
+                : prev.logs,
+              status: res.ok ? 'success' : 'error',
+            }
+          : null
+      );
+      setTestResult(`${res.ok ? '✅' : '⚠️'} ${res.message}`);
       await onRefreshStatus();
-      if (res.ok && ['dsh', 'claude', 'codex', 'gemini'].includes(cliName)) {
+      if (res.ok && !isUninstall && ['dsh', 'claude', 'codex', 'gemini'].includes(cliName)) {
         setDraft((prev) =>
           prev
             ? {
@@ -202,7 +323,17 @@ export const RouterConfigModal: React.FC<Props> = ({
         );
       }
     } catch (e: any) {
-      setTestResult(`❌ CLI 安装异常: ${e.message}`);
+      setTaskProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              stage: '操作异常',
+              message: e.message,
+              status: 'error',
+            }
+          : null
+      );
+      setTestResult(`❌ CLI 操作异常: ${e.message}`);
     } finally {
       setInstallingTarget(null);
     }
@@ -308,6 +439,142 @@ export const RouterConfigModal: React.FC<Props> = ({
         </div>
 
         <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Sticky Real-Time Install / Uninstall Progress Banner */}
+          {taskProgress && (
+            <div
+              style={{
+                position: 'sticky',
+                top: '74px',
+                zIndex: 9,
+                borderRadius: '14px',
+                backgroundColor:
+                  taskProgress.status === 'success'
+                    ? 'rgba(240, 253, 244, 0.96)'
+                    : taskProgress.status === 'error'
+                    ? 'rgba(254, 242, 242, 0.96)'
+                    : 'rgba(239, 246, 255, 0.96)',
+                backdropFilter: 'blur(14px)',
+                border:
+                  taskProgress.status === 'success'
+                    ? '1.5px solid #34C759'
+                    : taskProgress.status === 'error'
+                    ? '1.5px solid #FF3B30'
+                    : '1.5px solid #007AFF',
+                padding: '12px 14px',
+                boxShadow: '0 12px 28px -10px rgba(0, 0, 0, 0.16)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                  {taskProgress.status === 'running' ? (
+                    <Loader2 className="w-4 h-4 text-[#007AFF] animate-spin shrink-0" />
+                  ) : taskProgress.status === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-[#248A3D] shrink-0" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-[#C62828] shrink-0" />
+                  )}
+                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#1C1C1E' }}>
+                    {taskProgress.title} · {taskProgress.stage}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span
+                    className="mac-sp-tabular"
+                    style={{
+                      fontSize: '12.5px',
+                      fontWeight: 800,
+                      color:
+                        taskProgress.status === 'success'
+                          ? '#248A3D'
+                          : taskProgress.status === 'error'
+                          ? '#C62828'
+                          : '#007AFF',
+                    }}
+                  >
+                    {taskProgress.percent}%
+                  </span>
+                  {taskProgress.status !== 'running' && (
+                    <button
+                      onClick={() => setTaskProgress(null)}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: '#636366',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      收起
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Animated Progress Track */}
+              <div
+                style={{
+                  height: '7px',
+                  width: '100%',
+                  borderRadius: '999px',
+                  backgroundColor: 'rgba(60, 60, 67, 0.14)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${taskProgress.percent}%`,
+                    borderRadius: '999px',
+                    backgroundColor:
+                      taskProgress.status === 'success'
+                        ? '#34C759'
+                        : taskProgress.status === 'error'
+                        ? '#FF3B30'
+                        : '#007AFF',
+                    transition: 'width 220ms linear',
+                  }}
+                />
+              </div>
+
+              <div style={{ fontSize: '11.5px', color: '#3A3A3C', fontWeight: 500 }}>
+                {taskProgress.message}
+              </div>
+
+              {taskProgress.logs.length > 0 && (
+                <pre
+                  style={{
+                    margin: 0,
+                    borderRadius: '9px',
+                    backgroundColor: '#1C1C1E',
+                    color: '#E5E5EA',
+                    padding: '8px 10px',
+                    fontSize: '10.5px',
+                    lineHeight: 1.45,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    maxHeight: '96px',
+                    overflowY: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {taskProgress.logs.slice(-8).join('\n')}
+                </pre>
+              )}
+            </div>
+          )}
+
           {/* Section 1: GPU VRAM Detection & Tiered OCR Engine Matrix */}
           <div
             style={{
@@ -423,7 +690,10 @@ export const RouterConfigModal: React.FC<Props> = ({
             >
               {currentOcrEngines.map((eng) => {
                 const isRec = currentVram?.recommended_ocr_engine === eng.engine_id;
-                const isInstalling = installingTarget === `ocr:${eng.engine_id}`;
+                const cardKey = `ocr:${eng.engine_id}`;
+                const isCardBusy = installingTarget === cardKey;
+                const cardProgress =
+                  taskProgress && taskProgress.targetKey === cardKey ? taskProgress : null;
                 return (
                   <div
                     key={eng.engine_id}
@@ -476,87 +746,214 @@ export const RouterConfigModal: React.FC<Props> = ({
                     <div
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '6px',
-                        paddingTop: '6px',
+                        flexDirection: 'column',
+                        gap: '7px',
+                        paddingTop: '7px',
                         borderTop: '1px solid rgba(60, 60, 67, 0.08)',
                       }}
                     >
-                      <span
+                      <div
                         style={{
-                          fontSize: '10.5px',
-                          fontWeight: 600,
-                          color: eng.installed ? '#248A3D' : '#8E8E93',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '6px',
                         }}
                       >
-                        {eng.running
-                          ? '● 运行中 / 就绪'
-                          : eng.installed
-                          ? '● 已安装'
-                          : '○ 未本地安装'}
-                      </span>
+                        <span
+                          style={{
+                            fontSize: '10.5px',
+                            fontWeight: 700,
+                            color: eng.installed ? '#248A3D' : '#8E8E93',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          {eng.running
+                            ? '✓ 已安装完成 · 运行中'
+                            : eng.installed
+                            ? '✓ 已安装完成'
+                            : '○ 未本地安装'}
+                        </span>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        {eng.supports_one_click_setup && (
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '5px' }}>
+                          {eng.supports_one_click_setup && !eng.installed && (
+                            <SpringButton
+                              springLabel={`一键部署:${eng.engine_id}`}
+                              disabled={Boolean(installingTarget)}
+                              onClick={() => handleSetupOcr(eng.engine_id, 'install_and_start', eng.name)}
+                              maxShift={5}
+                              style={{
+                                borderRadius: '999px',
+                                border: 'none',
+                                backgroundColor: '#007AFF',
+                                color: '#FFFFFF',
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                padding: '4px 9px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                cursor: installingTarget ? 'wait' : 'pointer',
+                                opacity: installingTarget && !isCardBusy ? 0.55 : 1,
+                              }}
+                            >
+                              {isCardBusy ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Download className="w-3 h-3" />
+                              )}
+                              <span>
+                                {isCardBusy
+                                  ? `安装中 ${cardProgress?.percent ?? 0}%`
+                                  : eng.engine_id === 'mineru_pipeline'
+                                  ? '一键下载·安装·启动'
+                                  : '一键下载部署'}
+                              </span>
+                            </SpringButton>
+                          )}
+
+                          {eng.supports_one_click_setup && eng.installed && !eng.running && eng.engine_id !== 'paddleocr' && (
+                            <SpringButton
+                              springLabel={`启动:${eng.engine_id}`}
+                              disabled={Boolean(installingTarget)}
+                              onClick={() => handleSetupOcr(eng.engine_id, 'install_and_start', eng.name)}
+                              maxShift={4}
+                              style={{
+                                borderRadius: '999px',
+                                border: 'none',
+                                backgroundColor: '#34C759',
+                                color: '#FFFFFF',
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                padding: '4px 8px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                cursor: installingTarget ? 'wait' : 'pointer',
+                              }}
+                            >
+                              <Play className="w-3 h-3" />
+                              <span>启动服务</span>
+                            </SpringButton>
+                          )}
+
+                          {eng.supports_one_click_setup && eng.installed && (
+                            <SpringButton
+                              springLabel={`一键卸载:${eng.engine_id}`}
+                              disabled={Boolean(installingTarget)}
+                              onClick={() => handleSetupOcr(eng.engine_id, 'uninstall', eng.name)}
+                              maxShift={4}
+                              style={{
+                                borderRadius: '999px',
+                                border: '1px solid rgba(255, 59, 48, 0.3)',
+                                backgroundColor: 'rgba(255, 59, 48, 0.08)',
+                                color: '#C62828',
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                padding: '4px 8px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                cursor: installingTarget ? 'wait' : 'pointer',
+                              }}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>{isCardBusy ? '卸载中...' : '一键卸载'}</span>
+                            </SpringButton>
+                          )}
+
                           <SpringButton
-                            springLabel={`一键部署:${eng.engine_id}`}
-                            disabled={Boolean(installingTarget)}
-                            onClick={() => handleSetupOcr(eng.engine_id)}
-                            maxShift={5}
+                            springLabel={`选用:${eng.engine_id}`}
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                ocr_config: { ...draft.ocr_config, active_engine: eng.engine_id },
+                              })
+                            }
+                            maxShift={4}
                             style={{
                               borderRadius: '999px',
-                              border: 'none',
-                              backgroundColor: '#007AFF',
-                              color: '#FFFFFF',
+                              border: '1px solid rgba(60, 60, 67, 0.16)',
+                              backgroundColor:
+                                draft.ocr_config.active_engine === eng.engine_id
+                                  ? '#1C1C1E'
+                                  : '#FFFFFF',
+                              color:
+                                draft.ocr_config.active_engine === eng.engine_id
+                                  ? '#FFFFFF'
+                                  : '#1C1C1E',
                               fontSize: '10.5px',
                               fontWeight: 600,
                               padding: '4px 9px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '3px',
-                              cursor: installingTarget ? 'wait' : 'pointer',
+                              cursor: 'pointer',
                             }}
                           >
-                            <Download className="w-3 h-3" />
-                            <span>
-                              {isInstalling
-                                ? '安装启动中...'
-                                : eng.engine_id === 'mineru_pipeline'
-                                ? '一键下载·安装·启动'
-                                : '一键下载部署'}
-                            </span>
+                            {draft.ocr_config.active_engine === eng.engine_id ? '已选用' : '选用'}
                           </SpringButton>
-                        )}
-                        <SpringButton
-                          springLabel={`选用:${eng.engine_id}`}
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              ocr_config: { ...draft.ocr_config, active_engine: eng.engine_id },
-                            })
-                          }
-                          maxShift={4}
+                        </div>
+                      </div>
+
+                      {/* Inline Real-Time Progress Bar for This OCR Card */}
+                      {cardProgress && (
+                        <div
                           style={{
-                            borderRadius: '999px',
-                            border: '1px solid rgba(60, 60, 67, 0.16)',
-                            backgroundColor:
-                              draft.ocr_config.active_engine === eng.engine_id
-                                ? '#1C1C1E'
-                                : '#FFFFFF',
-                            color:
-                              draft.ocr_config.active_engine === eng.engine_id
-                                ? '#FFFFFF'
-                                : '#1C1C1E',
-                            fontSize: '10.5px',
-                            fontWeight: 600,
-                            padding: '4px 9px',
-                            cursor: 'pointer',
+                            borderRadius: '8px',
+                            backgroundColor: '#F2F2F7',
+                            padding: '6px 8px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
                           }}
                         >
-                          {draft.ocr_config.active_engine === eng.engine_id ? '已选用' : '选用'}
-                        </SpringButton>
-                      </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: '10.5px',
+                              fontWeight: 700,
+                              color:
+                                cardProgress.status === 'success'
+                                  ? '#248A3D'
+                                  : cardProgress.status === 'error'
+                                  ? '#C62828'
+                                  : '#007AFF',
+                            }}
+                          >
+                            <span>{cardProgress.stage}</span>
+                            <span className="mac-sp-tabular">{cardProgress.percent}%</span>
+                          </div>
+                          <div
+                            style={{
+                              height: '5px',
+                              width: '100%',
+                              borderRadius: '999px',
+                              backgroundColor: 'rgba(60, 60, 67, 0.14)',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: '100%',
+                                width: `${cardProgress.percent}%`,
+                                borderRadius: '999px',
+                                backgroundColor:
+                                  cardProgress.status === 'success'
+                                    ? '#34C759'
+                                    : cardProgress.status === 'error'
+                                    ? '#FF3B30'
+                                    : '#007AFF',
+                                transition: 'width 200ms linear',
+                              }}
+                            />
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#636366', wordBreak: 'break-word' }}>
+                            {cardProgress.message}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -806,70 +1203,159 @@ export const RouterConfigModal: React.FC<Props> = ({
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {status.harnesses.map((h) => (
-                  <div
-                    key={h.name}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '6px',
-                      fontSize: '11.5px',
-                      padding: '6px 9px',
-                      borderRadius: '8px',
-                      backgroundColor: '#F9F9FB',
-                      border: '1px solid rgba(60, 60, 67, 0.08)',
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <span style={{ fontWeight: 700, textTransform: 'uppercase' }}>{h.name}</span>
-                      {h.name === 'dsh' && (
-                        <span style={{ marginLeft: '5px', fontSize: '10px', color: '#007AFF', fontWeight: 600 }}>
-                          DeepSeek Harness
-                        </span>
+                {status.harnesses.map((h) => {
+                  const cliKey = `cli:${h.name}`;
+                  const isCliBusy = installingTarget === cliKey;
+                  const cliProgress =
+                    taskProgress && taskProgress.targetKey === cliKey ? taskProgress : null;
+                  return (
+                    <div
+                      key={h.name}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                        padding: '7px 9px',
+                        borderRadius: '9px',
+                        backgroundColor: '#F9F9FB',
+                        border: '1px solid rgba(60, 60, 67, 0.08)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '6px',
+                          fontSize: '11.5px',
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <span style={{ fontWeight: 700, textTransform: 'uppercase' }}>{h.name}</span>
+                          {h.name === 'dsh' && (
+                            <span style={{ marginLeft: '5px', fontSize: '10px', color: '#007AFF', fontWeight: 600 }}>
+                              DeepSeek Harness
+                            </span>
+                          )}
+                        </div>
+                        {h.available ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                color: '#248A3D',
+                                fontWeight: 700,
+                                fontSize: '10.5px',
+                              }}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" /> 已安装完成
+                            </span>
+                            <SpringButton
+                              springLabel={`一键卸载:${h.name}`}
+                              disabled={Boolean(installingTarget)}
+                              onClick={() => handleManageHarness(h.name, 'uninstall')}
+                              maxShift={4}
+                              style={{
+                                borderRadius: '999px',
+                                border: '1px solid rgba(255, 59, 48, 0.3)',
+                                backgroundColor: 'rgba(255, 59, 48, 0.08)',
+                                color: '#C62828',
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                padding: '2px 7px',
+                                cursor: installingTarget ? 'wait' : 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                              }}
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                              <span>{isCliBusy ? '卸载中...' : '一键卸载'}</span>
+                            </SpringButton>
+                          </div>
+                        ) : (
+                          <SpringButton
+                            springLabel={`一键安装:${h.name}`}
+                            disabled={Boolean(installingTarget)}
+                            onClick={() => handleManageHarness(h.name, 'install')}
+                            maxShift={4}
+                            style={{
+                              borderRadius: '999px',
+                              border: 'none',
+                              backgroundColor: '#007AFF',
+                              color: '#FFFFFF',
+                              fontSize: '10.5px',
+                              fontWeight: 600,
+                              padding: '3px 9px',
+                              cursor: installingTarget ? 'wait' : 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                            }}
+                          >
+                            {isCliBusy ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Download className="w-3 h-3" />
+                            )}
+                            <span>
+                              {isCliBusy ? `安装中 ${cliProgress?.percent ?? 0}%` : '一键安装'}
+                            </span>
+                          </SpringButton>
+                        )}
+                      </div>
+
+                      {cliProgress && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              color:
+                                cliProgress.status === 'success'
+                                  ? '#248A3D'
+                                  : cliProgress.status === 'error'
+                                  ? '#C62828'
+                                  : '#007AFF',
+                            }}
+                          >
+                            <span>{cliProgress.stage}</span>
+                            <span className="mac-sp-tabular">{cliProgress.percent}%</span>
+                          </div>
+                          <div
+                            style={{
+                              height: '4px',
+                              width: '100%',
+                              borderRadius: '999px',
+                              backgroundColor: 'rgba(60, 60, 67, 0.14)',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: '100%',
+                                width: `${cliProgress.percent}%`,
+                                borderRadius: '999px',
+                                backgroundColor:
+                                  cliProgress.status === 'success'
+                                    ? '#34C759'
+                                    : cliProgress.status === 'error'
+                                    ? '#FF3B30'
+                                    : '#007AFF',
+                                transition: 'width 200ms linear',
+                              }}
+                            />
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#636366' }}>{cliProgress.message}</div>
+                        </div>
                       )}
                     </div>
-                    {h.available ? (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          color: '#248A3D',
-                          fontWeight: 600,
-                          fontSize: '11px',
-                        }}
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" /> 已安装
-                      </span>
-                    ) : (
-                      <SpringButton
-                        springLabel={`一键安装:${h.name}`}
-                        disabled={Boolean(installingTarget)}
-                        onClick={() => handleInstallHarness(h.name)}
-                        maxShift={4}
-                        style={{
-                          borderRadius: '999px',
-                          border: 'none',
-                          backgroundColor: '#007AFF',
-                          color: '#FFFFFF',
-                          fontSize: '10.5px',
-                          fontWeight: 600,
-                          padding: '3px 8px',
-                          cursor: installingTarget ? 'wait' : 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                        }}
-                      >
-                        <XCircle className="w-3 h-3" />
-                        <span>
-                          {installingTarget === `cli:${h.name}` ? '安装中...' : '一键安装'}
-                        </span>
-                      </SpringButton>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div>

@@ -7,8 +7,9 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -146,6 +147,7 @@ def detect_gpu_vram(vram_override_gb: Optional[float] = None) -> GpuVramInfo:
 
 
 def _has_python_pkg(pkg_name: str) -> bool:
+    importlib.invalidate_caches()
     return importlib.util.find_spec(pkg_name) is not None
 
 
@@ -256,42 +258,287 @@ async def _start_silent_bg(cmd: List[str], cwd: Optional[Path] = None) -> int:
     return proc.pid
 
 
-async def setup_ocr_engine(
+async def _stream_silent_cmd(
+    cmd: List[str],
+    state: Dict[str, Any],
+    start_pct: int,
+    end_pct: int,
+    stage_label: str,
+    cwd: Optional[Path] = None,
+    timeout: int = 600,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Run a subprocess silently (no terminal window) while yielding real-time progress and logs."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd) if cwd else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        creationflags=WIN_NO_WINDOW,
+    )
+    lines: List[str] = []
+    pct = float(start_pct)
+    started_at = time.monotonic()
+    deadline = started_at + timeout
+
+    yield {
+        "type": "progress",
+        "percent": start_pct,
+        "stage": stage_label,
+        "message": f"正在执行: {' '.join(cmd[:4])}...",
+        "log_line": f"$ {' '.join(cmd)}",
+    }
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            state["returncode"] = -1
+            state["output"] = "\n".join(lines)[-2000:]
+            yield {
+                "type": "progress",
+                "percent": end_pct,
+                "stage": stage_label,
+                "message": f"{stage_label}超时 ({timeout}s)",
+                "log_line": f"[timeout] after {timeout}s",
+            }
+            return
+
+        try:
+            raw_line = await asyncio.wait_for(
+                proc.stdout.readline(),  # type: ignore[union-attr]
+                timeout=min(1.2, remaining),
+            )
+            if not raw_line:
+                break
+            text = raw_line.decode("utf-8", errors="replace").strip()
+            if text:
+                lines.append(text)
+                pct = min(float(end_pct - 2), pct + 1.8)
+                yield {
+                    "type": "progress",
+                    "percent": int(round(pct)),
+                    "stage": stage_label,
+                    "message": text[:95],
+                    "log_line": text,
+                }
+        except asyncio.TimeoutError:
+            elapsed = int(time.monotonic() - started_at)
+            pct = min(float(end_pct - 3), pct + 0.8)
+            yield {
+                "type": "progress",
+                "percent": int(round(pct)),
+                "stage": stage_label,
+                "message": f"{stage_label}进行中... (已耗时 {elapsed}s)",
+                "log_line": "",
+            }
+
+    rc = await proc.wait()
+    state["returncode"] = rc if rc is not None else 0
+    state["output"] = "\n".join(lines)[-2000:]
+
+
+async def stream_setup_ocr_engine(
     engine_id: OcrEngineType,
     settings: RouterSettings,
     action: str = "install_and_start",
-) -> Dict[str, Any]:
-    """One-click download, install, and silently start the requested OCR engine."""
+) -> AsyncIterator[Dict[str, Any]]:
+    """Stream real-time progress for one-click download, install, and silent start."""
     py_exe = str(VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable))
     logs: List[str] = []
 
-    if engine_id == "somark_free_api":
-        return {
-            "ok": True,
-            "engine_id": engine_id,
-            "installed": True,
-            "running": True,
-            "message": f"SoMark Free-OXR 开放 API 无需本地安装，地址：{settings.ocr_config.somark_api_base_url}",
-            "log": "",
+    yield {
+        "type": "progress",
+        "percent": 6,
+        "stage": "1/3 环境检测",
+        "message": f"正在校验 Python 运行时与 {engine_id} 当前状态...",
+        "log_line": f"[init] engine={engine_id}, action={action}",
+    }
+
+    if action == "uninstall":
+        yield {
+            "type": "progress",
+            "percent": 12,
+            "stage": "1/3 停止相关服务",
+            "message": f"正在检查并停止 {engine_id} 运行中的本地服务...",
+            "log_line": f"[uninstall] stopping background processes for {engine_id}...",
         }
+        if engine_id in ("mineru_pipeline", "mineru_full"):
+            if sys.platform == "win32":
+                await _run_silent_cmd(["taskkill", "/F", "/IM", "mineru-api.exe", "/T"], timeout=15)
+            state: Dict[str, Any] = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
+                [py_exe, "-m", "pip", "uninstall", "-y", "mineru", "magic-pdf"],
+                state=state,
+                start_pct=20,
+                end_pct=88,
+                stage_label="2/3 卸载 MinerU 软件包",
+                timeout=300,
+            ):
+                yield evt
+            importlib.invalidate_caches()
+            now_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
+            msg = "MinerU 已成功卸载并清理完毕。" if not now_installed else "MinerU 卸载命令已执行，部分二进制残留需手动清理。"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "卸载完成",
+                "message": msg,
+                "result": {
+                    "ok": not now_installed,
+                    "engine_id": engine_id,
+                    "installed": now_installed,
+                    "running": False,
+                    "message": msg,
+                    "log": state["output"],
+                },
+            }
+            return
+
+        if engine_id == "paddleocr":
+            state = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
+                [py_exe, "-m", "pip", "uninstall", "-y", "paddleocr"],
+                state=state,
+                start_pct=20,
+                end_pct=88,
+                stage_label="2/3 卸载 PaddleOCR 软件包",
+                timeout=300,
+            ):
+                yield evt
+            importlib.invalidate_caches()
+            now_installed = _has_python_pkg("paddleocr")
+            msg = "PaddleOCR 已成功卸载。" if not now_installed else "PaddleOCR 卸载未完全清除。"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "卸载完成",
+                "message": msg,
+                "result": {
+                    "ok": not now_installed,
+                    "engine_id": engine_id,
+                    "installed": now_installed,
+                    "running": False,
+                    "message": msg,
+                    "log": state["output"],
+                },
+            }
+            return
+
+        if engine_id == "oxr_full":
+            yield {
+                "type": "progress",
+                "percent": 45,
+                "stage": "2/3 清理 OXR 本地仓库",
+                "message": "正在移除 backend/tools/oxr 目录...",
+                "log_line": f"[uninstall] removing {OXR_REPO_DIR}",
+            }
+            if OXR_REPO_DIR.exists():
+                shutil.rmtree(OXR_REPO_DIR, ignore_errors=True)
+            importlib.invalidate_caches()
+            still_there = OXR_REPO_DIR.exists()
+            msg = "SoMark OXR 本地仓库已卸载清理。" if not still_there else "未能完全删除 backend/tools/oxr，请检查文件占用。"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "卸载完成",
+                "message": msg,
+                "result": {
+                    "ok": not still_there,
+                    "engine_id": engine_id,
+                    "installed": still_there,
+                    "running": False,
+                    "message": msg,
+                    "log": msg,
+                },
+            }
+            return
+
+        msg = f"引擎 {engine_id} 为云端/内置组件，无需本地卸载。"
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "完成",
+            "message": msg,
+            "result": {
+                "ok": True,
+                "engine_id": engine_id,
+                "installed": True,
+                "running": True,
+                "message": msg,
+                "log": "",
+            },
+        }
+        return
+
+    if engine_id == "somark_free_api":
+        msg = f"SoMark Free-OXR 开放 API 无需本地安装，地址：{settings.ocr_config.somark_api_base_url}"
+        yield {
+            "type": "progress",
+            "percent": 70,
+            "stage": "2/3 连通性检查",
+            "message": "正在校验 Free-OXR 开放 API 端点配置...",
+            "log_line": msg,
+        }
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "完成",
+            "message": msg,
+            "result": {
+                "ok": True,
+                "engine_id": engine_id,
+                "installed": True,
+                "running": True,
+                "message": msg,
+                "log": msg,
+            },
+        }
+        return
 
     if engine_id in ("mineru_pipeline", "mineru_full"):
         pkg = "mineru[pipeline]" if engine_id == "mineru_pipeline" else "mineru[all]"
         installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf")
         if not installed or action in ("install", "install_and_start"):
-            code, out = await _run_silent_cmd([py_exe, "-m", "pip", "install", "-U", pkg], timeout=600)
-            logs.append(out[-1200:])
-            if code != 0:
-                return {
-                    "ok": False,
-                    "engine_id": engine_id,
-                    "installed": _has_python_pkg("mineru") or _has_python_pkg("magic_pdf"),
-                    "running": False,
-                    "message": f"{pkg} 安装返回错误码 {code}，可切换 Free-OXR 开放 API 或 PaddleOCR。",
-                    "log": "\n".join(logs),
+            state: Dict[str, Any] = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
+                [py_exe, "-m", "pip", "install", "-U", pkg],
+                state=state,
+                start_pct=14,
+                end_pct=80,
+                stage_label="2/3 下载并安装 MinerU 组件",
+                timeout=600,
+            ):
+                yield evt
+            if state["output"]:
+                logs.append(state["output"][-1200:])
+            if state["returncode"] != 0:
+                msg = f"{pkg} 安装返回错误码 {state['returncode']}，可切换 Free-OXR 开放 API 或 PaddleOCR。"
+                yield {
+                    "type": "complete",
+                    "percent": 100,
+                    "stage": "安装失败",
+                    "message": msg,
+                    "result": {
+                        "ok": False,
+                        "engine_id": engine_id,
+                        "installed": _has_python_pkg("mineru") or _has_python_pkg("magic_pdf"),
+                        "running": False,
+                        "message": msg,
+                        "log": "\n".join(logs),
+                    },
                 }
+                return
 
-        # Try starting MinerU local API silently if binary exists
+        yield {
+            "type": "progress",
+            "percent": 86,
+            "stage": "3/3 静默启动与校验",
+            "message": "正在检测并静默拉起 MinerU 本地服务...",
+            "log_line": "[start] checking mineru-api service...",
+        }
         mineru_api_exe = shutil.which("mineru-api") or str(Path(py_exe).with_name("mineru-api.exe"))
         running = await _probe_http_alive(settings.ocr_config.mineru_service_url)
         if not running and Path(mineru_api_exe).exists():
@@ -302,89 +549,186 @@ async def setup_ocr_engine(
             await asyncio.sleep(1.5)
             running = await _probe_http_alive(settings.ocr_config.mineru_service_url)
             logs.append(f"已静默拉起 {mineru_api_exe} ({backend_mode})")
+            yield {
+                "type": "progress",
+                "percent": 96,
+                "stage": "3/3 静默启动与校验",
+                "message": f"已静默拉起 {backend_mode} 后端服务",
+                "log_line": f"已静默拉起 {mineru_api_exe} ({backend_mode})",
+            }
 
         now_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
-        return {
-            "ok": now_installed,
-            "engine_id": engine_id,
-            "installed": now_installed,
-            "running": running,
-            "message": (
-                f"{'MinerU 2 Pipeline (无vLLM)' if engine_id == 'mineru_pipeline' else 'MinerU 2 全量本地'} "
-                f"已就绪{'并已静默启动服务' if running else '（解析时按需静默调用）'}。"
-            ),
-            "log": "\n".join(logs),
+        msg = (
+            f"{'MinerU 2 Pipeline (无vLLM)' if engine_id == 'mineru_pipeline' else 'MinerU 2 全量本地'} "
+            f"已就绪{'并已静默启动服务' if running else '（解析时按需静默调用）'}。"
+        )
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "完成",
+            "message": msg,
+            "result": {
+                "ok": now_installed,
+                "engine_id": engine_id,
+                "installed": now_installed,
+                "running": running,
+                "message": msg,
+                "log": "\n".join(logs),
+            },
         }
+        return
 
     if engine_id == "paddleocr":
-        code, out = await _run_silent_cmd(
+        state = {"returncode": 0, "output": ""}
+        async for evt in _stream_silent_cmd(
             [py_exe, "-m", "pip", "install", "-U", "paddleocr", "paddlepaddle"],
+            state=state,
+            start_pct=15,
+            end_pct=88,
+            stage_label="2/3 下载并安装 PaddleOCR",
             timeout=600,
-        )
-        logs.append(out[-1200:])
+        ):
+            yield evt
+        if state["output"]:
+            logs.append(state["output"][-1200:])
         installed = _has_python_pkg("paddleocr")
-        return {
-            "ok": code == 0 and installed,
-            "engine_id": engine_id,
-            "installed": installed,
-            "running": installed,
-            "message": "PaddleOCR 安装完成，已可作为极速 OCR 备选。" if installed else "PaddleOCR 安装未完成，请检查日志。",
-            "log": "\n".join(logs),
+        ok = state["returncode"] == 0 and installed
+        msg = "PaddleOCR 安装完成，已可作为极速 OCR 备选。" if installed else "PaddleOCR 安装未完成，请检查日志。"
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "完成" if ok else "安装失败",
+            "message": msg,
+            "result": {
+                "ok": ok,
+                "engine_id": engine_id,
+                "installed": installed,
+                "running": installed,
+                "message": msg,
+                "log": "\n".join(logs),
+            },
         }
+        return
 
     if engine_id == "oxr_full":
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)
         git_exe = shutil.which("git")
         if not OXR_REPO_DIR.exists():
             if not git_exe:
-                return {
-                    "ok": False,
-                    "engine_id": engine_id,
-                    "installed": False,
-                    "running": False,
-                    "message": "未检测到 git，无法自动克隆 https://github.com/SoMarkAI/OXR/ 。",
-                    "log": "",
+                msg = "未检测到 git，无法自动克隆 https://github.com/SoMarkAI/OXR/ 。"
+                yield {
+                    "type": "complete",
+                    "percent": 100,
+                    "stage": "失败",
+                    "message": msg,
+                    "result": {
+                        "ok": False,
+                        "engine_id": engine_id,
+                        "installed": False,
+                        "running": False,
+                        "message": msg,
+                        "log": "",
+                    },
                 }
-            code, out = await _run_silent_cmd(
+                return
+            clone_state: Dict[str, Any] = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
                 [git_exe, "clone", "--depth", "1", "https://github.com/SoMarkAI/OXR.git", str(OXR_REPO_DIR)],
+                state=clone_state,
+                start_pct=12,
+                end_pct=46,
+                stage_label="2/3 克隆 SoMarkAI/OXR 仓库",
                 timeout=300,
-            )
-            logs.append(out[-1000:])
-            if code != 0:
-                return {
-                    "ok": False,
-                    "engine_id": engine_id,
-                    "installed": False,
-                    "running": False,
-                    "message": "克隆 OXR 仓库失败，请检查网络连通性。",
-                    "log": "\n".join(logs),
+            ):
+                yield evt
+            if clone_state["output"]:
+                logs.append(clone_state["output"][-1000:])
+            if clone_state["returncode"] != 0:
+                msg = "克隆 OXR 仓库失败，请检查网络连通性。"
+                yield {
+                    "type": "complete",
+                    "percent": 100,
+                    "stage": "失败",
+                    "message": msg,
+                    "result": {
+                        "ok": False,
+                        "engine_id": engine_id,
+                        "installed": False,
+                        "running": False,
+                        "message": msg,
+                        "log": "\n".join(logs),
+                    },
                 }
+                return
 
         req_file = OXR_REPO_DIR / "requirements.txt"
         if req_file.exists():
-            code, out = await _run_silent_cmd(
+            pip_state: Dict[str, Any] = {"returncode": 0, "output": ""}
+            async for evt in _stream_silent_cmd(
                 [py_exe, "-m", "pip", "install", "-r", str(req_file)],
+                state=pip_state,
+                start_pct=50,
+                end_pct=90,
+                stage_label="3/3 安装 OXR 依赖并校验",
                 cwd=OXR_REPO_DIR,
                 timeout=600,
-            )
-            logs.append(out[-1000:])
+            ):
+                yield evt
+            if pip_state["output"]:
+                logs.append(pip_state["output"][-1000:])
 
         oxr_installed = OXR_REPO_DIR.exists()
-        return {
-            "ok": oxr_installed,
-            "engine_id": engine_id,
-            "installed": oxr_installed,
-            "running": await _probe_http_alive(settings.ocr_config.oxr_service_url),
-            "message": "SoMark OXR 全量仓库已部署至 backend/tools/oxr。" if oxr_installed else "OXR 部署失败。",
-            "log": "\n".join(logs),
+        running = await _probe_http_alive(settings.ocr_config.oxr_service_url)
+        msg = "SoMark OXR 全量仓库已部署至 backend/tools/oxr。" if oxr_installed else "OXR 部署失败。"
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "完成" if oxr_installed else "失败",
+            "message": msg,
+            "result": {
+                "ok": oxr_installed,
+                "engine_id": engine_id,
+                "installed": oxr_installed,
+                "running": running,
+                "message": msg,
+                "log": "\n".join(logs),
+            },
         }
+        return
 
-    return {
-        "ok": True,
+    msg = f"引擎 {engine_id} 已就绪。"
+    yield {
+        "type": "complete",
+        "percent": 100,
+        "stage": "完成",
+        "message": msg,
+        "result": {
+            "ok": True,
+            "engine_id": engine_id,
+            "installed": True,
+            "running": True,
+            "message": msg,
+            "log": "",
+        },
+    }
+
+
+async def setup_ocr_engine(
+    engine_id: OcrEngineType,
+    settings: RouterSettings,
+    action: str = "install_and_start",
+) -> Dict[str, Any]:
+    """One-click download, install, and silently start the requested OCR engine."""
+    final_res: Optional[Dict[str, Any]] = None
+    async for evt in stream_setup_ocr_engine(engine_id, settings, action=action):
+        if evt.get("type") == "complete":
+            final_res = evt.get("result")
+    return final_res or {
+        "ok": False,
         "engine_id": engine_id,
-        "installed": True,
-        "running": True,
-        "message": f"引擎 {engine_id} 已就绪。",
+        "installed": False,
+        "running": False,
+        "message": "部署未返回结果",
         "log": "",
     }
 

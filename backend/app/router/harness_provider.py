@@ -6,8 +6,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.schemas import HarnessConfig, HarnessStatusItem
 
@@ -95,37 +96,215 @@ def detect_installed_harnesses() -> List[HarnessStatusItem]:
     ]
 
 
-async def install_cli_harness(cli_name: str) -> Dict[str, Any]:
-    """Silently install missing CLI Harness (dsh, claude, codex, gemini) without opening terminals."""
+async def _stream_harness_cmd(
+    cmd: List[str],
+    state: Dict[str, Any],
+    start_pct: int,
+    end_pct: int,
+    stage_label: str,
+    timeout: int = 300,
+) -> AsyncIterator[Dict[str, Any]]:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        creationflags=WIN_NO_WINDOW,
+    )
+    lines: List[str] = []
+    pct = float(start_pct)
+    started_at = time.monotonic()
+    deadline = started_at + timeout
+
+    yield {
+        "type": "progress",
+        "percent": start_pct,
+        "stage": stage_label,
+        "message": f"正在执行: {' '.join(cmd)}",
+        "log_line": f"$ {' '.join(cmd)}",
+    }
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            state["returncode"] = -1
+            state["output"] = "\n".join(lines)[-1500:]
+            return
+
+        try:
+            raw_line = await asyncio.wait_for(
+                proc.stdout.readline(),  # type: ignore[union-attr]
+                timeout=min(1.2, remaining),
+            )
+            if not raw_line:
+                break
+            text = raw_line.decode("utf-8", errors="replace").strip()
+            if text:
+                lines.append(text)
+                pct = min(float(end_pct - 2), pct + 2.2)
+                yield {
+                    "type": "progress",
+                    "percent": int(round(pct)),
+                    "stage": stage_label,
+                    "message": text[:95],
+                    "log_line": text,
+                }
+        except asyncio.TimeoutError:
+            elapsed = int(time.monotonic() - started_at)
+            pct = min(float(end_pct - 3), pct + 1.0)
+            yield {
+                "type": "progress",
+                "percent": int(round(pct)),
+                "stage": stage_label,
+                "message": f"{stage_label}进行中... (已耗时 {elapsed}s)",
+                "log_line": "",
+            }
+
+    rc = await proc.wait()
+    state["returncode"] = rc if rc is not None else 0
+    state["output"] = "\n".join(lines)[-1500:]
+
+
+async def stream_manage_cli_harness(
+    cli_name: str,
+    action: str = "install",
+) -> AsyncIterator[Dict[str, Any]]:
+    """Stream real-time progress for silent CLI Harness install or uninstall."""
     cli = cli_name.strip().lower()
+    act = "uninstall" if action == "uninstall" else "install"
+
+    yield {
+        "type": "progress",
+        "percent": 10,
+        "stage": "1/3 环境检测",
+        "message": f"正在检测 {cli.upper()} CLI 环境与可执行路径...",
+        "log_line": f"[init] cli={cli} action={act}",
+    }
+
     if cli == "dsh":
+        wrapper_cmd = VENV_SCRIPTS / "dsh.cmd"
+        wrapper_exe = VENV_SCRIPTS / "dsh.exe"
+        if act == "uninstall":
+            yield {
+                "type": "progress",
+                "percent": 35,
+                "stage": "2/3 移除 DSH 启动器",
+                "message": "正在清理 .venv\\Scripts\\dsh.cmd ...",
+                "log_line": f"[uninstall] removing {wrapper_cmd}",
+            }
+            try:
+                wrapper_cmd.unlink(missing_ok=True)
+                wrapper_exe.unlink(missing_ok=True)
+            except Exception as exc:
+                msg = f"DSH 卸载失败: {exc}"
+                yield {
+                    "type": "complete",
+                    "percent": 100,
+                    "stage": "失败",
+                    "message": msg,
+                    "result": {
+                        "ok": False,
+                        "cli_name": "dsh",
+                        "available": True,
+                        "executable_path": str(wrapper_cmd),
+                        "message": msg,
+                        "log": str(exc),
+                    },
+                }
+                return
+
+            yield {
+                "type": "progress",
+                "percent": 82,
+                "stage": "3/3 校验卸载状态",
+                "message": "正在重新扫描本机 CLI 列表...",
+                "log_line": "[verify] checking installed harnesses...",
+            }
+            detected = {item.name: item for item in detect_installed_harnesses()}
+            item = detected.get("dsh")
+            still_avail = bool(item and item.available)
+            msg = (
+                "DeepSeek Harness (dsh) 已一键卸载完成。"
+                if not still_avail
+                else f"已移除项目内 dsh.cmd，但检测到系统全局路径仍存在: {item.executable_path if item else ''}"
+            )
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "卸载完成",
+                "message": msg,
+                "result": {
+                    "ok": True,
+                    "cli_name": "dsh",
+                    "available": still_avail,
+                    "executable_path": item.executable_path if item else None,
+                    "message": msg,
+                    "log": f"Removed {wrapper_cmd}",
+                },
+            }
+            return
+
+        # DSH install
         try:
             VENV_SCRIPTS.mkdir(parents=True, exist_ok=True)
             py_exe = str(VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable))
-            wrapper_cmd = VENV_SCRIPTS / "dsh.cmd"
+            yield {
+                "type": "progress",
+                "percent": 55,
+                "stage": "2/3 部署 DSH CLI 启动器",
+                "message": "正在写入 .venv\\Scripts\\dsh.cmd 入口...",
+                "log_line": f"[install] writing {wrapper_cmd}",
+            }
             wrapper_cmd.write_text(
                 f'@echo off\r\n"{py_exe}" "D:\\auto_study_guidance\\backend\\app\\router\\dsh_cli.py" %*\r\n',
                 encoding="utf-8",
             )
+            yield {
+                "type": "progress",
+                "percent": 88,
+                "stage": "3/3 校验安装状态",
+                "message": "正在验证 dsh.cmd 可执行性与配置...",
+                "log_line": f"[verify] {wrapper_cmd} created",
+            }
             detected = {item.name: item for item in detect_installed_harnesses()}
             item = detected.get("dsh")
-            return {
-                "ok": bool(item and item.available),
-                "cli_name": "dsh",
-                "available": bool(item and item.available),
-                "executable_path": item.executable_path if item else None,
-                "message": "DeepSeek Harness (dsh) 一键安装完成，已在 .venv\\Scripts\\dsh.cmd 就绪。",
-                "log": str(wrapper_cmd),
+            avail = bool(item and item.available)
+            msg = "DeepSeek Harness (dsh) 一键安装完成，已在 .venv\\Scripts\\dsh.cmd 就绪。"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "安装完成",
+                "message": msg,
+                "result": {
+                    "ok": avail,
+                    "cli_name": "dsh",
+                    "available": avail,
+                    "executable_path": item.executable_path if item else None,
+                    "message": msg,
+                    "log": str(wrapper_cmd),
+                },
             }
+            return
         except Exception as exc:
-            return {
-                "ok": False,
-                "cli_name": "dsh",
-                "available": False,
-                "executable_path": None,
-                "message": f"DSH 安装失败: {exc}",
-                "log": "",
+            msg = f"DSH 安装失败: {exc}"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "失败",
+                "message": msg,
+                "result": {
+                    "ok": False,
+                    "cli_name": "dsh",
+                    "available": False,
+                    "executable_path": None,
+                    "message": msg,
+                    "log": "",
+                },
             }
+            return
 
     npm_pkg_map = {
         "claude": "@anthropic-ai/claude-code",
@@ -134,51 +313,107 @@ async def install_cli_harness(cli_name: str) -> Dict[str, Any]:
     }
     pkg = npm_pkg_map.get(cli)
     if not pkg:
-        return {
-            "ok": False,
-            "cli_name": cli,
-            "available": False,
-            "executable_path": None,
-            "message": f"不支持一键安装未知 CLI: {cli}",
-            "log": "",
+        msg = f"不支持一键管理未知 CLI: {cli}"
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "失败",
+            "message": msg,
+            "result": {
+                "ok": False,
+                "cli_name": cli,
+                "available": False,
+                "executable_path": None,
+                "message": msg,
+                "log": "",
+            },
         }
+        return
 
     npm_exe = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm_exe:
-        return {
-            "ok": False,
-            "cli_name": cli,
-            "available": False,
-            "executable_path": None,
-            "message": f"本机未找到 npm，无法自动安装 {pkg}，请先安装 Node.js 或手动运行 npm install -g {pkg}。",
-            "log": "",
+        msg = f"本机未找到 npm，无法自动{('卸载' if act == 'uninstall' else '安装')} {pkg}，请先安装 Node.js 或手动运行 npm {act} -g {pkg}。"
+        yield {
+            "type": "complete",
+            "percent": 100,
+            "stage": "失败",
+            "message": msg,
+            "result": {
+                "ok": False,
+                "cli_name": cli,
+                "available": False,
+                "executable_path": None,
+                "message": msg,
+                "log": "",
+            },
         }
+        return
 
-    proc = await asyncio.create_subprocess_exec(
-        npm_exe,
-        "install",
-        "-g",
-        pkg,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        creationflags=WIN_NO_WINDOW,
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
-    out = (stdout or b"").decode("utf-8", errors="replace").strip()
+    state: Dict[str, Any] = {"returncode": 0, "output": ""}
+    stage_label = f"2/3 {'卸载' if act == 'uninstall' else '下载并全局安装'} {pkg}"
+    async for evt in _stream_harness_cmd(
+        [npm_exe, "uninstall" if act == "uninstall" else "install", "-g", pkg],
+        state=state,
+        start_pct=18,
+        end_pct=88,
+        stage_label=stage_label,
+        timeout=300,
+    ):
+        yield evt
+
+    yield {
+        "type": "progress",
+        "percent": 94,
+        "stage": "3/3 校验 CLI 状态",
+        "message": f"正在重新探测 {cli} 可执行路径...",
+        "log_line": f"[verify] probing {cli}...",
+    }
     detected = {item.name: item for item in detect_installed_harnesses()}
     item = detected.get(cli)
-    return {
-        "ok": proc.returncode == 0 and bool(item and item.available),
-        "cli_name": cli,
-        "available": bool(item and item.available),
-        "executable_path": item.executable_path if item else None,
-        "message": (
-            f"{cli} CLI 安装成功并已自动探测到可执行路径。"
-            if item and item.available
-            else f"{cli} CLI 安装未完成 (code={proc.returncode})，请检查日志。"
-        ),
-        "log": out[-1200:],
+    avail = bool(item and item.available)
+    if act == "uninstall":
+        ok = state["returncode"] == 0 and not avail
+        msg = f"{cli} CLI 已一键卸载完成。" if not avail else f"{cli} CLI 卸载未完全移除 (code={state['returncode']})，请检查日志。"
+        done_stage = "卸载完成" if ok else "卸载结束"
+    else:
+        ok = state["returncode"] == 0 and avail
+        msg = f"{cli} CLI 安装成功并已自动探测到可执行路径。" if avail else f"{cli} CLI 安装未完成 (code={state['returncode']})，请检查日志。"
+        done_stage = "安装完成" if ok else "安装失败"
+
+    yield {
+        "type": "complete",
+        "percent": 100,
+        "stage": done_stage,
+        "message": msg,
+        "result": {
+            "ok": ok,
+            "cli_name": cli,
+            "available": avail,
+            "executable_path": item.executable_path if item else None,
+            "message": msg,
+            "log": state["output"][-1200:],
+        },
     }
+
+
+async def install_cli_harness(cli_name: str, action: str = "install") -> Dict[str, Any]:
+    """Silently install or uninstall CLI Harness (dsh, claude, codex, gemini) without opening terminals."""
+    final_res: Optional[Dict[str, Any]] = None
+    async for evt in stream_manage_cli_harness(cli_name, action=action):
+        if evt.get("type") == "complete":
+            final_res = evt.get("result")
+    return final_res or {
+        "ok": False,
+        "cli_name": cli_name,
+        "available": False,
+        "executable_path": None,
+        "message": "CLI 操作未返回结果",
+        "log": "",
+    }
+
+
+async def uninstall_cli_harness(cli_name: str) -> Dict[str, Any]:
+    return await install_cli_harness(cli_name, action="uninstall")
 
 
 async def run_cli_harness(

@@ -26,6 +26,64 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+export interface StreamProgressEvent {
+  type: 'progress' | 'complete' | 'error';
+  percent: number;
+  stage: string;
+  message: string;
+  log_line?: string;
+  result?: any;
+}
+
+async function postSseStream<T>(
+  url: string,
+  body: Record<string, unknown>,
+  onProgress: (evt: StreamProgressEvent) => void
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`流式请求失败 (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let finalResult: T | null = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith('data:')) continue;
+      const jsonStr = line.replace(/^data:\s*/, '');
+      try {
+        const evt = JSON.parse(jsonStr) as StreamProgressEvent;
+        onProgress(evt);
+        if (evt.type === 'complete' && evt.result !== undefined) {
+          finalResult = evt.result as T;
+        } else if (evt.type === 'error') {
+          throw new Error(evt.message || '执行出错');
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message !== 'Unexpected end of JSON input') {
+          throw err;
+        }
+      }
+    }
+  }
+  if (!finalResult) {
+    throw new Error('操作已结束但未返回最终结果');
+  }
+  return finalResult;
+}
+
 export const api = {
   getProviderStatus: () => requestJson<ProviderStatusResponse>('/api/providers/status'),
 
@@ -69,6 +127,34 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ engine_id: engineId, action }),
     }),
+
+  setupOcrEngineStream: (
+    engineId: OcrEngineType,
+    action: 'install_and_start' | 'install' | 'uninstall',
+    onProgress: (evt: StreamProgressEvent) => void
+  ) =>
+    postSseStream<{
+      ok: boolean;
+      engine_id: OcrEngineType;
+      installed: boolean;
+      running: boolean;
+      message: string;
+      log: string;
+    }>('/api/ocr/setup', { engine_id: engineId, action }, onProgress),
+
+  manageHarnessStream: (
+    cliName: string,
+    action: 'install' | 'uninstall',
+    onProgress: (evt: StreamProgressEvent) => void
+  ) =>
+    postSseStream<{
+      ok: boolean;
+      cli_name: string;
+      available: boolean;
+      executable_path?: string | null;
+      message: string;
+      log: string;
+    }>('/api/harnesses/install', { cli_name: cliName, action }, onProgress),
 
   installHarness: (cliName: string) =>
     requestJson<{
