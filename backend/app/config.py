@@ -63,11 +63,58 @@ def _read_raw_existing_keys() -> Tuple[str, str]:
     return "", ""
 
 
+def _read_dsh_magpie_env() -> Tuple[str, str]:
+    """Read MAGPIE_GATEWAY_KEY / MAGPIE_BASE_URL from ~/.dsh/.env if present."""
+    env_file = Path.home() / ".dsh" / ".env"
+    key = ""
+    url = ""
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                k, v = stripped.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k == "MAGPIE_GATEWAY_KEY" and v:
+                    key = v
+                elif k in ("MAGPIE_BASE_URL", "MAGPIE_GATEWAY_URL") and v:
+                    url = v
+        except Exception:
+            pass
+    return key, url
+
+
+def _migrate_raw_settings(raw: dict) -> tuple[dict, bool]:
+    changed = False
+    data = dict(raw)
+    if data.get("active_provider") in ("heuristic", "local", None, ""):
+        data["active_provider"] = "harness"
+        changed = True
+    if "local_config" in data:
+        data.pop("local_config", None)
+        changed = True
+    if data.get("ui_visual_mode") not in ("academic_pure", "liquid_glass"):
+        data["ui_visual_mode"] = "academic_pure"
+        changed = True
+    stage_map = data.get("stage_mapping")
+    if isinstance(stage_map, dict):
+        for stage_key, sel in list(stage_map.items()):
+            if isinstance(sel, dict) and sel.get("provider") in ("heuristic", "local", None, ""):
+                sel["provider"] = "harness"
+                changed = True
+    return data, changed
+
+
 def load_settings() -> RouterSettings:
     settings: RouterSettings
+    migrated = False
     if SETTINGS_FILE.exists():
         try:
             raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                raw, migrated = _migrate_raw_settings(raw)
             settings = RouterSettings.model_validate(raw)
         except Exception:
             settings = RouterSettings()
@@ -90,6 +137,20 @@ def load_settings() -> RouterSettings:
         settings = settings.model_copy(
             update={"ocr_config": settings.ocr_config.model_copy(update={"somark_api_key": env_somark_key})}
         )
+
+    magpie_key, magpie_url = _read_dsh_magpie_env()
+    free_ai_updates = {}
+    if magpie_key and (not settings.free_ai_auth.magpie_gateway_key or settings.free_ai_auth.magpie_gateway_key == "magpie"):
+        free_ai_updates["magpie_gateway_key"] = magpie_key
+    if magpie_url and not settings.free_ai_auth.magpie_gateway_url:
+        free_ai_updates["magpie_gateway_url"] = magpie_url
+    if free_ai_updates:
+        settings = settings.model_copy(
+            update={"free_ai_auth": settings.free_ai_auth.model_copy(update=free_ai_updates)}
+        )
+
+    if migrated:
+        save_settings(settings)
     return settings
 
 

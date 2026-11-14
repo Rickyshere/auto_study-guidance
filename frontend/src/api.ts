@@ -1,4 +1,6 @@
 import {
+  CloudConfig,
+  FreeAiAuthConfig,
   GpuVramInfo,
   OcrEngineStatusItem,
   OcrEngineType,
@@ -6,11 +8,24 @@ import {
   ProjectDetailResponse,
   ProjectSummary,
   ProviderStatusResponse,
+  ProviderType,
+  QuizQuestion,
   RouterSettings,
   StudyBlueprint,
   StudyPackage,
   UpdateStatusResponse,
 } from './types';
+
+export interface SseProgressEvent {
+  type: 'progress' | 'complete' | 'error' | 'cancelled' | 'log' | 'done';
+  stage?: string;
+  percent?: number;
+  progress?: number;
+  message?: string;
+  ok?: boolean;
+  package?: StudyPackage;
+  detail?: ProjectDetailResponse;
+}
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -200,7 +215,7 @@ export const api = {
 
   listProjects: () => requestJson<ProjectSummary[]>('/api/projects'),
 
-  uploadDocument: async (file: File, defaultPresetId = 'self_study_guide') => {
+  uploadDocument: async (file: File, defaultPresetId = 'A_beginner') => {
     const form = new FormData();
     form.append('file', file);
     form.append('default_preset_id', defaultPresetId);
@@ -358,17 +373,189 @@ export const api = {
     return finalPkg;
   },
 
+  setupMagpieAndDshStream: async (
+    onEvent: (evt: SseProgressEvent) => void,
+    gatewayUrl = 'http://127.0.0.1:3425/v1'
+  ): Promise<SseProgressEvent> => {
+    const res = await fetch('/api/harnesses/setup-magpie-dsh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gateway_url: gatewayUrl, stream: true }),
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`一键部署 Magpie + DSH 启动失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let lastEvt: SseProgressEvent = { type: 'done', progress: 100, ok: false };
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            const evt = JSON.parse(line.slice(5).trim()) as SseProgressEvent;
+            lastEvt = evt;
+            onEvent(evt);
+            if (evt.type === 'error') {
+              throw new Error(evt.message || '安装过程异常');
+            }
+          }
+        }
+      }
+    }
+    return lastEvt;
+  },
+
+  authorizeFreeAi: (payload: {
+    authorized: boolean;
+    preferred_proxy_mode?: 'magpie_dsh' | 'direct_cli';
+    selected_free_model?: string;
+    magpie_gateway_url?: string;
+  }) =>
+    requestJson<RouterSettings>('/api/harnesses/authorize-free-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  testProviderConnection: (payload: {
+    provider: ProviderType;
+    cloud_config?: CloudConfig;
+    free_ai_auth?: FreeAiAuthConfig;
+  }) =>
+    requestJson<{ ok: boolean; provider: string; label?: string; sample_response?: string; error?: string }>(
+      '/api/providers/test',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  uploadProjectStream: async (
+    file: File,
+    onEvent: (evt: SseProgressEvent) => void,
+    defaultPresetId = 'A_beginner',
+    signal?: AbortSignal
+  ): Promise<ProjectDetailResponse> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('default_preset_id', defaultPresetId);
+    const res = await fetch('/api/projects/upload-stream', {
+      method: 'POST',
+      body: fd,
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const detail = await res.text();
+      throw new Error(detail || `上传识别失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalDetail: ProjectDetailResponse | null = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            const evt = JSON.parse(line.slice(5).trim()) as SseProgressEvent;
+            onEvent(evt);
+            if (evt.type === 'error') {
+              throw new Error(evt.message || 'OCR 解析出错');
+            }
+            if (evt.type === 'complete' && evt.detail) {
+              finalDetail = evt.detail;
+            }
+          }
+        }
+      }
+    }
+    if (!finalDetail) {
+      throw new Error('文档识别流未返回完成数据');
+    }
+    return finalDetail;
+  },
+
+  loadDemoProjectStream: async (
+    onEvent: (evt: SseProgressEvent) => void,
+    signal?: AbortSignal
+  ): Promise<ProjectDetailResponse> => {
+    const res = await fetch('/api/projects/demo-stream', {
+      method: 'POST',
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`装载示例课件失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalDetail: ProjectDetailResponse | null = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            const evt = JSON.parse(line.slice(5).trim()) as SseProgressEvent;
+            onEvent(evt);
+            if (evt.type === 'error') {
+              throw new Error(evt.message || '示例课件识别失败');
+            }
+            if (evt.type === 'complete' && evt.detail) {
+              finalDetail = evt.detail;
+            }
+          }
+        }
+      }
+    }
+    if (!finalDetail) {
+      throw new Error('示例课件识别流未返回完成数据');
+    }
+    return finalDetail;
+  },
+
+  generateVariantQuestion: (
+    projectId: string,
+    sourceQuestion: QuizQuestion,
+    selectedChapterIds: string[]
+  ) =>
+    requestJson<{ question: QuizQuestion }>(`/api/projects/${encodeURIComponent(projectId)}/variant-question`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_question: sourceQuestion,
+        selected_chapter_ids: selectedChapterIds,
+      }),
+    }),
+
   getExportPdfUrl: (
     projectId: string,
     opts: {
       doc_type: 'quiz' | 'study_guide' | 'cheatsheet';
       paper_size: 'a4' | 'a3';
       include_answers: boolean;
+      paper_id?: string;
     }
   ) =>
     `/api/projects/${encodeURIComponent(projectId)}/export-pdf?doc_type=${encodeURIComponent(
       opts.doc_type
-    )}&paper_size=${encodeURIComponent(opts.paper_size)}&include_answers=${opts.include_answers}`,
+    )}&paper_size=${encodeURIComponent(opts.paper_size)}&include_answers=${opts.include_answers}${
+      opts.paper_id ? `&paper_id=${encodeURIComponent(opts.paper_id)}` : ''
+    }`,
 
   exportPdf: async (
     projectId: string,
@@ -376,6 +563,7 @@ export const api = {
       doc_type: 'quiz' | 'study_guide' | 'cheatsheet';
       paper_size: 'a4' | 'a3';
       include_answers: boolean;
+      paper_id?: string;
       fallbackFilename?: string;
     }
   ): Promise<void> => {
@@ -386,6 +574,7 @@ export const api = {
         doc_type: opts.doc_type,
         paper_size: opts.paper_size,
         include_answers: opts.include_answers,
+        paper_id: opts.paper_id,
       }),
     });
     if (!res.ok) {

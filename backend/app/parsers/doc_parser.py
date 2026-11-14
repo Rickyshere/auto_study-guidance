@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import Awaitable, Callable, List, Optional, Tuple
 from bs4 import BeautifulSoup
 from docx import Document as DocxDocument
 import ebooklib
@@ -12,8 +12,14 @@ from app.parsers.ocr_engine import extract_text_from_image_vision
 from app.parsers.pdf_parser import extract_key_terms
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
 
+OcrProgressCallback = Optional[Callable[[int, str, str], Awaitable[None]]]
 
-async def parse_docx(file_path: Path, project_id: str) -> DocumentIR:
+
+async def parse_docx(
+    file_path: Path, project_id: str, progress_cb: OcrProgressCallback = None
+) -> DocumentIR:
+    if progress_cb:
+        await progress_cb(20, "ocr_scanning", f"正在读取 DOCX 文档 {file_path.name}...")
     doc = DocxDocument(str(file_path))
     sections: List[Tuple[str, List[str]]] = []
     current_title = file_path.stem
@@ -74,7 +80,11 @@ async def parse_docx(file_path: Path, project_id: str) -> DocumentIR:
     )
 
 
-async def parse_epub(file_path: Path, project_id: str) -> DocumentIR:
+async def parse_epub(
+    file_path: Path, project_id: str, progress_cb: OcrProgressCallback = None
+) -> DocumentIR:
+    if progress_cb:
+        await progress_cb(20, "ocr_scanning", f"正在读取 EPUB 电子书章节结构...")
     book = epub.read_epub(str(file_path))
     chapters: List[ChapterNode] = []
     idx = 0
@@ -109,7 +119,11 @@ async def parse_epub(file_path: Path, project_id: str) -> DocumentIR:
     )
 
 
-async def parse_markdown_or_text(file_path: Path, project_id: str) -> DocumentIR:
+async def parse_markdown_or_text(
+    file_path: Path, project_id: str, progress_cb: OcrProgressCallback = None
+) -> DocumentIR:
+    if progress_cb:
+        await progress_cb(30, "ocr_scanning", f"正在切分文本章节结构...")
     raw = file_path.read_text(encoding="utf-8", errors="replace")
     parts = re.split(r"(?m)^(#{1,2}\s+.+)$", raw)
     sections: List[Tuple[str, str]] = []
@@ -155,12 +169,17 @@ async def parse_image_file(
     project_id: str,
     assets_dir: Path,
     settings: RouterSettings,
+    progress_cb: OcrProgressCallback = None,
 ) -> DocumentIR:
     dest = assets_dir / file_path.name
     if dest != file_path:
         dest.write_bytes(file_path.read_bytes())
 
+    if progress_cb:
+        await progress_cb(25, "ocr_vision", f"正在调用 OCR / 视觉模型识别图片 {file_path.name}...")
     ocr_text = await extract_text_from_image_vision(dest, settings)
+    if progress_cb:
+        await progress_cb(90, "ocr_done", "图片文字与公式识别完成，正在整理知识节点...")
     effective_text = ocr_text or f"[图片课件: {file_path.name}] (未检测到本地 OCR 文本，可在路由设置中配置支持视觉的多模态模型进行深度识图)"
     asset = AssetItem(
         asset_id="img_1",

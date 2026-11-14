@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
-ProviderType = Literal["cloud", "local", "harness", "heuristic"]
+ProviderType = Literal["harness", "cloud"]
+UiVisualMode = Literal["academic_pure", "liquid_glass"]
+ScenarioType = Literal["A_beginner", "B_consolidate", "C_sprint"]
 StageName = Literal[
     "vision_ocr",
     "requirement_negotiation",
@@ -39,19 +41,20 @@ class CloudConfig(BaseModel):
     vision_model: str = "gpt-4o-mini"
 
 
-class LocalConfig(BaseModel):
-    engine: Literal["ollama", "lmstudio"] = "ollama"
-    ollama_url: str = "http://127.0.0.1:11434"
-    lmstudio_url: str = "http://127.0.0.1:1234"
-    model: str = "qwen2.5:7b"
-    vision_model: str = "llava"
-
-
 class HarnessConfig(BaseModel):
     preferred_cli: Literal["dsh", "claude", "codex", "gemini", "custom"] = "dsh"
     custom_command_template: str = ""
     timeout_seconds: int = 180
     max_retries: int = 2
+
+
+class FreeAiAuthConfig(BaseModel):
+    authorized_use_local_ai: bool = False
+    authorized_at: Optional[str] = None
+    preferred_proxy_mode: Literal["magpie_dsh", "direct_cli"] = "magpie_dsh"
+    selected_free_model: str = "qoder-cn/fast"
+    magpie_gateway_url: str = "http://127.0.0.1:3425/v1"
+    magpie_gateway_key: str = "magpie"
 
 
 class OcrConfig(BaseModel):
@@ -65,22 +68,23 @@ class OcrConfig(BaseModel):
 
 
 class ProviderSelection(BaseModel):
-    provider: ProviderType = "heuristic"
+    provider: ProviderType = "harness"
     model_override: Optional[str] = None
 
 
 class RouterSettings(BaseModel):
     routing_mode: RoutingMode = "single"
-    active_provider: ProviderType = "heuristic"
-    enable_fallback: bool = True
+    active_provider: ProviderType = "harness"
+    ui_visual_mode: UiVisualMode = "academic_pure"
+    enable_fallback: bool = False
     enable_quality_audit: bool = True
     cloud_config: CloudConfig = Field(default_factory=CloudConfig)
-    local_config: LocalConfig = Field(default_factory=LocalConfig)
     harness_config: HarnessConfig = Field(default_factory=HarnessConfig)
+    free_ai_auth: FreeAiAuthConfig = Field(default_factory=FreeAiAuthConfig)
     ocr_config: OcrConfig = Field(default_factory=OcrConfig)
     stage_mapping: Dict[StageName, ProviderSelection] = Field(
         default_factory=lambda: {
-            "vision_ocr": ProviderSelection(provider="heuristic"),
+            "vision_ocr": ProviderSelection(provider="harness"),
             "requirement_negotiation": ProviderSelection(provider="harness"),
             "notes_and_cheatsheet": ProviderSelection(provider="harness"),
             "quiz_generation": ProviderSelection(provider="harness"),
@@ -119,13 +123,26 @@ class OcrEngineStatusItem(BaseModel):
     repo_or_api_url: str = ""
 
 
+class FreeAiAppItem(BaseModel):
+    app_id: Literal["qoder_cn", "workbuddy", "trae_cn", "magpie", "dsh"]
+    name: str
+    installed: bool = False
+    running: bool = False
+    executable_path: Optional[str] = None
+    config_path: Optional[str] = None
+    proxy_available: bool = False
+    available_models: List[str] = Field(default_factory=list)
+    description: str = ""
+
+
 class ProviderStatusResponse(BaseModel):
     settings: RouterSettings
     harnesses: List[HarnessStatusItem]
-    ollama_available: bool = False
-    ollama_models: List[str] = Field(default_factory=list)
-    lmstudio_available: bool = False
-    lmstudio_models: List[str] = Field(default_factory=list)
+    free_ai_apps: List[FreeAiAppItem] = Field(default_factory=list)
+    magpie_available: bool = False
+    magpie_gateway_running: bool = False
+    magpie_models: List[str] = Field(default_factory=list)
+    dsh_available: bool = False
     rapidocr_available: bool = False
     gpu_vram: GpuVramInfo = Field(default_factory=GpuVramInfo)
     ocr_engines: List[OcrEngineStatusItem] = Field(default_factory=list)
@@ -165,6 +182,16 @@ class DocumentIR(BaseModel):
 
 
 class DeliverableConfig(BaseModel):
+    scenario_type: ScenarioType = "A_beginner"
+    selected_items: List[str] = Field(
+        default_factory=lambda: [
+            "detailed_study_guide",
+            "sync_homework",
+            "unit_test_paper",
+            "cheatsheet",
+            "mindmap",
+        ]
+    )
     include_study_guide_notes: bool = True
     notes_style: NotesStyle = "guided_learning"
     include_cheatsheet: bool = True
@@ -180,8 +207,16 @@ class DeliverableConfig(BaseModel):
     mindmap_depth: int = 3
 
 
+class DeliverableItemOption(BaseModel):
+    item_id: str
+    label: str
+    description: str
+    export_formats: List[str] = Field(default_factory=lambda: ["PDF 可打印", "Markdown"])
+
+
 class PresetTemplate(BaseModel):
     preset_id: str
+    scenario_type: ScenarioType = "A_beginner"
     name: str
     badge: str
     description: str
@@ -190,16 +225,18 @@ class PresetTemplate(BaseModel):
     default_deliverables: DeliverableConfig
     sample_prompt: str
     pedagogical_focus: List[str] = Field(default_factory=list)
+    available_items: List[DeliverableItemOption] = Field(default_factory=list)
 
 
 class StudyBlueprint(BaseModel):
     blueprint_id: str
     blueprint_title: str
-    preset_id: str = "self_study_guide"
-    preset_name: str = "自学案"
+    scenario_type: ScenarioType = "A_beginner"
+    preset_id: str = "A_beginner"
+    preset_name: str = "A · 入门/零基础学习"
     parsed_intent_summary: str
     ai_feedback_message: str
-    target_difficulty: DifficultyLevel = "intermediate"
+    target_difficulty: DifficultyLevel = "beginner"
     selected_chapter_ids: List[str] = Field(default_factory=list)
     deliverables: DeliverableConfig = Field(default_factory=DeliverableConfig)
     focus_topics: List[str] = Field(default_factory=list)
@@ -240,6 +277,8 @@ class QuizQuestion(BaseModel):
 
 
 class QuizPaper(BaseModel):
+    paper_id: str = "main"
+    deliverable_type: str = "quiz"
     title: str
     mode: QuizMode
     total_score: int
@@ -257,7 +296,13 @@ class StudyPackage(BaseModel):
     study_notes_markdown: str = ""
     cheatsheet_markdown: str = ""
     quiz_paper: QuizPaper
+    extra_quiz_papers: List[QuizPaper] = Field(default_factory=list)
     mindmap_mermaid: str = ""
+
+
+class VariantQuestionRequest(BaseModel):
+    source_question: QuizQuestion
+    selected_chapter_ids: List[str] = Field(default_factory=list)
 
 
 class ProjectSummary(BaseModel):

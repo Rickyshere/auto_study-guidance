@@ -1,4 +1,7 @@
-export type ProviderType = 'cloud' | 'local' | 'harness' | 'heuristic';
+export type ProviderType = 'harness' | 'cloud';
+export type UiVisualMode = 'academic_pure' | 'liquid_glass';
+export type ScenarioType = 'A_beginner' | 'B_consolidate' | 'C_sprint';
+
 export type StageName =
   | 'vision_ocr'
   | 'requirement_negotiation'
@@ -11,6 +14,7 @@ export type RoutingMode = 'single' | 'smart_stage';
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'exam_sprint';
 export type NotesStyle = 'guided_learning' | 'concise_outline' | 'deep_dive' | 'in_class_recap';
 export type QuizMode = 'in_class' | 'sync_layered' | 'exam_paper' | 'custom';
+
 export type OcrEngineType =
   | 'auto_recommend'
   | 'mineru_pipeline'
@@ -20,6 +24,7 @@ export type OcrEngineType =
   | 'oxr_full'
   | 'rapidocr'
   | 'vision_vlm';
+
 export type VramTier = 'le_8gb' | 'gt_8_lt_48gb' | 'ge_48gb';
 
 export interface CloudConfig {
@@ -31,18 +36,20 @@ export interface CloudConfig {
   vision_model: string;
 }
 
-export interface LocalConfig {
-  engine: 'ollama' | 'lmstudio';
-  ollama_url: string;
-  lmstudio_url: string;
-  model: string;
-  vision_model: string;
-}
-
 export interface HarnessConfig {
   preferred_cli: 'dsh' | 'claude' | 'codex' | 'gemini' | 'custom';
   custom_command_template: string;
   timeout_seconds: number;
+  max_retries: number;
+}
+
+export interface FreeAiAuthConfig {
+  authorized_use_local_ai: boolean;
+  authorized_at?: string | null;
+  preferred_proxy_mode: 'magpie_dsh' | 'direct_cli';
+  selected_free_model: string;
+  magpie_gateway_url: string;
+  magpie_gateway_key: string;
 }
 
 export interface OcrConfig {
@@ -63,11 +70,12 @@ export interface ProviderSelection {
 export interface RouterSettings {
   routing_mode: RoutingMode;
   active_provider: ProviderType;
+  ui_visual_mode: UiVisualMode;
   enable_fallback: boolean;
-  enable_quality_audit?: boolean;
+  enable_quality_audit: boolean;
   cloud_config: CloudConfig;
-  local_config: LocalConfig;
   harness_config: HarnessConfig;
+  free_ai_auth: FreeAiAuthConfig;
   ocr_config: OcrConfig;
   stage_mapping: Record<StageName, ProviderSelection>;
 }
@@ -77,8 +85,20 @@ export interface HarnessStatusItem {
   available: boolean;
   executable_path?: string | null;
   description: string;
-  install_supported?: boolean;
-  install_command_hint?: string;
+  install_supported: boolean;
+  install_command_hint: string;
+}
+
+export interface FreeAiAppItem {
+  app_id: 'qoder_cn' | 'workbuddy' | 'trae_cn' | 'magpie' | 'dsh';
+  name: string;
+  installed: boolean;
+  running: boolean;
+  executable_path?: string | null;
+  config_path?: string | null;
+  proxy_available: boolean;
+  available_models: string[];
+  description: string;
 }
 
 export interface GpuVramInfo {
@@ -104,10 +124,11 @@ export interface OcrEngineStatusItem {
 export interface ProviderStatusResponse {
   settings: RouterSettings;
   harnesses: HarnessStatusItem[];
-  ollama_available: boolean;
-  ollama_models: string[];
-  lmstudio_available: boolean;
-  lmstudio_models: string[];
+  free_ai_apps: FreeAiAppItem[];
+  magpie_available: boolean;
+  magpie_gateway_running: boolean;
+  magpie_models: string[];
+  dsh_available: boolean;
   rapidocr_available: boolean;
   gpu_vram: GpuVramInfo;
   ocr_engines: OcrEngineStatusItem[];
@@ -147,6 +168,8 @@ export interface DocumentIR {
 }
 
 export interface DeliverableConfig {
+  scenario_type: ScenarioType;
+  selected_items: string[];
   include_study_guide_notes: boolean;
   notes_style: NotesStyle;
   include_cheatsheet: boolean;
@@ -162,8 +185,16 @@ export interface DeliverableConfig {
   mindmap_depth: number;
 }
 
+export interface DeliverableItemOption {
+  item_id: string;
+  label: string;
+  description: string;
+  export_formats: string[];
+}
+
 export interface PresetTemplate {
   preset_id: string;
+  scenario_type: ScenarioType;
   name: string;
   badge: string;
   description: string;
@@ -172,11 +203,13 @@ export interface PresetTemplate {
   default_deliverables: DeliverableConfig;
   sample_prompt: string;
   pedagogical_focus: string[];
+  available_items: DeliverableItemOption[];
 }
 
 export interface StudyBlueprint {
   blueprint_id: string;
   blueprint_title: string;
+  scenario_type: ScenarioType;
   preset_id: string;
   preset_name: string;
   parsed_intent_summary: string;
@@ -204,6 +237,8 @@ export interface QuizQuestion {
 }
 
 export interface QuizPaper {
+  paper_id: string;
+  deliverable_type: string;
   title: string;
   mode: QuizMode;
   total_score: number;
@@ -217,10 +252,11 @@ export interface StudyPackage {
   blueprint_used: StudyBlueprint;
   generated_at: string;
   routing_trace: Record<string, string>;
-  quality_audit_report?: string;
+  quality_audit_report: string;
   study_notes_markdown: string;
   cheatsheet_markdown: string;
   quiz_paper: QuizPaper;
+  extra_quiz_papers: QuizPaper[];
   mindmap_mermaid: string;
 }
 
@@ -237,32 +273,40 @@ export interface ProjectSummary {
 
 export interface ProjectDetailResponse {
   document_ir: DocumentIR;
-  blueprint: StudyBlueprint | null;
-  study_package: StudyPackage | null;
+  blueprint?: StudyBlueprint | null;
+  study_package?: StudyPackage | null;
 }
 
 export interface IncomingCommitItem {
   hash: string;
   message: string;
-  date: string;
+  date?: string;
   author: string;
+  subject?: string;
 }
 
 export interface UpdateStatusResponse {
-  repo_available: boolean;
-  branch: string;
-  remote_url: string;
-  local_commit: string;
-  local_message: string;
-  local_date: string;
-  remote_commit: string;
-  remote_message: string;
+  repo_available?: boolean;
+  supported?: boolean;
+  branch?: string;
+  current_branch?: string;
+  remote_url?: string;
+  local_commit?: string;
+  current_commit?: string;
+  local_message?: string;
+  local_date?: string;
+  remote_commit?: string;
+  remote_message?: string;
   behind_count: number;
-  ahead_count: number;
+  ahead_count?: number;
   has_update: boolean;
+  update_available?: boolean;
   incoming_commits: IncomingCommitItem[];
-  dirty_count: number;
+  dirty_count?: number;
   checked_at?: string | null;
   push_notice_at?: string | null;
   fetch_error?: string | null;
+  webhook_pending?: boolean;
+  last_webhook_at?: string;
+  reason?: string;
 }

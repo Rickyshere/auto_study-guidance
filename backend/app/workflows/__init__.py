@@ -1,11 +1,23 @@
-from app.workflows.presets import PRESET_TEMPLATES, PRESET_MAP, get_preset
-from app.workflows.negotiator import negotiate_study_blueprint
-from app.workflows.generator import generate_study_package
+from app.workflows.presets import (
+    PRESET_MAP,
+    PRESET_TEMPLATES,
+    SCENARIO_ITEMS_MAP,
+    build_default_blueprint_from_ir,
+    get_preset,
+    sync_deliverable_flags_with_items,
+)
+from app.workflows.negotiator import ai_fill_study_blueprint, negotiate_study_blueprint
+from app.workflows.generator import generate_study_package, generate_variant_question
 
 __all__ = [
     "PRESET_TEMPLATES",
     "PRESET_MAP",
+    "SCENARIO_ITEMS_MAP",
+    "build_default_blueprint_from_ir",
     "get_preset",
+    "sync_deliverable_flags_with_items",
     "negotiate_study_blueprint",
+    "ai_fill_study_blueprint",
     "generate_study_package",
+    "generate_variant_question",
 ]

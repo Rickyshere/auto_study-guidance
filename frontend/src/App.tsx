@@ -1,86 +1,63 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  GraduationCap,
-  Settings,
-  Cpu,
   AlertCircle,
-  PanelLeft,
-  Search,
-  Sparkles,
-  ScanText,
-  RotateCcw,
+  BookOpen,
+  Cloud,
+  Cpu,
+  GraduationCap,
   HelpCircle,
-  DownloadCloud,
+  Layers,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  RotateCcw,
+  Settings,
+  ShieldCheck,
+  Sparkles,
   Sun,
 } from 'lucide-react';
 import { api } from './api';
+import { BlueprintNegotiator } from './components/BlueprintNegotiator';
+import { LiquidGlassCanvas, LiquidGlassOptics } from './components/LiquidGlassCanvas';
+import { OnboardingGuideModal } from './components/OnboardingGuideModal';
+import { RouterConfigModal } from './components/RouterConfigModal';
+import { StudioTabKey, StudyStudio } from './components/StudyStudio';
+import { UpdatePushModal } from './components/UpdatePushModal';
+import { UploadAndTocPanel } from './components/UploadAndTocPanel';
 import {
   DocumentIR,
   PresetTemplate,
   ProjectSummary,
   ProviderStatusResponse,
-  ProviderType,
   RouterSettings,
   StudyBlueprint,
   StudyPackage,
+  UiVisualMode,
   UpdateStatusResponse,
 } from './types';
-import { RouterConfigModal } from './components/RouterConfigModal';
-import { UploadAndTocPanel } from './components/UploadAndTocPanel';
-import { BlueprintNegotiator } from './components/BlueprintNegotiator';
-import { StudyStudio, StudioTabKey } from './components/StudyStudio';
-import { OnboardingGuideModal } from './components/OnboardingGuideModal';
-import { UpdatePushModal } from './components/UpdatePushModal';
-import { ImpeccableShowcase } from './components/showcases/ImpeccableShowcase';
-import { EmilShowcase } from './components/showcases/EmilShowcase';
-import { AppleDesignShowcase } from './components/showcases/AppleDesignShowcase';
-import { SwiftUILiquidGlassShowcase } from './components/showcases/SwiftUILiquidGlassShowcase';
-import { ImpeccableAuditedShowcase } from './components/showcases/ImpeccableAuditedShowcase';
-import { AppleDesignAuditedShowcase } from './components/showcases/AppleDesignAuditedShowcase';
 import {
   SegmentedOption,
-  Spring1D,
   SpringButton,
   SpringSegmentedControl,
   SpringTelemetryProvider,
 } from './utils/springPhysics';
 
-type AppViewMode =
-  | 'functional'
-  | 'apple_audited'
-  | 'impeccable_audited'
-  | 'swiftui'
-  | 'apple'
-  | 'impeccable'
-  | 'emil';
-
-type MainViewKey = 'stage1_negotiate' | StudioTabKey;
-
-const OCR_SHORT_LABEL: Record<string, string> = {
-  mineru_pipeline: 'MinerU Pipeline',
-  somark_free_api: 'Free-OXR API',
-  paddleocr: 'PaddleOCR',
-  mineru_full: 'MinerU Full',
-  oxr_full: 'SoMark OXR',
-  rapidocr: 'RapidOCR',
-  vision_vlm: 'VLM 识图',
-};
+type MainViewKey = 'workflow' | StudioTabKey;
 
 export function App() {
-  const [viewMode, setViewMode] = useState<AppViewMode>('functional');
   const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null);
   const [presets, setPresets] = useState<PresetTemplate[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-
   const [documentIr, setDocumentIr] = useState<DocumentIR | null>(null);
   const [blueprint, setBlueprint] = useState<StudyBlueprint | null>(null);
   const [studyPackage, setStudyPackage] = useState<StudyPackage | null>(null);
 
-  const [activeMainView, setActiveMainView] = useState<MainViewKey>('stage1_negotiate');
+  const [workflowStep, setWorkflowStep] = useState<1 | 2 | 3>(1);
+  const [activeMainView, setActiveMainView] = useState<MainViewKey>('workflow');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
-  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => {
+  const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try {
       return localStorage.getItem('asg_onboarding_seen_v1') !== '1';
     } catch {
@@ -89,35 +66,44 @@ export function App() {
   });
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [autoCheckPush, setAutoCheckPush] = useState(true);
-  const [routerPopoverOpen, setRouterPopoverOpen] = useState(false);
-  const [spotlightOpen, setSpotlightOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  // Dark Mode & Visual Mode (First launch ALWAYS academic_pure; downgrade if no GPU)
+  const [darkMode, setDarkMode] = useState(() => {
     try {
       return localStorage.getItem('asg_theme_dark') === '1';
     } catch {
       return false;
     }
   });
-
-  useEffect(() => {
+  const [requestedVisualMode, setRequestedVisualMode] = useState<UiVisualMode>(() => {
     try {
-      localStorage.setItem('asg_theme_dark', darkMode ? '1' : '0');
+      const saved = localStorage.getItem('asg_visual_mode_v2');
+      return saved === 'liquid_glass' ? 'liquid_glass' : 'academic_pure';
     } catch {
-      // ignore
+      return 'academic_pure';
     }
-    if (darkMode) {
-      document.documentElement.classList.add('dark-theme');
-      document.body.classList.add('dark-theme');
-    } else {
-      document.documentElement.classList.remove('dark-theme');
-      document.body.classList.remove('dark-theme');
-    }
-  }, [darkMode]);
+  });
+  const [webglUnavailable, setWebglUnavailable] = useState(false);
+  const [downgradeNotice, setDowngradeNotice] = useState<string | null>(null);
+  const [optics, setOptics] = useState<LiquidGlassOptics>({
+    ior: 1.46,
+    dispersion: 0.35,
+    smoothK: 30,
+    blur: 0.35,
+  });
+  const [pillResetCounter, setPillResetCounter] = useState(0);
 
   const [uploading, setUploading] = useState(false);
-  const [negotiating, setNegotiating] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState<{
+    active: boolean;
+    percent: number;
+    stage: string;
+    message: string;
+    logs: string[];
+  } | null>(null);
+
   const [aiFilling, setAiFilling] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progressInfo, setProgressInfo] = useState<{
@@ -127,33 +113,90 @@ export function App() {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const reportPhysics = useCallback((_vx: number, _vy: number, _msg: string) => {
-    // Telemetry HUD removed per user preference
-  }, []);
+  // Free AI Proxy Authorization & Cloud Missing Prompt Modals
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [pendingActionAfterAuth, setPendingActionAfterAuth] = useState<(() => Promise<void>) | null>(null);
+  const [cloudPromptOpen, setCloudPromptOpen] = useState(false);
 
-  // Refs for Focused 2-Pane Split & Generation Cancellation
-  const splitRef = useRef<HTMLDivElement | null>(null);
-  const sidebarSpringRef = useRef<Spring1D | null>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
 
-  // Backend initialization (includes startup GPU VRAM & OCR auto-detection)
-  const refreshProviderStatus = async () => {
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) {
+      root.classList.add('dark-theme');
+      document.body.classList.add('dark-theme');
+    } else {
+      root.classList.remove('dark-theme');
+      document.body.classList.remove('dark-theme');
+    }
     try {
-      const st = await api.getProviderStatus();
-      setProviderStatus(st);
-    } catch (e: any) {
-      setErrorMsg(e.message);
+      localStorage.setItem('asg_theme_dark', darkMode ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [darkMode]);
+
+  const gpuAvailable = useMemo(() => {
+    if (webglUnavailable) return false;
+    if (!providerStatus) return false;
+    return (providerStatus.gpu_vram?.detected_vram_gb || 0) > 0;
+  }, [providerStatus, webglUnavailable]);
+
+  const effectiveVisualMode: UiVisualMode =
+    requestedVisualMode === 'liquid_glass' && gpuAvailable ? 'liquid_glass' : 'academic_pure';
+
+  useEffect(() => {
+    if (providerStatus && requestedVisualMode === 'liquid_glass' && !gpuAvailable) {
+      setRequestedVisualMode('academic_pure');
+      try {
+        localStorage.setItem('asg_visual_mode_v2', 'academic_pure');
+      } catch {
+        // ignore
+      }
+      setDowngradeNotice('当前环境未检测到可用独立 GPU 或 WebGL 硬件加速，已自动切换为「标准界面」。');
+    }
+  }, [providerStatus, requestedVisualMode, gpuAvailable]);
+
+  const handleChangeVisualMode = (mode: UiVisualMode) => {
+    if (mode === 'liquid_glass' && !gpuAvailable) {
+      setDowngradeNotice('未检测到独立 GPU 加速，无法开启 Liquid Glass，继续使用「标准界面」。');
+      return;
+    }
+    setDowngradeNotice(null);
+    setRequestedVisualMode(mode);
+    try {
+      localStorage.setItem('asg_visual_mode_v2', mode);
+    } catch {
+      // ignore
+    }
+    if (providerStatus) {
+      api
+        .saveProviderSettings({
+          ...providerStatus.settings,
+          ui_visual_mode: mode,
+        })
+        .then((saved) => setProviderStatus({ ...providerStatus, settings: saved }))
+        .catch(() => {});
     }
   };
 
-  const refreshProjects = async () => {
+  const refreshProviderStatus = useCallback(async () => {
+    try {
+      const st = await api.getProviderStatus();
+      setProviderStatus(st);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const refreshProjects = useCallback(async () => {
     try {
       const list = await api.listProjects();
       setProjects(list);
     } catch {
       // ignore
     }
-  };
+  }, []);
 
   const refreshUpdateStatus = useCallback(async (fetchRemote = false) => {
     setCheckingUpdate(true);
@@ -161,7 +204,7 @@ export function App() {
       const st = await api.getUpdateStatus(fetchRemote);
       setUpdateStatus(st);
     } catch {
-      // ignore background git check error
+      // ignore
     } finally {
       setCheckingUpdate(false);
     }
@@ -172,116 +215,81 @@ export function App() {
     api.getPresets().then(setPresets).catch(() => {});
     refreshProjects();
     refreshUpdateStatus(true);
-  }, [refreshUpdateStatus]);
+  }, [refreshProviderStatus, refreshProjects, refreshUpdateStatus]);
 
-  // Periodic background remote push check every 60s
   useEffect(() => {
     if (!autoCheckPush) return;
-    const timer = setInterval(() => {
-      refreshUpdateStatus(true);
-    }, 60000);
+    const timer = setInterval(() => refreshUpdateStatus(true), 60000);
     return () => clearInterval(timer);
   }, [autoCheckPush, refreshUpdateStatus]);
 
-  // Sidebar ζ=1.0 spring (280px <-> 0px in Focused 2-Pane NavigationSplitView)
-  useEffect(() => {
-    if (viewMode !== 'functional') return;
-    sidebarSpringRef.current = new Spring1D({
-      value: sidebarOpen ? 280 : 0,
-      response: 0.28,
-      bounds: [0, 280],
-      bounceFactor: 0.45,
-      onUpdate: (w) => {
-        if (splitRef.current) {
-          splitRef.current.style.gridTemplateColumns = `${Math.max(0, w).toFixed(1)}px minmax(620px, 1fr)`;
-        }
-      },
-      onRebound: (v) => reportPhysics(v, 0, '侧栏滑轨边界回弹'),
-    });
-    return () => sidebarSpringRef.current?.stop();
-  }, [viewMode, reportPhysics]);
-
-  const toggleSidebar = () => {
-    const next = !sidebarOpen;
-    setSidebarOpen(next);
-    sidebarSpringRef.current?.setTarget(next ? 280 : 0);
+  // Pre-execution Gate: Check Free AI Authorization OR Cloud Key before running AI
+  const ensureEngineReadyOrPrompt = (retryAction: () => Promise<void>): boolean => {
+    if (!providerStatus) return true;
+    const s = providerStatus.settings;
+    if (s.active_provider === 'harness') {
+      if (!s.free_ai_auth?.authorized_use_local_ai) {
+        setPendingActionAfterAuth(() => retryAction);
+        setAuthModalOpen(true);
+        return false;
+      }
+    } else if (s.active_provider === 'cloud') {
+      if (!s.cloud_config?.api_key) {
+        setCloudPromptOpen(true);
+        return false;
+      }
+    }
+    return true;
   };
 
-  // Keep activeMainView valid if studyPackage disappears
-  useEffect(() => {
-    if (!studyPackage && activeMainView !== 'stage1_negotiate') {
-      setActiveMainView('stage1_negotiate');
+  const handleEngineError = (errMessage: string, retryAction?: () => Promise<void>) => {
+    if (errMessage.includes('AUTH_REQUIRED')) {
+      if (retryAction) setPendingActionAfterAuth(() => retryAction);
+      setAuthModalOpen(true);
+    } else if (errMessage.includes('CLOUD_NOT_CONFIGURED')) {
+      setCloudPromptOpen(true);
+    } else {
+      setErrorMsg(errMessage);
     }
-  }, [studyPackage, activeMainView]);
+  };
 
-  // Contextual topbar switcher options: never show dead deliverable tabs before generation!
-  const topbarViewOptions = useMemo<SegmentedOption<MainViewKey>[]>(() => {
-    if (!documentIr) {
-      return [{ value: 'stage1_negotiate', label: '① 等待导入教材' }];
-    }
-    if (!studyPackage) {
-      return [
-        { value: 'stage1_negotiate', label: '① 需求解析与方案定制' },
-        {
-          value: 'notes',
-          label: '② 学习资料工作台 (生成后解锁)',
-          disabled: true,
-          title: '请在下方确认方案并点击“确认生成”，生成完成后即可切换导学笔记/题库/速记',
-        },
-      ];
-    }
-    return [
-      { value: 'notes', label: '导学笔记' },
-      { value: 'quiz', label: '互动题库' },
-      { value: 'cheatsheet', label: '考前速记' },
-      { value: 'mindmap', label: '知识图谱' },
-      { value: 'blueprint_trace', label: '细目与路由' },
-    ];
-  }, [documentIr, studyPackage]);
-
-  const autoSwitchTabForPackage = useCallback((pkg: StudyPackage) => {
-    const pid = pkg.blueprint_used.preset_id;
-    let nextTab: StudioTabKey = 'notes';
-    if (pid === 'in_class_practice' || pid === 'self_test_exam' || pid === 'sync_practice') {
-      nextTab = 'quiz';
-    } else if (pid === 'exam_cheatsheet') {
-      nextTab = 'cheatsheet';
-    }
-    setActiveMainView(nextTab);
-  }, []);
-
-  // ⌘K Spotlight & Escape keyboard shortcuts
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setSpotlightOpen((s) => !s);
-      } else if (e.key === 'Escape') {
-        setSpotlightOpen(false);
-        setRouterPopoverOpen(false);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // Backend action handlers
+  // Step 1 -> Step 2 Live Streaming Upload + OCR Progress
   const handleUploadFile = async (file: File) => {
     setErrorMsg(null);
     setUploading(true);
+    setStudyPackage(null);
+    setActiveMainView('workflow');
+    setWorkflowStep(2);
+    setOcrProgress({
+      active: true,
+      percent: 4,
+      stage: 'ocr_init',
+      message: `准备上传并识别《${file.name}》...`,
+      logs: [`接收文件 ${file.name} (${Math.round(file.size / 1024)} KB)`],
+    });
     try {
-      const detail = await api.uploadDocument(file, 'self_study_guide');
+      const detail = await api.uploadProjectStream(file, (evt) => {
+        const msg = String(evt.message || '');
+        const pct = Number(evt.percent ?? 20);
+        setOcrProgress((prev) => ({
+          active: evt.type !== 'complete',
+          percent: pct,
+          stage: evt.stage || 'ocr',
+          message: msg || '正在执行 OCR 文本与公式识别...',
+          logs: msg && prev?.logs[prev.logs.length - 1] !== msg ? [...(prev?.logs || []).slice(-6), msg] : prev?.logs || [],
+        }));
+      }, 'A_beginner');
       setDocumentIr(detail.document_ir);
-      setBlueprint(detail.blueprint);
-      setStudyPackage(detail.study_package);
-      if (detail.study_package) {
-        autoSwitchTabForPackage(detail.study_package);
-      } else {
-        setActiveMainView('stage1_negotiate');
-      }
+      setBlueprint(detail.blueprint || null);
+      setStudyPackage(detail.study_package || null);
+      setOcrProgress((prev) =>
+        prev ? { ...prev, active: false, percent: 100, message: `识别完成！共 ${detail.document_ir.chapters.length} 章节` } : null
+      );
+      setWorkflowStep(2);
       await refreshProjects();
     } catch (e: any) {
-      setErrorMsg(e.message);
+      setOcrProgress(null);
+      setErrorMsg(e?.message || '上传与 OCR 解析失败');
     } finally {
       setUploading(false);
     }
@@ -290,19 +298,39 @@ export function App() {
   const handleLoadDemo = async () => {
     setErrorMsg(null);
     setUploading(true);
+    setStudyPackage(null);
+    setActiveMainView('workflow');
+    setWorkflowStep(2);
+    setOcrProgress({
+      active: true,
+      percent: 8,
+      stage: 'ocr_init',
+      message: '正在加载示例课件并执行公式 OCR 扫描...',
+      logs: ['加载《深度学习架构与梯度下降》示例课件...'],
+    });
     try {
-      const detail = await api.loadDemoProject();
+      const detail = await api.loadDemoProjectStream((evt) => {
+        const msg = String(evt.message || '');
+        const pct = Number(evt.percent ?? 35);
+        setOcrProgress((prev) => ({
+          active: evt.type !== 'complete',
+          percent: pct,
+          stage: evt.stage || 'ocr',
+          message: msg || '正在识别...',
+          logs: msg && prev?.logs[prev.logs.length - 1] !== msg ? [...(prev?.logs || []).slice(-6), msg] : prev?.logs || [],
+        }));
+      });
       setDocumentIr(detail.document_ir);
-      setBlueprint(detail.blueprint);
-      setStudyPackage(detail.study_package);
-      if (detail.study_package) {
-        autoSwitchTabForPackage(detail.study_package);
-      } else {
-        setActiveMainView('stage1_negotiate');
-      }
+      setBlueprint(detail.blueprint || null);
+      setStudyPackage(detail.study_package || null);
+      setOcrProgress((prev) =>
+        prev ? { ...prev, active: false, percent: 100, message: `示例课件 OCR 完成！共 ${detail.document_ir.chapters.length} 个章节` } : null
+      );
+      setWorkflowStep(2);
       await refreshProjects();
     } catch (e: any) {
-      setErrorMsg(e.message);
+      setOcrProgress(null);
+      setErrorMsg(e?.message || '加载示例课件失败');
     } finally {
       setUploading(false);
     }
@@ -310,18 +338,20 @@ export function App() {
 
   const handleOpenProject = async (projectId: string) => {
     setErrorMsg(null);
+    setOcrProgress(null);
     try {
       const detail = await api.getProjectDetail(projectId);
       setDocumentIr(detail.document_ir);
-      setBlueprint(detail.blueprint);
-      setStudyPackage(detail.study_package);
+      setBlueprint(detail.blueprint || null);
+      setStudyPackage(detail.study_package || null);
       if (detail.study_package) {
         autoSwitchTabForPackage(detail.study_package);
       } else {
-        setActiveMainView('stage1_negotiate');
+        setWorkflowStep(3);
+        setActiveMainView('workflow');
       }
     } catch (e: any) {
-      setErrorMsg(e.message);
+      setErrorMsg(e?.message || '打开工作区失败');
     }
   };
 
@@ -332,7 +362,8 @@ export function App() {
       setDocumentIr(null);
       setBlueprint(null);
       setStudyPackage(null);
-      setActiveMainView('stage1_negotiate');
+      setWorkflowStep(1);
+      setActiveMainView('workflow');
     }
     await refreshProjects();
   };
@@ -354,42 +385,87 @@ export function App() {
     });
   };
 
-  const handleNegotiate = async (presetId: string | undefined, userPrompt: string) => {
-    if (!documentIr) return;
-    setErrorMsg(null);
-    setNegotiating(true);
-    try {
-      const updated = await api.negotiateBlueprint(documentIr.project_id, {
-        preset_id: presetId,
-        user_prompt: userPrompt,
-        current_blueprint: blueprint,
-      });
-      setBlueprint(updated);
-      setActiveMainView('stage1_negotiate');
-    } catch (e: any) {
-      setErrorMsg(e.message);
-    } finally {
-      setNegotiating(false);
+  const autoSwitchTabForPackage = useCallback((pkg: StudyPackage) => {
+    const items = pkg.blueprint_used?.deliverables?.selected_items || [];
+    if (pkg.study_notes_markdown && (items.includes('detailed_study_guide') || items.includes('key_knowledge_extraction'))) {
+      setActiveMainView('notes');
+    } else if (pkg.quiz_paper?.questions?.length > 0) {
+      setActiveMainView('quiz');
+    } else if (pkg.cheatsheet_markdown) {
+      setActiveMainView('cheatsheet');
+    } else if (pkg.mindmap_mermaid) {
+      setActiveMainView('mindmap');
+    } else {
+      setActiveMainView('blueprint_trace');
     }
-  };
+  }, []);
 
   const handleAiFillParams = async () => {
+    if (!documentIr || !blueprint) return;
+    const run = async () => {
+      setErrorMsg(null);
+      setAiFilling(true);
+      try {
+        const bp = await api.aiFillParams(documentIr.project_id, {
+          preset_id: blueprint.scenario_type,
+          user_prompt: blueprint.custom_instructions || '',
+          current_blueprint: blueprint,
+        });
+        setBlueprint(bp);
+      } catch (e: any) {
+        handleEngineError(e?.message || 'AI 智能填参失败', run);
+      } finally {
+        setAiFilling(false);
+      }
+    };
+    if (!ensureEngineReadyOrPrompt(run)) return;
+    await run();
+  };
+
+  const handleConfirmAndGenerate = async (confirmedBp: StudyBlueprint) => {
     if (!documentIr) return;
-    setErrorMsg(null);
-    setAiFilling(true);
-    try {
-      const filled = await api.aiFillParams(documentIr.project_id, {
-        preset_id: blueprint?.preset_id,
-        user_prompt: blueprint?.ai_feedback_message || '',
-        current_blueprint: blueprint,
+    const run = async () => {
+      setErrorMsg(null);
+      setGenerating(true);
+      setProgressInfo({
+        percent: 5,
+        message: '已确认学习方案与参数，正在调度 AI 生成引擎...',
+        logs: ['已确认场景与参数配置，开始流式生成...'],
       });
-      setBlueprint(filled);
-      reportPhysics(0, 0, '✨ AI 已智能填充题量与参数');
-    } catch (e: any) {
-      setErrorMsg(e.message);
-    } finally {
-      setAiFilling(false);
-    }
+      const controller = new AbortController();
+      generateAbortRef.current = controller;
+      try {
+        const pkg = await api.generateStudyPackageStream(
+          documentIr.project_id,
+          confirmedBp,
+          (_stage, percent, message) => {
+            setProgressInfo((prev) => {
+              const prevLogs = prev?.logs || [];
+              const nextLogs =
+                prevLogs[prevLogs.length - 1] === message ? prevLogs : [...prevLogs.slice(-8), message];
+              return { percent, message, logs: nextLogs };
+            });
+          },
+          controller.signal
+        );
+        setBlueprint(pkg.blueprint_used);
+        setStudyPackage(pkg);
+        autoSwitchTabForPackage(pkg);
+        await refreshProjects();
+      } catch (e: any) {
+        if (e?.name === 'AbortError' || controller.signal.aborted) {
+          setProgressInfo({ percent: 0, message: '已确认打断并停止生成任务' });
+        } else {
+          handleEngineError(e?.message || '流式生成失败', run);
+        }
+      } finally {
+        if (generateAbortRef.current === controller) generateAbortRef.current = null;
+        setGenerating(false);
+        setTimeout(() => setProgressInfo(null), 1200);
+      }
+    };
+    if (!ensureEngineReadyOrPrompt(run)) return;
+    await run();
   };
 
   const handleCancelGenerate = () => {
@@ -401,915 +477,533 @@ export function App() {
       generateAbortRef.current = null;
     }
     setGenerating(false);
-    setProgressInfo({
-      percent: 0,
-      message: '已暂停并通知后端终止子进程，可继续调整阶段 1 参数',
-    });
-    setTimeout(() => setProgressInfo(null), 2200);
+    setProgressInfo({ percent: 0, message: '已打断并终止后台生成任务' });
+    setTimeout(() => setProgressInfo(null), 2000);
   };
 
-  const handleRevokeGeneration = async () => {
-    if (!documentIr) return;
-    setErrorMsg(null);
-    setStudyPackage(null);
-    setActiveMainView('stage1_negotiate');
-    if (blueprint) {
-      setBlueprint({ ...blueprint, confirmed: false });
-    }
+  const handleAuthorizeAndContinue = async () => {
     try {
-      const res = await api.revokeStudyPackage(documentIr.project_id);
-      if (res.blueprint) {
-        setBlueprint(res.blueprint);
+      const saved = await api.authorizeFreeAi({
+        authorized: true,
+        preferred_proxy_mode: 'magpie_dsh',
+        selected_free_model: providerStatus?.settings.free_ai_auth?.selected_free_model || 'qoder-cn/fast',
+      });
+      if (providerStatus) {
+        setProviderStatus({ ...providerStatus, settings: saved });
       }
-      await refreshProjects();
+      setAuthModalOpen(false);
+      const pending = pendingActionAfterAuth;
+      setPendingActionAfterAuth(null);
+      if (pending) await pending();
     } catch (e: any) {
-      setErrorMsg(e?.message || '撤销生成状态同步失败');
+      setErrorMsg(e?.message || '保存授权失败');
     }
   };
 
-  const handleConfirmAndGenerate = async (confirmedBp: StudyBlueprint) => {
-    if (!documentIr) return;
-    setErrorMsg(null);
-    setGenerating(true);
-    setProgressInfo({
-      percent: 5,
-      message: '已确认定制方案，正在调度路由引擎...',
-      logs: ['已确认定制方案，正在调度路由引擎...'],
-    });
-    const controller = new AbortController();
-    generateAbortRef.current = controller;
-    try {
-      const pkg = await api.generateStudyPackageStream(
-        documentIr.project_id,
-        confirmedBp,
-        (_stage, percent, message) => {
-          setProgressInfo((prev) => {
-            const prevLogs = prev?.logs || [];
-            const nextLogs =
-              prevLogs[prevLogs.length - 1] === message
-                ? prevLogs
-                : [...prevLogs.slice(-5), message];
-            return { percent, message, logs: nextLogs };
-          });
-        },
-        controller.signal
-      );
-      setBlueprint(pkg.blueprint_used);
-      setStudyPackage(pkg);
-      autoSwitchTabForPackage(pkg);
-      await refreshProjects();
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || controller.signal.aborted) {
-        setProgressInfo({ percent: 0, message: '已暂停并中止当前生成' });
-      } else {
-        setErrorMsg(e.message);
-      }
-    } finally {
-      if (generateAbortRef.current === controller) {
-        generateAbortRef.current = null;
-      }
-      setGenerating(false);
-      setTimeout(() => setProgressInfo(null), 1200);
+  const topbarOptions = useMemo<SegmentedOption<MainViewKey>[]>(() => {
+    if (!documentIr) {
+      return [{ value: 'workflow', label: '① 资料上传与 OCR' }];
     }
-  };
-
-  const handleQuickGenerate = async (presetId: string) => {
-    if (!documentIr) return;
-    setErrorMsg(null);
-    setGenerating(true);
-    setProgressInfo({ percent: 35, message: '正在按所选预设模板一键生成学习资料...' });
-    const controller = new AbortController();
-    generateAbortRef.current = controller;
-    try {
-      const pkg = await api.quickGenerate(
-        documentIr.project_id,
-        {
-          preset_id: presetId,
-          selected_chapter_ids: blueprint?.selected_chapter_ids,
-        },
-        controller.signal
-      );
-      setBlueprint(pkg.blueprint_used);
-      setStudyPackage(pkg);
-      autoSwitchTabForPackage(pkg);
-      await refreshProjects();
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || controller.signal.aborted) {
-        setProgressInfo({ percent: 0, message: '已暂停并中止当前生成' });
-      } else {
-        setErrorMsg(e.message);
-      }
-    } finally {
-      if (generateAbortRef.current === controller) {
-        generateAbortRef.current = null;
-      }
-      setGenerating(false);
-      setTimeout(() => setProgressInfo(null), 800);
+    if (!studyPackage) {
+      return [{ value: 'workflow', label: workflowStep === 2 ? '② OCR 识别与显存配置' : '③ 选择 A/B/C 场景与参数' }];
     }
-  };
+    return [
+      { value: 'notes', label: '讲义 / 知识提取' },
+      { value: 'quiz', label: '在线练习卡片' },
+      { value: 'cheatsheet', label: '考前速记' },
+      { value: 'mindmap', label: 'MindMap' },
+      { value: 'blueprint_trace', label: '明细与路由' },
+      { value: 'workflow', label: '重新配置生成' },
+    ];
+  }, [documentIr, studyPackage, workflowStep]);
 
-  const handleQuickSwitchProvider = async (provider: ProviderType) => {
-    if (!providerStatus) return;
-    const nextSettings: RouterSettings = {
-      ...providerStatus.settings,
-      routing_mode: 'single',
-      active_provider: provider,
-    };
-    try {
-      const saved = await api.saveProviderSettings(nextSettings);
-      setProviderStatus({ ...providerStatus, settings: saved });
-      setRouterPopoverOpen(false);
-    } catch (e: any) {
-      setErrorMsg(e.message);
+  const activeEngineText = () => {
+    const s = providerStatus?.settings;
+    if (!s) return '加载配置...';
+    if (s.active_provider === 'cloud') {
+      return s.cloud_config.api_key ? `云端 · ${s.cloud_config.model}` : '云端 API (待填 Key)';
     }
+    const model = s.free_ai_auth?.selected_free_model || 'qoder-cn/fast';
+    return s.free_ai_auth?.authorized_use_local_ai ? `Magpie+DSH (${model})` : 'Magpie+DSH (待授权)';
   };
-
-  const activeEngineLabel = () => {
-    if (!providerStatus) return '探测路由...';
-    const s = providerStatus.settings;
-    if (s.routing_mode === 'smart_stage') return '智能多阶段 Harness';
-    const map: Record<string, string> = {
-      heuristic: '内置规则引擎',
-      harness: `CLI · ${s.harness_config.preferred_cli.toUpperCase()}`,
-      cloud: `Cloud · ${s.cloud_config.model}`,
-      local: `Local · ${s.local_config.model}`,
-    };
-    return map[s.active_provider] || s.active_provider;
-  };
-
-  const activeProviderTint = () => {
-    const p = providerStatus?.settings.active_provider;
-    if (p === 'harness') return '#34C759';
-    if (p === 'cloud') return '#007AFF';
-    if (p === 'local') return '#5856D6';
-    return '#FF9500';
-  };
-
-  const vramPillLabel = () => {
-    const gpu = providerStatus?.gpu_vram;
-    const ocrCfg = providerStatus?.settings.ocr_config;
-    if (!gpu || ocrCfg?.detect_vram_on_startup === false) return null;
-    const activeEngine = ocrCfg?.active_engine || gpu.recommended_ocr_engine;
-    const engineLabel = OCR_SHORT_LABEL[activeEngine] || activeEngine;
-    const vramStr = gpu.effective_vram_gb > 0 ? `${gpu.effective_vram_gb.toFixed(0)}GB` : '无独显';
-    return `${vramStr} · ${engineLabel}`;
-  };
-
-  if (viewMode !== 'functional') {
-    return (
-      <div className="min-h-screen bg-slate-100">
-        <div className="bg-slate-900 text-slate-200 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 no-print">
-          <span className="font-medium">UI 范式对比预览模式（只读展示）</span>
-          <div className="flex flex-wrap items-center gap-2">
-            <SpringSegmentedControl<AppViewMode>
-              compact
-              springLabel="视图模式"
-              value={viewMode}
-              onChange={(m) => setViewMode(m)}
-              options={[
-                { value: 'functional', label: '← 返回 ASG 生产工作台' },
-                { value: 'apple_audited', label: 'Apple 审计版' },
-                { value: 'impeccable_audited', label: 'Impeccable 审计版' },
-                { value: 'swiftui', label: 'SwiftUI' },
-                { value: 'apple', label: 'Apple 原版' },
-                { value: 'impeccable', label: 'Impeccable' },
-                { value: 'emil', label: 'Emil' },
-              ]}
-            />
-          </div>
-        </div>
-        {viewMode === 'apple_audited' && <AppleDesignAuditedShowcase />}
-        {viewMode === 'impeccable_audited' && <ImpeccableAuditedShowcase />}
-        {viewMode === 'swiftui' && <SwiftUILiquidGlassShowcase />}
-        {viewMode === 'apple' && <AppleDesignShowcase />}
-        {viewMode === 'impeccable' && <ImpeccableShowcase />}
-        {viewMode === 'emil' && <EmilShowcase />}
-      </div>
-    );
-  }
 
   return (
-    <SpringTelemetryProvider onReport={reportPhysics}>
-      <div className={`mac-asg-root ${darkMode ? 'dark-theme' : ''}`}>
-        <style>{`
-          .mac-asg-root {
-            --bg-grouped: #F2F2F7;
-            --label-primary: #1C1C1E;
-            --label-secondary: #636366;
-            --separator: rgba(60, 60, 67, 0.14);
+    <SpringTelemetryProvider onReport={() => {}}>
+      <div className={`asg-root flex flex-col h-screen overflow-hidden ${effectiveVisualMode === 'liquid_glass' ? 'mode-liquid-glass' : 'mode-academic-pure'} ${darkMode ? 'dark-theme' : ''}`}>
+        {effectiveVisualMode === 'liquid_glass' && (
+          <LiquidGlassCanvas
+            isDark={darkMode}
+            optics={optics}
+            resetTrigger={pillResetCounter}
+            onSelectFlashcards={() => {
+              if (studyPackage) setActiveMainView('quiz');
+            }}
+            onWebglUnavailable={() => setWebglUnavailable(true)}
+          />
+        )}
 
-            height: 100vh;
-            width: 100vw;
-            display: flex;
-            flex-direction: column;
-            background-color: var(--bg-grouped);
-            color: var(--label-primary);
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
-            overflow: hidden;
-            position: relative;
-          }
-          .mac-sp-display {
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', sans-serif;
-            letter-spacing: -0.022em;
-          }
-          .mac-sp-tabular { font-variant-numeric: tabular-nums; }
-          .mac-sp-glass {
-            background-color: rgba(255, 255, 255, 0.78);
-            backdrop-filter: blur(22px) saturate(180%);
-            -webkit-backdrop-filter: blur(22px) saturate(180%);
-            border-bottom: 1px solid var(--separator);
-            box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-          }
-          .mac-sp-topbar {
-            height: 54px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 0 16px;
-            z-index: 30;
-          }
-          .mac-sp-split {
-            flex: 1;
-            min-height: 0;
-            height: calc(100vh - 54px);
-            display: grid;
-            grid-template-columns: 280px minmax(620px, 1fr);
-            grid-template-rows: minmax(0, 1fr);
-            overflow: hidden;
-          }
-          .mac-sp-col {
-            height: 100%;
-            min-height: 0;
-            box-sizing: border-box;
-            overflow-y: auto;
-            padding: 14px 14px 80px;
-            border-right: 1px solid var(--separator);
-            background-color: var(--bg-grouped);
-            min-width: 0;
-          }
-          .mac-sp-canvas {
-            height: 100%;
-            min-height: 0;
-            box-sizing: border-box;
-            overflow-y: auto;
-            overflow-x: hidden;
-            background-color: #FFFFFF;
-            padding: 24px 32px 120px;
-            min-width: 0;
-          }
-          @media print {
-            .mac-asg-root {
-              height: auto !important;
-              overflow: visible !important;
-              display: block !important;
-              background: #FFFFFF !important;
-            }
-            .mac-sp-split {
-              display: block !important;
-            }
-            .mac-sp-canvas {
-              overflow: visible !important;
-              padding: 0 !important;
-            }
-          }
-        `}</style>
-
-        {/* Top Liquid Glass Window Toolbar */}
-        <header className="mac-sp-topbar mac-sp-glass no-print">
-          {/* Left: Brand Logo + Collapsible Sidebar Toggle + Title */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-            <img
-              src="/logo.svg"
-              alt="Auto Study Guidance Logo"
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: '7px',
-                flexShrink: 0,
-                boxShadow: '0 2px 6px rgba(0, 102, 255, 0.25)',
-              }}
-            />
-
+        {/* Top Academic / Glass Header */}
+        <header
+          data-glass-panel="topbar"
+          data-radius="16"
+          data-bezel="22"
+          data-darkmix="0.32"
+          className="asg-glass-surface asg-floating-header h-14 px-4 border-b flex items-center justify-between gap-3 shrink-0 z-20 relative no-print"
+          style={{
+            borderColor: 'var(--border-default)',
+            backgroundColor: effectiveVisualMode === 'liquid_glass' ? undefined : 'var(--bg-surface)',
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
             <SpringButton
-              springLabel="边栏折叠"
-              onClick={toggleSidebar}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.12)',
-                backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 11px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: '#1C1C1E',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                cursor: 'pointer',
-              }}
+              springLabel="切换侧栏"
+              onClick={() => setSidebarOpen((s) => !s)}
+              className="p-2 rounded-lg border"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
             >
-              <PanelLeft className="w-3.5 h-3.5 text-[#007AFF]" />
-              <span>{sidebarOpen ? '收起边栏' : '展开边栏'}</span>
+              {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
             </SpringButton>
-
-            <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className="mac-sp-display" style={{ fontSize: '14.5px', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                Auto Study Guidance
-              </span>
-              {documentIr && (
+            <div className="w-8 h-8 rounded-xl bg-[#3B5BDB] text-white flex items-center justify-center shrink-0">
+              <GraduationCap className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold truncate flex items-center gap-1.5">
+                <span>Auto Study Guidance</span>
                 <span
-                  className="truncate hidden xl:inline"
-                  style={{ fontSize: '12px', color: '#636366', maxWidth: '180px' }}
-                  title={documentIr.filename}
+                  className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
+                  style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  — {documentIr.filename}
+                  v1.0.0
                 </span>
-              )}
+              </div>
+              <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                {documentIr ? documentIr.filename : 'AI 智能学习资料与互动练习系统'}
+              </div>
             </div>
           </div>
 
-          {/* Center: Contextual ζ=1.0 Spring Stage / Studio Switcher + Undo Generation */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <div className="hidden lg:flex items-center">
             <SpringSegmentedControl<MainViewKey>
               compact
-              springLabel="工作区阶段"
+              springLabel="主视图切换"
               value={activeMainView}
-              onChange={(next) => {
-                if (next !== 'stage1_negotiate' && !studyPackage) return;
-                setActiveMainView(next);
+              onChange={(v) => {
+                setActiveMainView(v);
+                if (v === 'workflow' && documentIr && workflowStep === 1) setWorkflowStep(3);
               }}
-              options={topbarViewOptions}
+              options={topbarOptions}
             />
-            {studyPackage && (
-              <SpringButton
-                springLabel="撤销生成"
-                onClick={handleRevokeGeneration}
-                maxShift={5}
-                style={{
-                  borderRadius: '999px',
-                  border: '1px solid rgba(255, 149, 0, 0.35)',
-                  backgroundColor: 'rgba(255, 149, 0, 0.1)',
-                  color: '#B45309',
-                  padding: '5px 11px',
-                  fontSize: '11.5px',
-                  fontWeight: 700,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-                title="撤销当前生成的 Stage 2 学习资料，返回 Stage 1 方案定制页面"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>撤销生成</span>
-              </SpringButton>
-            )}
           </div>
 
-          {/* Right: First-Time Guide + Push Receiver + VRAM Badge + Spotlight + 3-Tier Router */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
-            <SpringButton
-              springLabel="深浅色切换"
-              onClick={() => setDarkMode((d) => !d)}
-              maxShift={4}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleChangeVisualMode(effectiveVisualMode === 'academic_pure' ? 'liquid_glass' : 'academic_pure')}
+              disabled={!gpuAvailable}
+              title={gpuAvailable ? '切换 标准界面 / Liquid Glass' : '未检测到独立 GPU，使用标准界面'}
+              className="px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1"
               style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.14)',
-                backgroundColor: darkMode ? 'rgba(30, 41, 59, 0.92)' : 'rgba(255, 255, 255, 0.88)',
-                padding: '5px 9px',
-                fontSize: '11px',
-                fontWeight: 700,
-                color: darkMode ? '#F8FAFC' : '#1C1C1E',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-              title={darkMode ? '切换为浅色模式' : '切换为深色模式'}
-            >
-              {darkMode ? (
-                <Sun className="w-3.5 h-3.5 text-[#FBBF24]" />
-              ) : (
-                <Moon className="w-3.5 h-3.5 text-[#475569]" />
-              )}
-              <span className="hidden lg:inline">{darkMode ? '浅色' : '深色'}</span>
-            </SpringButton>
-
-            <SpringButton
-              springLabel="第一次使用"
-              onClick={() => setOnboardingOpen(true)}
-              maxShift={4}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(0, 122, 255, 0.25)',
-                backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                padding: '5px 10px',
-                fontSize: '11px',
-                fontWeight: 700,
-                color: '#007AFF',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-              title="查看新手指引与 3 分钟快速上手配置"
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">第一次使用？</span>
-            </SpringButton>
-
-            <SpringButton
-              springLabel="接收Push更新"
-              onClick={() => setUpdateModalOpen(true)}
-              maxShift={4}
-              style={{
-                borderRadius: '999px',
-                border: updateStatus?.has_update
-                  ? '1px solid rgba(52, 199, 89, 0.45)'
-                  : '1px solid rgba(60, 60, 67, 0.12)',
-                backgroundColor: updateStatus?.has_update
-                  ? 'rgba(52, 199, 89, 0.14)'
-                  : 'rgba(255, 255, 255, 0.88)',
-                padding: '5px 9px',
-                fontSize: '11px',
-                fontWeight: 700,
-                color: updateStatus?.has_update ? '#15803D' : '#475569',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-              title="检查并随时接收远端 Git Push 新版本"
-            >
-              <DownloadCloud className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">
-                {updateStatus?.has_update
-                  ? `新 Push (+${updateStatus.behind_count})`
-                  : '版本同步'}
-              </span>
-            </SpringButton>
-
-            {vramPillLabel() && (
-              <SpringButton
-                springLabel="显存与OCR识别"
-                onClick={() => setConfigOpen(true)}
-                maxShift={4}
-                style={{
-                  borderRadius: '999px',
-                  border: '1px solid rgba(52, 199, 89, 0.3)',
-                  backgroundColor: 'rgba(52, 199, 89, 0.1)',
-                  padding: '5px 9px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  color: '#1B5E20',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer',
-                }}
-                title={providerStatus?.gpu_vram?.recommendation_reason || '查看显存检测与 OCR 部署配置'}
-              >
-                <ScanText className="w-3 h-3 text-[#2E7D32]" />
-                <span className="mac-sp-tabular hidden lg:inline">{vramPillLabel()}</span>
-              </SpringButton>
-            )}
-
-            <SpringButton
-              springLabel="Spotlight"
-              onClick={() => setSpotlightOpen(true)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.12)',
-                backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 9px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                color: '#1C1C1E',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer',
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-subtle)',
+                opacity: gpuAvailable ? 1 : 0.65,
+                cursor: gpuAvailable ? 'pointer' : 'not-allowed',
               }}
             >
-              <Search className="w-3 h-3 text-[#636366]" />
-              <span className="hidden md:inline">⌘K</span>
-            </SpringButton>
+              {effectiveVisualMode === 'liquid_glass' ? <Sparkles className="w-3 h-3 text-[#3B5BDB]" /> : <Layers className="w-3 h-3" />}
+              <span>{effectiveVisualMode === 'liquid_glass' ? 'Liquid Glass' : '标准界面'}</span>
+            </button>
 
             <SpringButton
-              springLabel="三模路由"
-              onClick={() => setRouterPopoverOpen((o) => !o)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.14)',
-                backgroundColor: 'rgba(255, 255, 255, 0.92)',
-                padding: '6px 10px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                color: '#1C1C1E',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              <span
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '999px',
-                  backgroundColor: activeProviderTint(),
-                }}
-              />
-              <span className="max-w-[130px] truncate">{activeEngineLabel()}</span>
-            </SpringButton>
-
-            <SpringButton
-              springLabel="路由与OCR设置"
+              springLabel="AI 模型通道设置"
               onClick={() => setConfigOpen(true)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.12)',
-                backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
-              title="路由、CLI Harness 与显存分级 OCR 配置"
+              className="px-3 py-1.5 rounded-full border text-[11px] font-bold flex items-center gap-1.5"
+              style={{ borderColor: '#3B5BDB', backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
             >
-              <Settings className="w-3.5 h-3.5 text-[#636366]" />
+              {providerStatus?.settings.active_provider === 'cloud' ? (
+                <Cloud className="w-3.5 h-3.5" />
+              ) : (
+                <Cpu className="w-3.5 h-3.5" />
+              )}
+              <span className="max-w-[160px] truncate">{activeEngineText()}</span>
             </SpringButton>
 
-            {/* Anchored 3-Tier Router & View Quick Popover */}
-            {routerPopoverOpen && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '46px',
-                  right: '0',
-                  width: '320px',
-                  borderRadius: '16px',
-                  padding: '10px',
-                  zIndex: 50,
-                  backgroundColor: 'rgba(255, 255, 255, 0.94)',
-                  backdropFilter: 'blur(22px) saturate(180%)',
-                  WebkitBackdropFilter: 'blur(22px) saturate(180%)',
-                  border: '1px solid rgba(60, 60, 67, 0.12)',
-                  boxShadow: '0 20px 44px -12px rgba(0, 0, 0, 0.22)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '7px',
-                }}
-              >
-                <div style={{ fontSize: '11px', fontWeight: 700, color: '#636366', padding: '0 4px' }}>
-                  快速切换模型路由通道 (ζ=1.0)
-                </div>
+            <button
+              type="button"
+              onClick={() => setDarkMode((d) => !d)}
+              className="p-2 rounded-lg border"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+              title="切换浅色 / 深色模式"
+            >
+              {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+            </button>
 
-                <SpringSegmentedControl<ProviderType>
-                  compact
-                  wrap
-                  springLabel="快速通道"
-                  value={providerStatus?.settings.active_provider || 'heuristic'}
-                  onChange={(p) => handleQuickSwitchProvider(p)}
-                  options={[
-                    {
-                      value: 'harness',
-                      label: `CLI (${(providerStatus?.settings.harness_config.preferred_cli || 'claude').toUpperCase()})`,
-                    },
-                    { value: 'cloud', label: '云端 API' },
-                    { value: 'local', label: '本地模型' },
-                    { value: 'heuristic', label: '内置规则' },
-                  ]}
-                />
+            <button
+              type="button"
+              onClick={() => setOnboardingOpen(true)}
+              className="p-2 rounded-lg border"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+              title="新手引导"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
 
-                <div style={{ fontSize: '10.5px', color: '#8E8E93', padding: '0 4px', marginTop: '2px' }}>
-                  界面视图范式对比
-                </div>
-                <SpringSegmentedControl<AppViewMode>
-                  compact
-                  wrap
-                  springLabel="视图切换"
-                  value={viewMode}
-                  onChange={(m) => {
-                    setRouterPopoverOpen(false);
-                    setViewMode(m);
-                  }}
-                  options={[
-                    { value: 'functional', label: 'ASG 生产工作台' },
-                    { value: 'apple_audited', label: 'Apple 审计稿' },
-                    { value: 'impeccable_audited', label: 'Impeccable 稿' },
-                  ]}
-                />
+            <button
+              type="button"
+              onClick={() => setUpdateModalOpen(true)}
+              className="p-2 rounded-lg border"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+              title="版本同步与更新"
+            >
+              <RefreshCw className={`w-4 h-4 ${(updateStatus?.has_update || updateStatus?.update_available) ? 'text-[#3B5BDB]' : ''}`} />
+            </button>
 
-                <SpringButton
-                  springLabel="打开完整路由与OCR配置"
-                  onClick={() => {
-                    setRouterPopoverOpen(false);
-                    setConfigOpen(true);
-                  }}
-                  maxShift={4}
-                  style={{
-                    marginTop: '2px',
-                    width: '100%',
-                    borderRadius: '10px',
-                    border: 'none',
-                    backgroundColor: '#1C1C1E',
-                    color: '#FFFFFF',
-                    padding: '8px',
-                    fontSize: '11.5px',
-                    fontWeight: 600,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '5px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Cpu className="w-3.5 h-3.5" />
-                  <span>打开 CLI 一键安装 / OCR 显存编排与密钥配置...</span>
-                </SpringButton>
-              </div>
-            )}
+            <SpringButton
+              springLabel="打开完整设置"
+              onClick={() => setConfigOpen(true)}
+              className="px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>设置</span>
+            </SpringButton>
           </div>
         </header>
 
-        {/* Global Error Toast Banner */}
-        {errorMsg && (
-          <div
-            className="no-print"
-            style={{
-              backgroundColor: 'rgba(255, 59, 48, 0.1)',
-              borderBottom: '1px solid rgba(255, 59, 48, 0.24)',
-              padding: '8px 18px',
-              fontSize: '12px',
-              color: '#C62828',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
-            }}
+        {/* Liquid Glass Optical Parameter Strip (matches liquid_glass_preview.html) */}
+        {effectiveVisualMode === 'liquid_glass' && (
+          <section
+            data-glass-panel="optics"
+            data-radius="14"
+            data-bezel="18"
+            data-darkmix="0.34"
+            className="asg-glass-surface h-11 px-3.5 rounded-[14px] border flex items-center justify-between gap-3 shrink-0 z-20 relative no-print overflow-hidden"
+            style={{ borderColor: 'var(--border-default)' }}
           >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              {errorMsg}
-            </span>
-            <SpringButton
-              springLabel="关闭错误提示"
-              onClick={() => setErrorMsg(null)}
-              maxShift={3}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: '#C62828',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
+            <div className="flex items-center gap-3 overflow-x-auto min-w-0">
+              <span
+                className="px-2 py-0.5 rounded text-[11px] font-semibold shrink-0"
+                style={{
+                  backgroundColor: 'var(--brand-tint)',
+                  color: 'var(--brand-primary)',
+                }}
+              >
+                光学参数
+              </span>
+              <label className="flex items-center gap-1.5 text-[11.5px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                <span>IOR</span>
+                <input
+                  type="range"
+                  min="1.00"
+                  max="2.50"
+                  step="0.01"
+                  value={optics.ior}
+                  onChange={(e) => setOptics((o) => ({ ...o, ior: parseFloat(e.target.value) }))}
+                  className="w-16 accent-[#3B5BDB] cursor-pointer"
+                />
+                <span className="font-mono font-semibold text-[#3B5BDB] w-8">{optics.ior.toFixed(2)}</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[11.5px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                <span>色散</span>
+                <input
+                  type="range"
+                  min="0.00"
+                  max="1.00"
+                  step="0.01"
+                  value={optics.dispersion}
+                  onChange={(e) => setOptics((o) => ({ ...o, dispersion: parseFloat(e.target.value) }))}
+                  className="w-16 accent-[#3B5BDB] cursor-pointer"
+                />
+                <span className="font-mono font-semibold text-[#3B5BDB] w-8">{optics.dispersion.toFixed(2)}</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[11.5px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                <span>融球 K</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="90"
+                  step="1"
+                  value={optics.smoothK}
+                  onChange={(e) => setOptics((o) => ({ ...o, smoothK: parseFloat(e.target.value) }))}
+                  className="w-16 accent-[#3B5BDB] cursor-pointer"
+                />
+                <span className="font-mono font-semibold text-[#3B5BDB] w-7">{Math.round(optics.smoothK)}</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[11.5px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                <span>磨砂</span>
+                <input
+                  type="range"
+                  min="0.00"
+                  max="1.00"
+                  step="0.01"
+                  value={optics.blur}
+                  onChange={(e) => setOptics((o) => ({ ...o, blur: parseFloat(e.target.value) }))}
+                  className="w-16 accent-[#3B5BDB] cursor-pointer"
+                />
+                <span className="font-mono font-semibold text-[#3B5BDB] w-8">{optics.blur.toFixed(2)}</span>
+              </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setPillResetCounter((c) => c + 1)}
+              className="px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1 shrink-0"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)' }}
             >
-              关闭
-            </SpringButton>
+              <RotateCcw className="w-3 h-3" />
+              <span>复位胶囊</span>
+            </button>
+          </section>
+        )}
+
+        {/* Notices / Error Banners */}
+        {(errorMsg || downgradeNotice) && (
+          <div className="px-4 pt-2 z-20 relative no-print">
+            {downgradeNotice && (
+              <div
+                className="mb-1.5 px-4 py-2 rounded-xl border text-xs flex items-center justify-between"
+                style={{
+                  borderColor: 'var(--semantic-warning)',
+                  backgroundColor: 'var(--semantic-warning-tint)',
+                  color: 'var(--semantic-warning)',
+                }}
+              >
+                <span>{downgradeNotice}</span>
+                <button type="button" onClick={() => setDowngradeNotice(null)} className="underline ml-3">
+                  知道了
+                </button>
+              </div>
+            )}
+            {errorMsg && (
+              <div
+                className="px-4 py-2.5 rounded-xl border text-xs flex items-center justify-between gap-2"
+                style={{
+                  borderColor: 'var(--semantic-warning)',
+                  backgroundColor: 'var(--semantic-warning-tint)',
+                  color: 'var(--semantic-warning)',
+                }}
+              >
+                <span className="flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{errorMsg}</span>
+                </span>
+                <button type="button" onClick={() => setErrorMsg(null)} className="underline shrink-0">
+                  关闭
+                </button>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Focused Two-Pane Desktop Workspace (Collapsible Left Source Sidebar + Spacious Main Stage) */}
-        <div ref={splitRef} className="mac-sp-split">
-          {/* Pane 1: Collapsible Left Source & Chapter Sidebar */}
-          <aside className="mac-sp-col no-print" style={{ borderRightColor: 'rgba(60, 60, 67, 0.14)' }}>
-            <UploadAndTocPanel
-              documentIr={documentIr}
-              selectedChapterIds={blueprint?.selected_chapter_ids || []}
-              onToggleChapter={handleToggleChapter}
-              onSelectAllChapters={handleSelectAllChapters}
-              onUploadFile={handleUploadFile}
-              onLoadDemo={handleLoadDemo}
-              uploading={uploading}
-              projects={projects}
-              onOpenProject={handleOpenProject}
-              onDeleteProject={handleDeleteProject}
-            />
-          </aside>
+        {/* Main Workspace Split */}
+        <div className={`flex-1 min-h-0 flex relative z-10 overflow-hidden ${effectiveVisualMode === 'liquid_glass' ? 'gap-3' : ''}`}>
+          {sidebarOpen && (
+            <aside
+              data-glass-panel={effectiveVisualMode === 'liquid_glass' ? 'sidebar-left' : undefined}
+              data-radius="16"
+              data-bezel="22"
+              data-darkmix="0.38"
+              className={`w-[270px] shrink-0 h-full overflow-y-auto p-3.5 no-print ${effectiveVisualMode === 'liquid_glass' ? 'asg-glass-surface asg-floating-sidebar' : 'border-r'}`}
+              style={{ borderColor: 'var(--border-default)' }}
+            >
+              <UploadAndTocPanel
+                documentIr={documentIr}
+                selectedChapterIds={blueprint?.selected_chapter_ids || []}
+                onToggleChapter={handleToggleChapter}
+                onSelectAllChapters={handleSelectAllChapters}
+                onUploadFile={handleUploadFile}
+                onLoadDemo={handleLoadDemo}
+                uploading={uploading}
+                projects={projects}
+                onOpenProject={handleOpenProject}
+                onDeleteProject={handleDeleteProject}
+              />
+            </aside>
+          )}
 
-          {/* Pane 2: Spacious Unified Main Stage (Welcome / Stage 1 Blueprint Negotiation / Stage 2 Study Studio) */}
-          <main className="mac-sp-canvas">
-            {!documentIr ? (
+          <main className="flex-1 min-w-0 h-full overflow-y-auto p-5 sm:p-7">
+            {!documentIr && !ocrProgress?.active ? (
               <div
-                style={{
-                  maxWidth: '680px',
-                  margin: '52px auto 0',
-                  borderRadius: '22px',
-                  border: '1px solid rgba(60, 60, 67, 0.1)',
-                  backgroundColor: '#FAFAFC',
-                  padding: '42px 34px',
-                  textAlign: 'center',
-                }}
+                data-glass-panel="true"
+                className="asg-card max-w-[720px] mx-auto mt-8 p-8 text-center space-y-5"
               >
-                <div
-                  style={{
-                    width: '60px',
-                    height: '60px',
-                    borderRadius: '18px',
-                    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-                    color: '#007AFF',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '14px',
-                  }}
-                >
-                  <GraduationCap className="w-8 h-8" />
+                <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center bg-[#EDF2FF] text-[#3B5BDB]">
+                  <BookOpen className="w-7 h-7" />
                 </div>
-                <h1 className="mac-sp-display" style={{ fontSize: '25px', fontWeight: 700, color: '#1C1C1E' }}>
-                  上传课本或 PPTX，定制专属学习资料
-                </h1>
-                <p style={{ marginTop: '10px', fontSize: '13.5px', color: '#636366', lineHeight: 1.7 }}>
-                  采用 <strong>「AI 解析需求 → 确认定制方案 → 正式生成资料」</strong> 双阶段控制契约。支持启动显存分级 OCR（MinerU Pipeline / Free-OXR API / PaddleOCR / Full OXR）、DSH/Claude/Codex/Gemini CLI 一键安装，以及直接输入或 AI 一键填充题量参数。
-                </p>
-                <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-center gap-2">
+                    <h1 className="text-2xl font-bold">Auto Study Guidance</h1>
+                    <span
+                      className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
+                      style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                    >
+                      v1.0.0
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
+                    上传教材、课件或讲义图片，自动完成文档解析，按学习场景生成自学讲义、章节练习、冲刺试卷、速记卡与思维导图。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                   <SpringButton
                     springLabel="体验示例课件"
                     disabled={uploading}
                     onClick={handleLoadDemo}
-                    maxShift={8}
-                    style={{
-                      borderRadius: '999px',
-                      border: 'none',
-                      backgroundColor: '#007AFF',
-                      color: '#FFFFFF',
-                      padding: '11px 22px',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      boxShadow: '0 10px 24px -6px rgba(0, 122, 255, 0.5)',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '7px',
-                      cursor: uploading ? 'not-allowed' : 'pointer',
-                    }}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
+                    style={{ backgroundColor: '#3B5BDB' }}
                   >
                     <Sparkles className="w-4 h-4" />
-                    <span>{uploading ? '正在解析示例 PPTX...' : '立即加载示例 PPTX 课件体验完整流程'}</span>
+                    <span>载入示例课件</span>
                   </SpringButton>
-
                   <SpringButton
-                    springLabel="第一次使用引导"
-                    onClick={() => setOnboardingOpen(true)}
-                    maxShift={6}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(0, 122, 255, 0.25)',
-                      backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                      color: '#007AFF',
-                      padding: '11px 18px',
-                      fontSize: '12.5px',
-                      fontWeight: 700,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <HelpCircle className="w-4 h-4" />
-                    <span>第一次使用？3 分钟引导上手</span>
-                  </SpringButton>
-
-                  <SpringButton
-                    springLabel="打开OCR与CLI设置"
+                    springLabel="系统设置"
                     onClick={() => setConfigOpen(true)}
-                    maxShift={6}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      color: '#1C1C1E',
-                      padding: '11px 18px',
-                      fontSize: '12.5px',
-                      fontWeight: 600,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      cursor: 'pointer',
-                    }}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold border flex items-center gap-1.5"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
                   >
-                    <ScanText className="w-4 h-4 text-[#34C759]" />
-                    <span>查看显存 OCR 与 CLI Harness 配置</span>
+                    <Settings className="w-4 h-4 text-[#3B5BDB]" />
+                    <span>系统设置</span>
                   </SpringButton>
                 </div>
               </div>
-            ) : !studyPackage || activeMainView === 'stage1_negotiate' ? (
-              <div style={{ maxWidth: '1080px', margin: '0 auto' }}>
-                <BlueprintNegotiator
-                  presets={presets}
-                  blueprint={blueprint}
-                  onChangeBlueprint={setBlueprint}
-                  onNegotiate={handleNegotiate}
-                  onAiFillParams={handleAiFillParams}
-                  onConfirmAndGenerate={handleConfirmAndGenerate}
-                  onQuickGenerate={handleQuickGenerate}
-                  onCancelGenerate={handleCancelGenerate}
-                  negotiating={negotiating}
-                  aiFilling={aiFilling}
-                  generating={generating}
-                  progressInfo={progressInfo}
-                />
-              </div>
+            ) : activeMainView === 'workflow' || !studyPackage ? (
+              <BlueprintNegotiator
+                documentIr={documentIr}
+                workflowStep={workflowStep}
+                onChangeWorkflowStep={setWorkflowStep}
+                ocrProgress={ocrProgress}
+                presets={presets}
+                blueprint={blueprint}
+                providerStatus={providerStatus}
+                onChangeBlueprint={setBlueprint}
+                onAiFillParams={handleAiFillParams}
+                onConfirmAndGenerate={handleConfirmAndGenerate}
+                onCancelGenerate={handleCancelGenerate}
+                onOpenSettings={() => setConfigOpen(true)}
+                onRefreshProviderStatus={refreshProviderStatus}
+                aiFilling={aiFilling}
+                generating={generating}
+                progressInfo={progressInfo}
+              />
             ) : (
               <StudyStudio
                 studyPackage={studyPackage}
                 documentIr={documentIr}
                 activeTab={activeMainView}
                 onChangeTab={(tab) => setActiveMainView(tab)}
+                onUpdatePackage={(updatedPkg) => setStudyPackage(updatedPkg)}
+                onRequestAuth={() => setAuthModalOpen(true)}
                 darkMode={darkMode}
               />
             )}
           </main>
         </div>
 
-        {/* Spotlight ⌘K Instant Command Modal */}
-        {spotlightOpen && (
+        {/* Free AI Software Proxy Authorization Modal */}
+        {authModalOpen && (
           <div
-            className="no-print"
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 60,
-              backgroundColor: 'rgba(0, 0, 0, 0.24)',
-              display: 'flex',
-              alignItems: 'flex-start',
-              justifyContent: 'center',
-              paddingTop: '96px',
-            }}
-            onClick={() => setSpotlightOpen(false)}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)' }}
           >
             <div
-              style={{
-                width: '480px',
-                borderRadius: '18px',
-                padding: '14px',
-                backgroundColor: 'rgba(255, 255, 255, 0.94)',
-                backdropFilter: 'blur(24px) saturate(180%)',
-                WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-                border: '1px solid rgba(255, 255, 255, 0.9)',
-                boxShadow: '0 24px 60px rgba(0, 0, 0, 0.26)',
-              }}
-              onClick={(e) => e.stopPropagation()}
+              className="asg-card w-full max-w-lg p-6 space-y-4 asg-drawer-enter"
+              style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#1C1C1E', marginBottom: '8px' }}>
-                ⌘K 聚焦快捷指令 (0ms 瞬时响应)
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-[#EDF2FF] text-[#3B5BDB] shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold">请求授权使用本机免费 AI 软件反代出题</h3>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                    即将通过 <strong>Magpie + DeepSeek Harness (dsh)</strong> 调用您本机已安装的免费 AI 软件（Qoder CN / WorkBuddy / Trae CN）完成参数评估或高质量题目命制。调用前需要取得您的明确授权：
+                  </p>
+                </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <SpotlightRow
-                  label={darkMode ? '☀️ 切换为浅色模式' : '🌙 切换为深色模式'}
-                  hint="Theme"
+
+              <div className="grid grid-cols-3 gap-2">
+                {(providerStatus?.free_ai_apps || [])
+                  .filter((a) => ['qoder_cn', 'workbuddy', 'trae_cn'].includes(a.app_id))
+                  .map((app) => (
+                    <div
+                      key={app.app_id}
+                      className="p-2.5 rounded-xl border text-center"
+                      style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+                    >
+                      <div className="text-xs font-bold">{app.name}</div>
+                      <div
+                        className="text-[11px] mt-0.5 font-semibold"
+                        style={{ color: app.installed ? 'var(--semantic-success)' : 'var(--text-muted)' }}
+                      >
+                        {app.running ? '在线可用' : app.installed ? '已安装' : '未安装'}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
                   onClick={() => {
-                    setDarkMode((d) => !d);
-                    setSpotlightOpen(false);
-                  }}
-                />
-                <SpotlightRow
-                  label="⚡ 加载示例 PPTX 课件（深度学习核心架构讲义）"
-                  hint="Demo"
-                  onClick={() => {
-                    setSpotlightOpen(false);
-                    handleLoadDemo();
-                  }}
-                />
-                <SpotlightRow
-                  label="✨ 一键 AI 智能填充当前题量与参数"
-                  hint="AI Fill"
-                  onClick={() => {
-                    setSpotlightOpen(false);
-                    if (documentIr) handleAiFillParams();
-                  }}
-                />
-                <SpotlightRow
-                  label="配置显存分级 OCR、DSH/CLI Harness 一键安装..."
-                  hint="Router & OCR"
-                  onClick={() => {
-                    setSpotlightOpen(false);
+                    setAuthModalOpen(false);
                     setConfigOpen(true);
                   }}
-                />
-                {presets.map((p) => (
-                  <SpotlightRow
-                    key={p.preset_id}
-                    label={`使用预设「${p.name}」并让 AI 解析方案`}
-                    hint={p.badge}
-                    onClick={() => {
-                      setSpotlightOpen(false);
-                      if (documentIr) {
-                        handleNegotiate(p.preset_id, p.sample_prompt);
-                      }
-                    }}
-                  />
-                ))}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold border"
+                  style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+                >
+                  去设置详情 / 一键配置 Magpie
+                </button>
+                <SpringButton
+                  springLabel="授权并继续"
+                  onClick={handleAuthorizeAndContinue}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white"
+                  style={{ backgroundColor: '#2B8A3E' }}
+                >
+                  ✓ 授权并继续出题
+                </SpringButton>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cloud API Missing Prompt Modal */}
+        {cloudPromptOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)' }}
+          >
+            <div
+              className="asg-card w-full max-w-md p-6 space-y-4 asg-drawer-enter"
+              style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}
+            >
+              <div className="space-y-1.5">
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Cloud className="w-5 h-5 text-[#3B5BDB]" />
+                  <span>当前已选「云端 API」，尚未填写 API Key</span>
+                </h3>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                  请先填写云端 API Key（DeepSeek / OpenAI 等），或者直接切换至「选项 1：Magpie + DeepSeek Harness」使用本机免费 AI 软件出题。
+                </p>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCloudPromptOpen(false)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold border"
+                  style={{ borderColor: 'var(--border-default)' }}
+                >
+                  稍后
+                </button>
+                <SpringButton
+                  springLabel="打开设置填写 API Key"
+                  onClick={() => {
+                    setCloudPromptOpen(false);
+                    setConfigOpen(true);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white"
+                  style={{ backgroundColor: '#3B5BDB' }}
+                >
+                  立即前往配置
+                </SpringButton>
               </div>
             </div>
           </div>
@@ -1325,6 +1019,9 @@ export function App() {
             }
           }}
           onRefreshStatus={refreshProviderStatus}
+          gpuAvailable={gpuAvailable}
+          effectiveVisualMode={effectiveVisualMode}
+          onChangeVisualMode={handleChangeVisualMode}
         />
 
         <OnboardingGuideModal
@@ -1351,32 +1048,6 @@ export function App() {
         />
       </div>
     </SpringTelemetryProvider>
-  );
-}
-
-function SpotlightRow({ label, hint, onClick }: { label: string; hint: string; onClick: () => void }) {
-  return (
-    <SpringButton
-      springLabel={hint}
-      onClick={onClick}
-      maxShift={4}
-      style={{
-        width: '100%',
-        textAlign: 'left',
-        border: 'none',
-        backgroundColor: '#FFFFFF',
-        borderRadius: '10px',
-        padding: '9px 11px',
-        fontSize: '12.5px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontWeight: 600, color: '#1C1C1E' }}>{label}</span>
-      <span style={{ fontSize: '10.5px', color: '#007AFF', fontWeight: 700 }}>{hint}</span>
-    </SpringButton>
   );
 }
 

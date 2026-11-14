@@ -831,8 +831,9 @@ def _build_quiz_exam_html(
     *,
     paper_size: PaperSize,
     assets_dir: Optional[Path] = None,
+    quiz_override: Optional[Any] = None,
 ) -> str:
-    quiz = package.quiz_paper
+    quiz = quiz_override or package.quiz_paper
     mcqs = [q for q in quiz.questions if q.type == "mcq"]
     fills = [q for q in quiz.questions if q.type == "fill_blank"]
     shorts = [q for q in quiz.questions if q.type == "short_answer"]
@@ -962,8 +963,9 @@ def _build_quiz_answers_html(
     package: StudyPackage,
     *,
     assets_dir: Optional[Path] = None,
+    quiz_override: Optional[Any] = None,
 ) -> str:
-    quiz = package.quiz_paper
+    quiz = quiz_override or package.quiz_paper
     ordered_qs: List[QuizQuestion] = (
         [q for q in quiz.questions if q.type == "mcq"]
         + [q for q in quiz.questions if q.type == "fill_blank"]
@@ -1018,10 +1020,12 @@ def export_quiz_pdf_bytes(
     paper_size: PaperSize = "a4",
     include_answers: bool = True,
     assets_dir: Optional[Path] = None,
+    quiz_override: Optional[Any] = None,
 ) -> bytes:
     """Export interactive quiz paper as a standalone print-ready A4 or A3 sealed two-column PDF."""
+    active_quiz = quiz_override or package.quiz_paper
     exam_html = _build_quiz_exam_html(
-        doc_ir, package, paper_size=paper_size, assets_dir=assets_dir
+        doc_ir, package, paper_size=paper_size, assets_dir=assets_dir, quiz_override=active_quiz
     )
     exam_doc, _ = _render_story_to_doc(
         exam_html,
@@ -1037,8 +1041,8 @@ def export_quiz_pdf_bytes(
         doc_footer_label="试卷正文 · ",
     )
 
-    if include_answers and package.quiz_paper.questions:
-        ans_html = _build_quiz_answers_html(package, assets_dir=assets_dir)
+    if include_answers and active_quiz.questions:
+        ans_html = _build_quiz_answers_html(package, assets_dir=assets_dir, quiz_override=active_quiz)
         ans_doc, _ = _render_story_to_doc(
             ans_html,
             css=_BASE_PRINT_CSS,

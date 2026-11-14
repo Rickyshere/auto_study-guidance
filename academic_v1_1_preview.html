@@ -1,0 +1,2836 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto Study Guidance · 现代学术风 UI/UX 设计规范（v1.1 完整交互原型）</title>
+  <style>
+    /* =========================================================================
+       一、色彩系统（Color System Tokens - v1.1 Spec）
+       ========================================================================= */
+    :root {
+      --bg-canvas: #FAF9F6;
+      --bg-surface: #FFFFFF;
+      --bg-subtle: #F3F4F6;
+      --border-default: #E5E7EB;
+
+      --text-primary: #111827;
+      --text-secondary: #4B5563;
+      --text-muted: #9CA3AF;
+
+      --brand-primary: #3B5BDB;
+      --brand-tint: #EDF2FF;
+      --brand-alpha-10: rgba(59, 91, 219, 0.10);
+      --brand-alpha-22: rgba(59, 91, 219, 0.22);
+
+      --semantic-success: #2B8A3E;
+      --semantic-success-tint: #EBFBEE;
+      --semantic-warning: #D97706;
+      --semantic-warning-tint: #FEF3C7;
+      --semantic-highlight: rgba(250, 204, 21, 0.35);
+
+      --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+      --modal-shadow: 0 24px 64px rgba(17, 24, 39, 0.16);
+      --topbar-bg: rgba(250, 249, 246, 0.88);
+      --code-bg: #F3F4F6;
+
+      /* 二、字体家族 */
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+      --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+
+      /* 三、4px 基准网格间距 & 圆角 */
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+
+      --r-sm: 6px;
+      --r-md: 10px;
+      --r-lg: 16px;
+      --r-pill: 9999px;
+    }
+
+    html[data-theme="dark"] {
+      --bg-canvas: #121316;
+      --bg-surface: #1C1E22;
+      --bg-subtle: #262930;
+      --border-default: #2E323B;
+
+      --text-primary: #E5E7EB;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+
+      --brand-primary: #5C7CFA;
+      --brand-tint: #1E293B;
+      --brand-alpha-10: rgba(92, 124, 250, 0.16);
+      --brand-alpha-22: rgba(92, 124, 250, 0.30);
+
+      --semantic-success: #40C057;
+      --semantic-success-tint: #1B3824;
+      --semantic-warning: #F59E0B;
+      --semantic-warning-tint: #3B2E17;
+      --semantic-highlight: rgba(234, 179, 8, 0.25);
+
+      --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+      --modal-shadow: 0 28px 72px rgba(0, 0, 0, 0.55);
+      --topbar-bg: rgba(18, 19, 22, 0.88);
+      --code-bg: #262930;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    button {
+      font-family: inherit;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    /* Typography Scale (Section II) */
+    .t-h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 32px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+    .t-h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 26px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+    .t-h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 24px;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--text-primary);
+    }
+    .t-body {
+      margin: 0;
+      font-size: 15px;
+      line-height: 26px; /* 1.73x breathing room */
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      color: var(--text-primary);
+    }
+    .t-small {
+      margin: 0;
+      font-size: 14px;
+      line-height: 22px;
+      font-weight: 400;
+      letter-spacing: 0;
+      color: var(--text-secondary);
+    }
+    .t-caption {
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      color: var(--text-muted);
+    }
+    .mono {
+      font-family: var(--font-mono);
+    }
+
+    /* Outer viewport wrapper (handles Export Modal depth recession scale: 1.0 -> 0.96) */
+    .workbench-viewport {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--bg-canvas);
+    }
+
+    .workbench-stage {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-canvas);
+      transform-origin: center center;
+      will-change: transform, border-radius, filter;
+      overflow: hidden;
+    }
+
+    /* Mobile Preview Simulator Frame */
+    .workbench-viewport.mobile-sim {
+      padding: 20px;
+      background: var(--bg-subtle);
+      align-items: center;
+    }
+    .workbench-viewport.mobile-sim .workbench-stage {
+      width: 390px;
+      max-width: 100%;
+      height: min(844px, calc(100vh - 40px));
+      border-radius: 28px;
+      border: 6px solid #1F2937;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+    }
+
+    /* =========================================================================
+       Top App Header
+       ========================================================================= */
+    .top-header {
+      flex-shrink: 0;
+      height: 58px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border-default);
+      background: var(--topbar-bg);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      z-index: 20;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: var(--r-sm);
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .notebook-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .notebook-name {
+      font-size: 14px;
+      line-height: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .icon-btn {
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+    .icon-btn:hover {
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+    }
+    .icon-btn.active {
+      background: var(--brand-tint);
+      border-color: var(--brand-alpha-22);
+      color: var(--brand-primary);
+    }
+
+    /* Segmented Control with Spring Slider */
+    .segmented {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      padding: 3px;
+      border-radius: var(--r-md);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .seg-indicator {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      height: calc(100% - 6px);
+      border-radius: 7px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      pointer-events: none;
+      will-change: transform;
+      z-index: 0;
+    }
+    .seg-btn {
+      position: relative;
+      z-index: 1;
+      height: 28px;
+      padding: 0 12px;
+      border: none;
+      background: transparent;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      transition: color 0.15s ease;
+    }
+    .seg-btn.active {
+      color: var(--brand-primary);
+      font-weight: 600;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-export {
+      height: 34px;
+      padding: 0 14px;
+      border-radius: var(--r-md);
+      border: none;
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(59, 91, 219, 0.24);
+    }
+    .btn-export:hover {
+      filter: brightness(1.06);
+    }
+
+    .preview-switch-badge {
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+    .preview-switch-badge:hover {
+      background: var(--brand-tint);
+      color: var(--brand-primary);
+      border-color: var(--brand-alpha-22);
+    }
+
+    /* Offline Mode Notice Banner */
+    .offline-banner {
+      display: none;
+      flex-shrink: 0;
+      padding: 6px 16px;
+      background: var(--semantic-warning-tint);
+      border-bottom: 1px solid rgba(217, 119, 6, 0.25);
+      color: var(--semantic-warning);
+      font-size: 12px;
+      font-weight: 500;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .offline-banner.visible {
+      display: flex;
+    }
+
+    /* Mobile Subnav & Immersive Bar */
+    .mobile-segmented-bar {
+      display: none;
+      flex-shrink: 0;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      justify-content: center;
+    }
+    .immersive-quiz-bar {
+      display: none;
+      flex-shrink: 0;
+      height: 46px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .immersive-progress-track {
+      flex: 1;
+      height: 5px;
+      border-radius: var(--r-pill);
+      background: var(--bg-subtle);
+      overflow: hidden;
+    }
+    .immersive-progress-fill {
+      height: 100%;
+      width: 25%;
+      background: var(--brand-primary);
+      border-radius: var(--r-pill);
+      transition: width 0.25s ease;
+    }
+
+    .workbench-viewport.mobile-sim .desktop-only {
+      display: none !important;
+    }
+    .workbench-viewport.mobile-sim .mobile-segmented-bar {
+      display: flex;
+    }
+    .workbench-viewport.mobile-sim.immersive-active .top-header,
+    .workbench-viewport.mobile-sim.immersive-active .mobile-segmented-bar {
+      display: none !important;
+    }
+    .workbench-viewport.mobile-sim.immersive-active .immersive-quiz-bar {
+      display: flex;
+    }
+
+    @media (max-width: 767px) {
+      .desktop-only {
+        display: none !important;
+      }
+      .mobile-segmented-bar {
+        display: flex;
+      }
+      .workbench-viewport.immersive-active .top-header,
+      .workbench-viewport.immersive-active .mobile-segmented-bar {
+        display: none !important;
+      }
+      .workbench-viewport.immersive-active .immersive-quiz-bar {
+        display: flex;
+      }
+    }
+
+    /* =========================================================================
+       Three-Column Layout Architecture (Section IV)
+       ========================================================================= */
+    .workbench-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      width: 100%;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Left Column: Sources (260px fixed, collapsible) */
+    .left-sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-default);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.26s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+    }
+    .left-sidebar.collapsed {
+      width: 0;
+      border-right-width: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .sidebar-head {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .source-item {
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      background: var(--bg-surface);
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .source-item:hover {
+      background: var(--bg-subtle);
+    }
+    .source-item.checked {
+      border-color: var(--brand-alpha-22);
+      background: var(--brand-tint);
+    }
+    .source-checkbox {
+      width: 16px;
+      height: 16px;
+      border-radius: var(--r-sm);
+      border: 1.5px solid var(--border-default);
+      background: var(--bg-surface);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #FFFFFF;
+    }
+    .source-item.checked .source-checkbox {
+      background: var(--brand-primary);
+      border-color: var(--brand-primary);
+    }
+    .source-title {
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      word-break: break-word;
+    }
+    .source-sub {
+      margin-top: 2px;
+      font-size: 12px;
+      line-height: 16px;
+      color: var(--text-muted);
+    }
+
+    .sidebar-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-default);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Center Column: Main Workbench (adaptive flex, inner 760px max reading line) */
+    .center-main {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 24px 20px 80px;
+    }
+    .workbench-viewport.mobile-sim .center-main {
+      padding: 16px 12px 72px;
+    }
+    @media (max-width: 767px) {
+      .center-main {
+        padding: 16px 12px 72px;
+      }
+    }
+
+    .center-inner {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Right Column: Copilot & Source Viewer (320px, slides in on demand) */
+    .right-sidebar {
+      width: 320px;
+      flex-shrink: 0;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-default);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      will-change: transform, opacity;
+      transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+    }
+    .right-sidebar.closed {
+      width: 0;
+      border-left-width: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Hide desktop sidebars inside mobile frame / narrow screens */
+    .workbench-viewport.mobile-sim .left-sidebar,
+    .workbench-viewport.mobile-sim .right-sidebar {
+      display: none;
+    }
+    @media (max-width: 1023px) {
+      .right-sidebar {
+        position: fixed;
+        top: 58px;
+        right: 0;
+        bottom: 0;
+        z-index: 40;
+        box-shadow: -8px 0 32px rgba(0, 0, 0, 0.12);
+      }
+      .left-sidebar {
+        position: fixed;
+        top: 58px;
+        left: 0;
+        bottom: 0;
+        z-index: 40;
+        box-shadow: 8px 0 32px rgba(0, 0, 0, 0.12);
+      }
+    }
+
+    /* =========================================================================
+       Shared Card Surface & Core Components (Section V)
+       ========================================================================= */
+    .paper-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-lg);
+      box-shadow: var(--card-shadow);
+      padding: 24px;
+    }
+    .workbench-viewport.mobile-sim .paper-card {
+      padding: 16px;
+    }
+    @media (max-width: 767px) {
+      .paper-card {
+        padding: 16px;
+      }
+    }
+
+    /* Citation Badge (Section V.1) */
+    .cite-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      border-radius: var(--r-sm);
+      background: var(--brand-alpha-10);
+      color: var(--brand-primary);
+      border: 1px solid transparent;
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      vertical-align: baseline;
+      margin: 0 2px;
+      will-change: transform;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .cite-badge:hover {
+      background: var(--brand-alpha-22);
+      border-color: var(--brand-alpha-22);
+    }
+
+    /* Highlighted text & Scrollable formula / code blocks (Section VII.1) */
+    mark.hl {
+      background: var(--semantic-highlight);
+      color: inherit;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .scroll-block {
+      width: 100%;
+      overflow-x: auto;
+      padding: 12px 16px;
+      border-radius: var(--r-md);
+      background: var(--code-bg);
+      border: 1px solid var(--border-default);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 22px;
+      white-space: pre;
+      color: var(--text-primary);
+    }
+
+    /* =========================================================================
+       AI Generation Preset Bar & Shimmer Skeleton (Section V.4)
+       ========================================================================= */
+    .gen-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .pill-group-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+    .pill-group-row::-webkit-scrollbar {
+      display: none;
+    }
+    .pill-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .prompt-pill {
+      padding: 5px 12px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+    .prompt-pill:hover {
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+    }
+    .prompt-pill.selected {
+      background: var(--brand-tint);
+      border-color: var(--brand-primary);
+      color: var(--brand-primary);
+      font-weight: 600;
+    }
+
+    .gen-action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: var(--r-md);
+      border: none;
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      height: 32px;
+      padding: 0 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-secondary:hover {
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+    }
+
+    /* Shimmer Skeleton */
+    @keyframes shimmerMove {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .shimmer-card {
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .shimmer-card.active {
+      display: flex;
+    }
+    .shimmer-line {
+      height: 14px;
+      border-radius: var(--r-sm);
+      background: linear-gradient(90deg, var(--bg-subtle) 25%, var(--border-default) 50%, var(--bg-subtle) 75%);
+      background-size: 200% 100%;
+      animation: shimmerMove 1.4s infinite linear;
+    }
+
+    /* =========================================================================
+       Interactive Quiz Card State Machine (Section V.2)
+       ========================================================================= */
+    .quiz-progress-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px;
+    }
+    .quiz-track {
+      flex: 1;
+      height: 6px;
+      border-radius: var(--r-pill);
+      background: var(--bg-subtle);
+      overflow: hidden;
+    }
+    .quiz-fill {
+      height: 100%;
+      border-radius: var(--r-pill);
+      background: var(--brand-primary);
+      transition: width 0.28s ease;
+    }
+
+    .quiz-card {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      will-change: transform, opacity;
+    }
+
+    .quiz-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .options-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .option-btn {
+      width: 100%;
+      text-align: left;
+      padding: 12px 16px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      will-change: transform;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .option-btn:hover:not(:disabled) {
+      background: var(--bg-subtle);
+      border-color: var(--brand-alpha-22);
+    }
+    .option-btn.state-correct {
+      background: var(--semantic-success-tint);
+      border-color: var(--semantic-success);
+      color: var(--text-primary);
+    }
+    .option-btn.state-wrong {
+      background: var(--semantic-warning-tint);
+      border-color: var(--semantic-warning);
+      color: var(--text-primary);
+    }
+
+    .opt-letter {
+      width: 24px;
+      height: 24px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .option-btn.state-correct .opt-letter {
+      background: var(--semantic-success);
+      border-color: var(--semantic-success);
+      color: #FFFFFF;
+    }
+    .option-btn.state-wrong .opt-letter {
+      background: var(--semantic-warning);
+      border-color: var(--semantic-warning);
+      color: #FFFFFF;
+    }
+
+    /* AI Explanation Drawer (FLIP / GPU transform-opacity, no height physics) */
+    .ai-drawer {
+      display: none;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      padding: 16px;
+      flex-direction: column;
+      gap: 12px;
+      transform-origin: top center;
+      will-change: transform, opacity;
+    }
+    .ai-drawer.open {
+      display: flex;
+    }
+    .drawer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* =========================================================================
+       3D Flashcard Component (Section V.3 - 3:4 Stack + Velocity Drag)
+       ========================================================================= */
+    .flashcard-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 8px 0 24px;
+    }
+    .card-stack-wrap {
+      position: relative;
+      width: 315px;
+      max-width: calc(100% - 16px);
+      height: 420px; /* strict 3:4 ratio */
+      perspective: 1200px;
+      user-select: none;
+      touch-action: pan-y;
+    }
+    .card-peek-under {
+      position: absolute;
+      inset: 8px 10px -8px 10px; /* 8px bottom stack peek */
+      border-radius: var(--r-lg);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      box-shadow: var(--card-shadow);
+      z-index: 0;
+    }
+    .flashcard-carrier {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      transform-origin: center bottom;
+      will-change: transform, opacity;
+      cursor: grab;
+    }
+    .flashcard-carrier:active {
+      cursor: grabbing;
+    }
+    .flashcard-flipper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      will-change: transform, opacity;
+    }
+    .flashcard-face {
+      position: absolute;
+      inset: 0;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-lg);
+      box-shadow: var(--card-shadow);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+    .flashcard-front {
+      transform: none;
+    }
+    .flashcard-back {
+      transform: none;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .stamp {
+      position: absolute;
+      top: 18px;
+      padding: 4px 10px;
+      border-radius: var(--r-sm);
+      font-size: 13px;
+      font-weight: 700;
+      border: 2px solid;
+      opacity: 0;
+      pointer-events: none;
+      letter-spacing: 0.04em;
+    }
+    .stamp-review {
+      left: 18px;
+      color: var(--semantic-warning);
+      border-color: var(--semantic-warning);
+      background: var(--semantic-warning-tint);
+      transform: rotate(-10deg);
+    }
+    .stamp-mastered {
+      right: 18px;
+      color: var(--semantic-success);
+      border-color: var(--semantic-success);
+      background: var(--semantic-success-tint);
+      transform: rotate(10deg);
+    }
+
+    /* =========================================================================
+       Empty State (Section VII.2)
+       ========================================================================= */
+    .empty-dropzone {
+      border: 2px dashed var(--border-default);
+      border-radius: var(--r-lg);
+      background: var(--bg-surface);
+      padding: 36px 24px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .sample-packs-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .workbench-viewport.mobile-sim .sample-packs-grid {
+      grid-template-columns: 1fr;
+    }
+    @media (max-width: 767px) {
+      .sample-packs-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .sample-pack-card {
+      text-align: left;
+      padding: 16px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.14s ease, background-color 0.14s ease;
+    }
+    .sample-pack-card:hover {
+      border-color: var(--brand-primary);
+      background: var(--brand-tint);
+    }
+
+    /* =========================================================================
+       Right Sidebar: Source Viewer + Copilot
+       ========================================================================= */
+    .right-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .source-excerpt-card {
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      background: var(--bg-canvas);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      will-change: transform;
+    }
+    .copilot-bubble {
+      border-radius: var(--r-md);
+      padding: 10px 12px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      font-size: 13px;
+      line-height: 20px;
+      color: var(--text-primary);
+    }
+
+    /* =========================================================================
+       Mobile Bottom Sheet (45% height for Citations)
+       ========================================================================= */
+    .bottom-sheet-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.35);
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      z-index: 60;
+    }
+    .bottom-sheet-backdrop.open {
+      display: flex;
+    }
+    .bottom-sheet {
+      width: 100%;
+      max-width: 520px;
+      height: 45vh;
+      background: var(--bg-surface);
+      border-top-left-radius: var(--r-lg);
+      border-top-right-radius: var(--r-lg);
+      border: 1px solid var(--border-default);
+      padding: 14px 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      will-change: transform, opacity;
+    }
+    .sheet-handle {
+      width: 40px;
+      height: 4px;
+      border-radius: var(--r-pill);
+      background: var(--border-default);
+      margin: 0 auto 2px;
+      flex-shrink: 0;
+    }
+
+    /* =========================================================================
+       Export Modal Hub + Live Mini A4 Preview (Section V.5)
+       ========================================================================= */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.42);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 80;
+    }
+    .modal-backdrop.open {
+      display: flex;
+    }
+    .export-modal {
+      width: 100%;
+      max-width: 840px;
+      max-height: 90vh;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-lg);
+      box-shadow: var(--modal-shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      will-change: transform, opacity;
+    }
+    .export-body {
+      padding: 20px 24px 24px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
+    }
+    @media (max-width: 767px) {
+      .export-body {
+        grid-template-columns: 1fr;
+      }
+    }
+    .format-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .format-card {
+      text-align: left;
+      padding: 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .format-card.active {
+      background: var(--brand-tint);
+      border-color: var(--brand-primary);
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-canvas);
+    }
+    .toggle-switch {
+      width: 38px;
+      height: 22px;
+      border-radius: var(--r-pill);
+      background: var(--border-default);
+      border: none;
+      position: relative;
+      padding: 2px;
+      flex-shrink: 0;
+      transition: background-color 0.16s ease;
+    }
+    .toggle-switch[aria-checked="true"] {
+      background: var(--brand-primary);
+    }
+    .toggle-knob {
+      display: block;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      transition: transform 0.16s ease;
+    }
+    .toggle-switch[aria-checked="true"] .toggle-knob {
+      transform: translateX(16px);
+    }
+
+    /* Mini A4 Paper Real-Time Preview */
+    .a4-preview-well {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .a4-sheet {
+      width: 100%;
+      max-width: 248px;
+      min-height: 332px;
+      background: #FFFFFF;
+      color: #111827;
+      border: 1px solid #D1D5DB;
+      border-radius: 4px;
+      padding: 14px 16px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+      font-size: 10px;
+      line-height: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .a4-q-item {
+      border-top: 1px dashed #E5E7EB;
+      padding-top: 6px;
+    }
+    .a4-answer-box {
+      margin-top: 4px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      background: #EBFBEE;
+      color: #2B8A3E;
+      font-size: 9px;
+      line-height: 13px;
+    }
+    .a4-blank-lines {
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding-top: 3px;
+    }
+    .a4-blank-line {
+      height: 1px;
+      background: #CBD5E1;
+    }
+
+    /* =========================================================================
+       Bottom-Right Spring & Haptics Telemetry Pill (Static, NO cursor glass!)
+       ========================================================================= */
+    .telemetry-bar {
+      position: fixed;
+      right: 16px;
+      bottom: 14px;
+      z-index: 35;
+      padding: 6px 12px;
+      border-radius: var(--r-pill);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      box-shadow: var(--card-shadow);
+      font-size: 12px;
+      line-height: 16px;
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100vw - 32px);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .telemetry-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--semantic-success);
+      flex-shrink: 0;
+    }
+
+    .tab-pane {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .tab-pane.active {
+      display: flex;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .shimmer-line {
+        animation: none;
+      }
+      * {
+        transition-duration: 0.08s !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="viewportRoot" class="workbench-viewport">
+    <div id="workbenchStage" class="workbench-stage">
+
+      <!-- TOP BAR -->
+      <header class="top-header">
+        <div class="header-left">
+          <button id="toggleLeftBtn" class="icon-btn desktop-only" title="折叠/展开左侧资料源栏">☰ 资料源</button>
+          <span class="brand-mark">A</span>
+          <div class="notebook-meta">
+            <span id="notebookTitle" class="notebook-name">深度学习核心架构 · 专题笔记本</span>
+            <span class="t-caption">Modern Academic UI v1.1 · Spring Physics</span>
+          </div>
+        </div>
+
+        <div id="desktopSegmented" class="segmented desktop-only" role="tablist" aria-label="核心工作台视图">
+          <div id="desktopSegIndicator" class="seg-indicator"></div>
+          <button class="seg-btn active" data-tab="notes">结构化笔记</button>
+          <button class="seg-btn" data-tab="quiz">在线练习</button>
+          <button class="seg-btn" data-tab="flashcards">抽认卡 (3D)</button>
+          <button class="seg-btn" data-tab="empty">空白态演示</button>
+        </div>
+
+        <div class="header-right">
+          <button id="themeBtn" class="icon-btn" title="切换浅色纸张 / 深炭夜读">☀ 浅色</button>
+          <button id="mobileSimBtn" class="icon-btn desktop-only" title="预览 <768px 移动端单栏与沉浸刷题">📱 移动端</button>
+          <button id="reducedMotionBtn" class="icon-btn desktop-only" title="模拟 prefers-reduced-motion 无障碍减弱动效">◌ 动效</button>
+          <button id="offlineBtn" class="icon-btn desktop-only" title="模拟离线作答缓存模式">✈ 在线</button>
+          <button id="toggleRightBtn" class="icon-btn desktop-only" title="展开/收起 AI 追问与原文溯源">✦ 溯源栏</button>
+          <a class="preview-switch-badge desktop-only" href="./liquid_glass_preview.html" title="切换到 SkSL Liquid Glass 光学版">✨ Glass 版</a>
+          <button id="openExportBtn" class="btn-export">导出 ↗</button>
+        </div>
+      </header>
+
+      <!-- MOBILE SUBNAV -->
+      <div class="mobile-segmented-bar">
+        <div id="mobileSegmented" class="segmented">
+          <div id="mobileSegIndicator" class="seg-indicator"></div>
+          <button class="seg-btn" data-mobile-view="sources" id="mobileSourcesTabBtn">资料源 (3)</button>
+          <button class="seg-btn active" data-mobile-view="notes">笔记</button>
+          <button class="seg-btn" data-mobile-view="quiz">练习</button>
+          <button class="seg-btn" data-mobile-view="flashcards">抽认卡</button>
+        </div>
+      </div>
+
+      <!-- MOBILE IMMERSIVE QUIZ HEADER (V.1 Immersive Rule) -->
+      <div class="immersive-quiz-bar">
+        <button id="exitImmersiveBtn" class="icon-btn" title="退出沉浸答题">✕</button>
+        <div class="immersive-progress-track">
+          <div id="immersiveProgressFill" class="immersive-progress-fill"></div>
+        </div>
+        <span id="immersiveCounter" class="t-caption mono">1 / 3</span>
+      </div>
+
+      <!-- OFFLINE NOTICE -->
+      <div id="offlineBanner" class="offline-banner">
+        <span>⚠ 已切换至离线容错模式：已加载题目可继续作答，错题与掌握进度已本地缓存（网络恢复后静默同步）。</span>
+        <button id="restoreOnlineBtn" class="btn-secondary">恢复在线同步</button>
+      </div>
+
+      <!-- THREE-COLUMN WORKBENCH BODY -->
+      <div class="workbench-body">
+
+        <!-- LEFT SIDEBAR (260px): Sources Management -->
+        <aside id="leftSidebar" class="left-sidebar" aria-label="资料源管理">
+          <div class="sidebar-head">
+            <div>
+              <div class="t-h3" style="font-size:14px;">资料源管理 (Sources)</div>
+              <div id="sourceScopeCount" class="t-caption">已勾选 3 / 3 份范围</div>
+            </div>
+            <button id="sidebarEmptyBtn" class="btn-secondary" style="padding:0 8px;height:26px;">清空</button>
+          </div>
+          <div id="sourcesList" class="sidebar-scroll">
+            <!-- Populated by JS -->
+          </div>
+          <div class="sidebar-footer">
+            <div class="t-caption">复选框实时控制当前笔记溯源与出题范围</div>
+            <button id="selectAllSourcesBtn" class="btn-secondary" style="width:100%;justify-content:center;">全选当前笔记本资料源</button>
+          </div>
+        </aside>
+
+        <!-- CENTER MAIN WORKBENCH (max-width 760px reading line) -->
+        <main id="centerMain" class="center-main">
+          <div class="center-inner">
+
+            <!-- TAB 1: STRUCTURED NOTES -->
+            <section id="pane-notes" class="tab-pane active">
+              <div class="paper-card" style="display:flex;flex-direction:column;gap:16px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                  <span class="t-caption" style="color:var(--brand-primary);background:var(--brand-tint);padding:3px 10px;border-radius:var(--r-pill);">阶段 2 · 学术精读导学笔记</span>
+                  <span class="t-caption mono">约 2,140 字 · 6 个溯源切片</span>
+                </div>
+                <h1 class="t-h1">深度学习核心架构：梯度传播、自注意力与训练稳定性</h1>
+                <p class="t-body">
+                  在深层神经网络训练过程中，非线性激活函数决定了表征能力与梯度回传稳定性。
+                  <mark class="hl">ReLU 的导数在正区间恒为 1，能够显著缓解深层网络的梯度消失问题</mark>
+                  <button class="cite-badge" data-cite="c1">[来源1 p.4]</button>，
+                  而 Sigmoid 在两端饱和区梯度趋近于 0，更容易引发浅层参数更新停滞
+                  <button class="cite-badge" data-cite="c2">[PDF p.12]</button>。
+                </p>
+              </div>
+
+              <div class="paper-card" style="display:flex;flex-direction:column;gap:16px;">
+                <h2 class="t-h2">一、Scaled Dot-Product Attention 缩放机制</h2>
+                <p class="t-body">
+                  在 Transformer 多头自注意力中，点积 <span class="mono">QKᵀ</span> 的方差随向量维度 <span class="mono">d_k</span> 线性增长。
+                  除以 <span class="mono">√d_k</span> 可将注意力 logits 方差归一化至 1，防止 Softmax 落入梯度极小的饱和区
+                  <button class="cite-badge" data-cite="c3">[来源2 p.19]</button>。
+                </p>
+                <div class="scroll-block" aria-label="自注意力公式与代码横向防溢出容器">Attention(Q, K, V) = softmax( (Q · Kᵀ) / √d_k + Mask_causal ) · V
+
+scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)   # Var(q·k) = d_k -> Var(scaled) = 1.0</div>
+                <p class="t-small">
+                  注：上方公式与代码块包裹在 <span class="mono">overflow-x: auto</span> 容器内，确保窄屏与移动端不会撑破卡片边界。
+                </p>
+              </div>
+
+              <div class="paper-card" style="display:flex;flex-direction:column;gap:14px;">
+                <h2 class="t-h2">二、残差连接（ResNet）与 LayerNorm 协同作用</h2>
+                <p class="t-body">
+                  跳跃连接（Skip Connection）将恒等映射 <span class="mono">x</span> 直接加到子层输出 <span class="mono">F(x)</span> 上，为反向传播开辟无衰减高速通路
+                  <button class="cite-badge" data-cite="c2">[PDF p.12]</button>；
+                  配合 <mark class="hl">Pre-LayerNorm 结构</mark> 可在 Transformer 训练早期免除冗长 Warmup，提升收敛鲁棒性
+                  <button class="cite-badge" data-cite="c3">[来源2 p.19]</button>。
+                </p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;padding-top:4px;">
+                  <button id="jumpToQuizBtn" class="btn-primary">进入在线同步练习 →</button>
+                  <button id="jumpToFlashBtn" class="btn-secondary">切换 3D 抽认卡记忆</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- TAB 2: INTERACTIVE QUIZ -->
+            <section id="pane-quiz" class="tab-pane">
+              <!-- AI Generation Preset Pills & Shimmer Controller -->
+              <div class="paper-card gen-bar">
+                <div class="pill-group-row">
+                  <span class="pill-label">题型预设</span>
+                  <button class="prompt-pill selected" data-pill-group="qtype">混合题型</button>
+                  <button class="prompt-pill" data-pill-group="qtype">仅单选</button>
+                  <button class="prompt-pill" data-pill-group="qtype">抽认卡</button>
+                  <button class="prompt-pill" data-pill-group="qtype">简答题</button>
+                </div>
+                <div class="pill-group-row">
+                  <span class="pill-label">难度分层</span>
+                  <button class="prompt-pill selected" data-pill-group="diff">基础巩固</button>
+                  <button class="prompt-pill" data-pill-group="diff">高频易错</button>
+                  <button class="prompt-pill" data-pill-group="diff">深度推理</button>
+                </div>
+                <div class="gen-action-row">
+                  <span id="genStatusText" class="t-small">基于当前勾选资料源，点击选项直接触发物理状态机判定</span>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <button id="resetQuizBtn" class="btn-secondary">重置作答状态</button>
+                    <button id="aiGenBtn" class="btn-primary">✨ 生成练习</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Shimmer Skeleton Loader -->
+              <div id="shimmerCard" class="paper-card shimmer-card">
+                <span id="shimmerMicroCopy" class="t-caption" style="color:var(--brand-primary);">1. 正在分析 3 份文档结构...</span>
+                <div class="shimmer-line" style="width:72%;"></div>
+                <div class="shimmer-line" style="width:94%;"></div>
+                <div class="shimmer-line" style="width:86%;"></div>
+                <div class="shimmer-line" style="width:60%;"></div>
+              </div>
+
+              <!-- Live Progress Header -->
+              <div class="paper-card quiz-progress-card">
+                <div>
+                  <div class="t-h3" style="font-size:14px;">在线同步练习 · 实时状态机</div>
+                  <div id="quizProgressLabel" class="t-caption mono">已作答 0 / 3 题 · 错题本 0 题</div>
+                </div>
+                <div class="quiz-track">
+                  <div id="quizProgressFill" class="quiz-fill" style="width:0%;"></div>
+                </div>
+              </div>
+
+              <!-- Quiz Cards Container -->
+              <div id="quizContainer" style="display:flex;flex-direction:column;gap:20px;"></div>
+            </section>
+
+            <!-- TAB 3: 3D FLASHCARD -->
+            <section id="pane-flashcards" class="tab-pane">
+              <div class="paper-card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <div>
+                  <h2 class="t-h2">记忆抽认卡 · 3D 纸张物理栈</h2>
+                  <p class="t-small">点击卡片执行 Y 轴 180° 翻转（<span class="mono">spring-card</span>）；左右拖拽感受倾角 <span class="mono">θ = clamp(Δx/25, -12°, 12°)</span> 与印章弹出</p>
+                </div>
+                <div style="display:flex;gap:10px;align-items:center;">
+                  <span id="flashStats" class="t-caption mono">第 1 / 4 张 · 已掌握 0 · 需复习 0</span>
+                </div>
+              </div>
+
+              <div class="flashcard-stage">
+                <div class="card-stack-wrap" id="flashStackWrap">
+                  <div class="card-peek-under" aria-hidden="true"></div>
+                  <div id="flashCarrier" class="flashcard-carrier">
+                    <div id="flashFlipper" class="flashcard-flipper">
+                      <div class="flashcard-face flashcard-front">
+                        <span id="stampReview" class="stamp stamp-review">需复习</span>
+                        <span id="stampMastered" class="stamp stamp-mastered">已掌握</span>
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                          <span class="t-caption" style="color:var(--brand-primary);">正面 · 核心概念提问</span>
+                          <span class="t-caption mono" id="flashCardIndexBadge">1 / 4</span>
+                        </div>
+                        <div style="margin:auto 0;display:flex;flex-direction:column;gap:12px;">
+                          <h3 id="flashFrontTitle" class="t-h2" style="font-size:20px;line-height:28px;">为什么 Transformer 自注意力需要除以 √d_k？</h3>
+                          <p id="flashFrontHint" class="t-small">提示：从向量内积的方差缩放与 Softmax 梯度区分析</p>
+                        </div>
+                        <div class="t-caption" style="text-align:center;">点击翻转背面 · 向左划【需复习】· 向右划【已掌握】</div>
+                      </div>
+                      <div class="flashcard-face flashcard-back">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                          <span class="t-caption" style="color:var(--semantic-success);">背面 · 核心定义与溯源</span>
+                          <button id="flashBackCiteBtn" class="cite-badge" data-cite="c3">[来源2 p.19]</button>
+                        </div>
+                        <div style="margin:auto 0;display:flex;flex-direction:column;gap:12px;">
+                          <p id="flashBackBody" class="t-body">假设 Q、K 各分量为零均值、单位方差独立随机变量，则点积方差距 d_k 成正比。除以 √d_k 后方差恢复为 1，防止 Softmax 在极端大值区梯度消失。</p>
+                          <div id="flashBackFormula" class="scroll-block">Var(∑ qᵢ·kᵢ) = d_k  ⇒  Var(q·k / √d_k) = 1</div>
+                        </div>
+                        <div class="t-caption" style="text-align:center;">再次点击翻回正面</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center;">
+                  <button id="markReviewBtn" class="btn-secondary" style="color:var(--semantic-warning);border-color:rgba(217,119,6,0.35);">← [←] 标记需复习</button>
+                  <button id="flipCardBtn" class="btn-secondary">↻ [Space] 翻转正反面</button>
+                  <button id="markMasteredBtn" class="btn-secondary" style="color:var(--semantic-success);border-color:rgba(43,138,62,0.35);">[→] 标记已掌握 →</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- TAB 4: EMPTY STATE -->
+            <section id="pane-empty" class="tab-pane">
+              <div class="paper-card empty-dropzone">
+                <div style="width:48px;height:48px;border-radius:var(--r-pill);background:var(--brand-tint);color:var(--brand-primary);display:flex;align-items:center;justify-content:center;font-size:20px;">📄</div>
+                <h2 class="t-h2">新建学术笔记本 · 尚未导入资料源</h2>
+                <p class="t-small" style="max-width:460px;">将课本 PDF、PPTX 讲义、论文或实验笔记拖拽到此处，AI 将在数秒内提取结构化笔记、原文溯源角标与互动分层练习题。</p>
+                <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;justify-content:center;">
+                  <button id="mockUploadBtn" class="btn-primary">+ 选择本地资料文件</button>
+                  <button id="restoreDefaultPackBtn" class="btn-secondary">还原默认深度学习笔记本</button>
+                </div>
+              </div>
+
+              <div>
+                <div class="t-h3" style="margin-bottom:12px;">一键体验示例学习包（5 秒体验完整闭环）</div>
+                <div class="sample-packs-grid">
+                  <button class="sample-pack-card" data-sample="macro">
+                    <span class="t-caption" style="color:var(--brand-primary);">经济学 · 3 份讲义</span>
+                    <span class="t-h3">《宏观经济学核心概念》</span>
+                    <span class="t-small">IS-LM 模型、菲利普斯曲线与货币传导机制</span>
+                  </button>
+                  <button class="sample-pack-card" data-sample="anatomy">
+                    <span class="t-caption" style="color:var(--semantic-success);">医学 · 2 份图谱</span>
+                    <span class="t-h3">《人体解剖学基础》</span>
+                    <span class="t-small">心血管循环通路、颅神经分支与体表投影</span>
+                  </button>
+                  <button class="sample-pack-card" data-sample="dl">
+                    <span class="t-caption" style="color:var(--semantic-warning);">计算机 · 3 份论文</span>
+                    <span class="t-h3">《深度学习核心架构》</span>
+                    <span class="t-small">ReLU 梯度、Scaled Attention 与残差网络</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <!-- MOBILE-ONLY SOURCES VIEW -->
+            <section id="pane-mobile-sources" class="tab-pane">
+              <div class="paper-card" style="display:flex;flex-direction:column;gap:12px;">
+                <h2 class="t-h2">资料源管理 (Sources)</h2>
+                <p class="t-small">勾选控制的资料源范围将实时同步至笔记与刷题模块</p>
+                <div id="mobileSourcesMirror" style="display:flex;flex-direction:column;gap:8px;"></div>
+              </div>
+            </section>
+
+          </div>
+        </main>
+
+        <!-- RIGHT SIDEBAR (320px): Copilot & Source Viewer -->
+        <aside id="rightSidebar" class="right-sidebar" aria-label="AI 追问与溯源预览">
+          <div class="sidebar-head">
+            <div>
+              <div class="t-h3" style="font-size:14px;">AI 追问与溯源预览</div>
+              <div class="t-caption">点击任意角标自动荧光高亮原文</div>
+            </div>
+            <button id="closeRightBtn" class="icon-btn" style="height:26px;padding:0 8px;">✕</button>
+          </div>
+          <div class="right-scroll">
+            <div id="sourceViewerCard" class="source-excerpt-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span id="citeSourceName" class="t-caption" style="color:var(--brand-primary);font-weight:600;">[来源1 p.4] 深度学习核心架构讲义</span>
+                <span class="t-caption mono">匹配度 98%</span>
+              </div>
+              <p id="citeSourceBody" class="t-small" style="color:var(--text-primary);line-height:22px;">
+                节选原文：在深层前馈网络反向传播阶段，<mark class="hl">ReLU(x) = max(0, x) 在 x &gt; 0 区域导数恒等于 1</mark>，避免了连乘效应导致的指数级梯度衰减；而 Sigmoid 函数最大导数仅为 0.25，层数较深时极易触发梯度消失。
+              </p>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div class="t-h3" style="font-size:13px;">Copilot 随堂追问</div>
+              <div id="copilotThread" style="display:flex;flex-direction:column;gap:8px;">
+                <div class="copilot-bubble">
+                  已基于已选资料建立索引。点击正文或错题解析中的 <span class="mono">[来源]</span> 角标可即刻定位页码切片，或在下方快速追问。
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+                <button class="btn-secondary copilot-prompt-btn" data-q="为什么 Sigmoid 导数最大只有 0.25？">↳ 为什么 Sigmoid 导数最大只有 0.25？</button>
+                <button class="btn-secondary copilot-prompt-btn" data-q="对比 Pre-LN 和 Post-LN 的训练收敛差异">↳ 对比 Pre-LN 和 Post-LN 的收敛差异</button>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- MOBILE 45% BOTTOM SHEET FOR CITATIONS -->
+  <div id="mobileCiteBackdrop" class="bottom-sheet-backdrop">
+    <div id="mobileCiteSheet" class="bottom-sheet">
+      <div class="sheet-handle"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span id="mobileCiteTitle" class="t-h3" style="font-size:15px;">原文溯源切片</span>
+        <button id="closeMobileSheetBtn" class="icon-btn" style="height:28px;">✕ 关闭</button>
+      </div>
+      <div id="mobileCiteBody" class="source-excerpt-card t-small" style="color:var(--text-primary);"></div>
+    </div>
+  </div>
+
+  <!-- AGGREGATE EXPORT MODAL + LIVE MINI A4 PREVIEW (Section V.5) -->
+  <div id="exportModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="聚合导出面板">
+    <div id="exportModal" class="export-modal">
+      <div class="sidebar-head" style="padding:16px 24px;">
+        <div>
+          <h2 class="t-h2">聚合导出工作台（Export Hub）</h2>
+          <p class="t-small">底层工作台遵循 <span class="mono">spring-drawer</span> 景深退让（scale: 0.96, brightness: 92%）</p>
+        </div>
+        <button id="closeExportBtn" class="icon-btn">✕ 关闭</button>
+      </div>
+      <div class="export-body">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div>
+            <div class="t-h3" style="font-size:14px;margin-bottom:10px;">1. 选择导出格式（4 选 1 矩阵）</div>
+            <div class="format-grid">
+              <button class="format-card active" data-fmt="pdf">
+                <span class="t-h3" style="font-size:14px;">🖨 打印刷题卷 (PDF)</span>
+                <span class="t-caption">适合 iPad 手写或纸质印刷</span>
+              </button>
+              <button class="format-card" data-fmt="docx">
+                <span class="t-h3" style="font-size:14px;">📝 结构化讲义 (Word)</span>
+                <span class="t-caption">.docx 格式，方便二次排版</span>
+              </button>
+              <button class="format-card" data-fmt="anki">
+                <span class="t-h3" style="font-size:14px;">🗂 记忆卡包 (Anki)</span>
+                <span class="t-caption">.apkg / .csv 间隔重复导入</span>
+              </button>
+              <button class="format-card" data-fmt="md">
+                <span class="t-h3" style="font-size:14px;">📋 纯文本笔记 (Markdown)</span>
+                <span class="t-caption">适配 Notion / Obsidian 双链</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="pdfWordSwitches" style="display:flex;flex-direction:column;gap:8px;">
+            <div class="t-h3" style="font-size:14px;">2. 动态排版配置</div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">包含答案与 AI 解析</div>
+                <div class="t-caption">关闭后自动在题干下方生成空白作答横线</div>
+              </div>
+              <button class="toggle-switch" id="swAnswers" aria-checked="true"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">仅导出本次做错的题目</div>
+                <div class="t-caption" id="wrongCountHint">当前错题本包含 0 题</div>
+              </div>
+              <button class="toggle-switch" id="swWrongOnly" aria-checked="false"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">保留原文出处角标</div>
+                <div class="t-caption">在导出题目旁保留 [来源 p.X] 页码索引</div>
+              </div>
+              <button class="toggle-switch" id="swCitations" aria-checked="true"><span class="toggle-knob"></span></button>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span id="exportFeedbackMsg" class="t-small">准备就绪 · 实时预览已同步右侧 A4 纸张</span>
+            <button id="confirmExportBtn" class="btn-primary">生成并模拟导出</button>
+          </div>
+        </div>
+
+        <!-- Mini Real-Time A4 Preview -->
+        <div class="a4-preview-well">
+          <div class="t-caption" style="font-weight:600;">迷你实时预览窗（A4 排版）</div>
+          <div id="a4Sheet" class="a4-sheet">
+            <!-- Dynamically updated -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM-RIGHT TELEMETRY PILL (Static Pill — Zero Cursor Glass!) -->
+  <div class="telemetry-bar" id="telemetryBar">
+    <span class="telemetry-dot"></span>
+    <span id="telemetryText" class="mono">Spring Engine Ready · 无光标跟随玻璃 · 点击选项/角标触发物理动效</span>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // =========================================================================
+      //  六、真实 Mass-Stiffness-Damping 物理弹簧求解器 + Haptics 映射
+      // =========================================================================
+      const SPRING_TOKENS = {
+        snappy:  { name: 'spring-snappy',  mass: 1.0, stiffness: 500, damping: 32, haptic: 'Light Impact' },
+        drawer:  { name: 'spring-drawer',  mass: 1.0, stiffness: 380, damping: 30, haptic: 'Selection Changed' },
+        card:    { name: 'spring-card',    mass: 0.8, stiffness: 280, damping: 22, haptic: 'Selection Changed' },
+        tactile: { name: 'spring-tactile', mass: 0.8, stiffness: 450, damping: 16, haptic: 'Notification Warning' },
+      };
+
+      const activeSprings = new Map();
+      let reducedMotionManual = false;
+      const telemetryTextEl = document.getElementById('telemetryText');
+
+      function isReducedMotion() {
+        return reducedMotionManual || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      }
+
+      function reportTelemetry(presetKey, hapticOverride) {
+        const p = SPRING_TOKENS[presetKey] || SPRING_TOKENS.snappy;
+        const haptic = hapticOverride || p.haptic;
+        const zeta = (p.damping / (2 * Math.sqrt(p.stiffness * p.mass))).toFixed(2);
+        telemetryTextEl.textContent = `${p.name} (${p.mass}/${p.stiffness}/${p.damping}, ζ≈${zeta}) · Haptic: ${haptic}`;
+      }
+
+      function animateSpring(key, { from, to, velocity = 0, preset = 'snappy', onUpdate, onComplete }) {
+        if (isReducedMotion()) {
+          onUpdate(to);
+          if (onComplete) onComplete();
+          return;
+        }
+        const cfg = SPRING_TOKENS[preset] || SPRING_TOKENS.snappy;
+        activeSprings.set(key, {
+          pos: from,
+          vel: velocity,
+          target: to,
+          mass: cfg.mass,
+          k: cfg.stiffness,
+          c: cfg.damping,
+          onUpdate,
+          onComplete,
+          lastTime: performance.now(),
+        });
+      }
+
+      function runSpringLoop(now) {
+        if (activeSprings.size > 0) {
+          for (const [key, s] of Array.from(activeSprings.entries())) {
+            const dt = Math.min(0.032, Math.max(0.001, (now - s.lastTime) / 1000));
+            s.lastTime = now;
+            // Semi-implicit Euler sub-steps for numerical stability on stiff springs
+            const steps = 2;
+            const h = dt / steps;
+            for (let i = 0; i < steps; i++) {
+              const force = -s.k * (s.pos - s.target) - s.c * s.vel;
+              const acc = force / s.mass;
+              s.vel += acc * h;
+              s.pos += s.vel * h;
+            }
+            s.onUpdate(s.pos);
+            if (Math.abs(s.pos - s.target) < 0.002 && Math.abs(s.vel) < 0.01) {
+              s.pos = s.target;
+              s.onUpdate(s.target);
+              activeSprings.delete(key);
+              if (s.onComplete) s.onComplete();
+            }
+          }
+        }
+        requestAnimationFrame(runSpringLoop);
+      }
+      requestAnimationFrame(runSpringLoop);
+
+      // =========================================================================
+      //  Data Store (Notebook Sources, Citations, Quizzes, Flashcards)
+      // =========================================================================
+      const sourcesData = [
+        { id: 's1', name: '深度学习核心架构讲义.pptx', meta: '36 页 · 1,193 字', checked: true },
+        { id: 's2', name: 'Attention Is All You Need 精读.pdf', meta: '15 页 · 原文对照', checked: true },
+        { id: 's3', name: '反向传播与残差优化笔记.md', meta: '2,480 字 · 公式推导', checked: true },
+      ];
+
+      const citationsMap = {
+        c1: {
+          title: '[来源1 p.4] 深度学习核心架构讲义.pptx',
+          body: '节选原文：在深层前馈网络反向传播阶段，<mark class="hl">ReLU(x) = max(0, x) 在正区间导数恒等于 1</mark>，避免了连乘效应导致的指数级梯度衰减；Sigmoid 函数最大导数仅为 0.25，在深层堆叠时极易造成浅层参数停滞。',
+        },
+        c2: {
+          title: '[PDF p.12] 反向传播与残差网络讲义',
+          body: '节选原文：ResNet 残差单元构造 y = F(x) + x，使其对输入 x 求偏导时恒含“1”这一恒等分量。<mark class="hl">即使 F(x) 支路权重梯度较小，梯度仍能无损直达浅层卷积核</mark>，同时缓解深层网络退化问题。',
+        },
+        c3: {
+          title: '[来源2 p.19] Transformer 原论文第 3.2 节',
+          body: '节选原文：当向量维度 d_k 较大时，点积 q·k 的标准差达到 √d_k，导致 Softmax 输出集中到极小梯度边缘。<mark class="hl">引入 1/√d_k 缩放因子可使 logits 保持单位方差</mark>，确保多头注意力梯度平滑反传。',
+        },
+      };
+
+      const quizBank = [
+        {
+          id: 'q1',
+          tag: '高频易错 · 单选题',
+          citeKey: 'c1',
+          citeLabel: '[来源1 p.4]',
+          stem: '在深层前馈神经网络（MLP）中，相比 Sigmoid 激活函数，采用 ReLU 缓解梯度消失的核心数学原因是（ ）',
+          options: [
+            { label: 'A', text: 'ReLU 具有全局二阶光滑可微性，且输出均值严格为零，无需归一化。' },
+            { label: 'B', text: 'ReLU 在正半轴导数恒为 1，避免了反向传播连乘 0.25 以下小梯度的指数衰减。' },
+            { label: 'C', text: 'ReLU 在负半轴导数非零，使得所有神经元都能持续保持高活跃更新状态。' },
+            { label: 'D', text: 'Sigmoid 的值域为 (-∞, +∞)，反向传播时容易出现数值上溢与权重爆炸。' },
+          ],
+          correctIdx: 1,
+          explanation: 'Sigmoid 导数在原点仅取最大值 0.25，在两端饱和区接近 0，经 L 层链式连乘后梯度衰减至 0.25^L；ReLU 在 x > 0 时 f\'(x) = 1，使有效正激活通路保持无衰减回传。',
+        },
+        {
+          id: 'q2',
+          tag: '核心概念 · 单选题',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          stem: 'Transformer 的 Scaled Dot-Product Attention 对 QKᵀ 除以 √d_k 的直接目的是（ ）',
+          options: [
+            { label: 'A', text: '将矩阵乘法的时间复杂度从 O(n²d) 降低为线性复杂度 O(nd)。' },
+            { label: 'B', text: '当 d_k 较大时抑制点积方差增长，防止 Softmax 进入极小梯度饱和区。' },
+            { label: 'C', text: '替代位置编码（Positional Encoding），自动为序列注入严格先后顺序。' },
+          ],
+          correctIdx: 1,
+          explanation: '若 Q、K 元素均值为 0 方差为 1，则点积方差为 d_k。除以 √d_k 使点积方差回到 1，避免 Softmax 概率极端尖锐而使梯度几乎为零。',
+        },
+        {
+          id: 'q3',
+          tag: '深度推理 · 单选题',
+          citeKey: 'c2',
+          citeLabel: '[PDF p.12]',
+          stem: '关于 ResNet 残差连接（y = F(x) + x）对深层网络优化的贡献，下列判断准确的是（ ）',
+          options: [
+            { label: 'A', text: '它完全消除了权重初始化要求，即使权重全设为 0 也可突破对称性正常收敛。' },
+            { label: 'B', text: '反向求导时存在恒等项 +1，构成了梯度回传直达浅层参数的低阻高速通道。' },
+            { label: 'C', text: '它使模型参数总量翻倍，从而用更高容量强行记住所有训练样本。' },
+          ],
+          correctIdx: 1,
+          explanation: '由链式法则 ∂L/∂x = (∂L/∂y) · (1 + ∂F/∂x)，恒等分支项 1 保证即使 ∂F/∂x 很小，梯度信号依然能有效传播至前层。',
+        },
+      ];
+
+      const flashcardsData = [
+        {
+          front: '为什么 Transformer 自注意力需要除以 √d_k？',
+          hint: '提示：从向量内积的方差缩放与 Softmax 梯度区分析',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          back: '假设 Q、K 各分量为零均值、单位方差独立随机变量，点积方差会放大至 d_k。除以 √d_k 后方差恢复为 1，防止 Softmax 在极端大值区梯度消失。',
+          formula: 'Var(∑ qᵢ·kᵢ) = d_k  ⇒  Var(q·k / √d_k) = 1',
+        },
+        {
+          front: 'ReLU 缓解梯度消失的代价是什么？',
+          hint: '提示：思考 x < 0 区间对神经元参数更新的影响',
+          citeKey: 'c1',
+          citeLabel: '[来源1 p.4]',
+          back: '神经元死亡现象（Dying ReLU）：若学习率过大导致某神经元输入长期落入 x ≤ 0 区间，导数恒为 0，参数将永远停止更新。',
+          formula: 'f(x) = max(0, x),   f\'(x) = 0  (for x < 0)',
+        },
+        {
+          front: 'Pre-LayerNorm 与 Post-LayerNorm 谁更稳定？',
+          hint: '提示：观察梯度是否跨越 LayerNorm 参数回传',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          back: 'Pre-LN 将归一化置于残差分支内部，主干恒等通道不受 LN 缩放干扰，早期训练更稳且可省去复杂学习率 Warmup。',
+          formula: 'Pre-LN: x + SubLayer(LN(x))',
+        },
+        {
+          front: 'ResNet 跳跃连接的核心梯度公式是什么？',
+          hint: '提示：对 y = F(x) + x 应用链式求导',
+          citeKey: 'c2',
+          citeLabel: '[PDF p.12]',
+          back: '偏导公式中保留常数项 1，使梯度无需逐层经受矩阵权重衰减就能沿主干无损传递回浅层。',
+          formula: '∂L/∂x = (∂L/∂y) · (1 + ∂F/∂x)',
+        },
+      ];
+
+      const samplePackPresets = {
+        macro: {
+          title: '宏观经济学核心概念 · 专题笔记本',
+          sources: [
+            { id: 'm1', name: '高鸿业《宏观经济学》IS-LM.pdf', meta: '24 页 · 核心模型', checked: true },
+            { id: 'm2', name: '货币政策与通胀传导专题.pptx', meta: '18 页 · 案例拆解', checked: true },
+          ],
+        },
+        anatomy: {
+          title: '人体解剖学基础 · 专题笔记本',
+          sources: [
+            { id: 'a1', name: '系统解剖学 · 心血管与循环通路.pdf', meta: '31 页 · 彩图切片', checked: true },
+            { id: 'a2', name: '12 对颅神经走形对比表.md', meta: '1,620 字 · 记忆口诀', checked: true },
+          ],
+        },
+        dl: {
+          title: '深度学习核心架构 · 专题笔记本',
+          sources: [
+            { id: 's1', name: '深度学习核心架构讲义.pptx', meta: '36 页 · 1,193 字', checked: true },
+            { id: 's2', name: 'Attention Is All You Need 精读.pdf', meta: '15 页 · 原文对照', checked: true },
+            { id: 's3', name: '反向传播与残差优化笔记.md', meta: '2,480 字 · 公式推导', checked: true },
+          ],
+        },
+      };
+
+      // =========================================================================
+      //  DOM Refs & Navigation / Responsive Segmented Controller
+      // =========================================================================
+      const viewportRoot = document.getElementById('viewportRoot');
+      const workbenchStage = document.getElementById('workbenchStage');
+      const leftSidebar = document.getElementById('leftSidebar');
+      const rightSidebar = document.getElementById('rightSidebar');
+      const notebookTitleEl = document.getElementById('notebookTitle');
+
+      const tabPanes = {
+        notes: document.getElementById('pane-notes'),
+        quiz: document.getElementById('pane-quiz'),
+        flashcards: document.getElementById('pane-flashcards'),
+        empty: document.getElementById('pane-empty'),
+        sources: document.getElementById('pane-mobile-sources'),
+      };
+
+      let activeTab = 'notes';
+      let isMobileSim = false;
+      let isLeftCollapsed = false;
+      let isRightOpen = true; // default 3-column layout visible at 1440x900
+
+      function positionSegmentedIndicator(containerId, indicatorId, activeSelector) {
+        const container = document.getElementById(containerId);
+        const indicator = document.getElementById(indicatorId);
+        if (!container || !indicator) return;
+        const activeBtn = container.querySelector(activeSelector);
+        if (!activeBtn) return;
+        const targetX = activeBtn.offsetLeft - 3;
+        const targetW = activeBtn.offsetWidth;
+        indicator.style.width = `${targetW}px`;
+        const currentX = parseFloat(indicator.dataset.x || String(targetX));
+        animateSpring(`seg-${containerId}`, {
+          from: currentX,
+          to: targetX,
+          preset: 'snappy',
+          onUpdate: (v) => {
+            indicator.dataset.x = String(v);
+            indicator.style.transform = `translate3d(${v.toFixed(2)}px, 0, 0)`;
+          },
+        });
+      }
+
+      function updateImmersiveMode() {
+        const narrowMobile = isMobileSim || window.innerWidth < 768;
+        const shouldImmerse = narrowMobile && activeTab === 'quiz';
+        viewportRoot.classList.toggle('immersive-active', shouldImmerse);
+      }
+
+      function switchTab(nextTab) {
+        activeTab = nextTab;
+        Object.keys(tabPanes).forEach((k) => {
+          tabPanes[k].classList.toggle('active', k === nextTab);
+        });
+
+        document.querySelectorAll('#desktopSegmented .seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.dataset.tab === nextTab);
+        });
+        document.querySelectorAll('#mobileSegmented .seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.dataset.mobileView === nextTab);
+        });
+
+        positionSegmentedIndicator('desktopSegmented', 'desktopSegIndicator', '.seg-btn.active');
+        positionSegmentedIndicator('mobileSegmented', 'mobileSegIndicator', '.seg-btn.active');
+        reportTelemetry('snappy');
+        updateImmersiveMode();
+      }
+
+      document.querySelectorAll('#desktopSegmented .seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+      });
+      document.querySelectorAll('#mobileSegmented .seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.mobileView));
+      });
+      document.getElementById('jumpToQuizBtn').addEventListener('click', () => switchTab('quiz'));
+      document.getElementById('jumpToFlashBtn').addEventListener('click', () => switchTab('flashcards'));
+      document.getElementById('exitImmersiveBtn').addEventListener('click', () => switchTab('notes'));
+
+      // Initial indicator align
+      requestAnimationFrame(() => {
+        positionSegmentedIndicator('desktopSegmented', 'desktopSegIndicator', '.seg-btn.active');
+      });
+
+      // Sidebar toggles
+      document.getElementById('toggleLeftBtn').addEventListener('click', () => {
+        isLeftCollapsed = !isLeftCollapsed;
+        leftSidebar.classList.toggle('collapsed', isLeftCollapsed);
+        reportTelemetry('drawer');
+      });
+      document.getElementById('toggleRightBtn').addEventListener('click', () => {
+        isRightOpen = !isRightOpen;
+        rightSidebar.classList.toggle('closed', !isRightOpen);
+        reportTelemetry('drawer');
+      });
+      document.getElementById('closeRightBtn').addEventListener('click', () => {
+        isRightOpen = false;
+        rightSidebar.classList.add('closed');
+        reportTelemetry('drawer');
+      });
+
+      // Theme, Mobile Preview, Reduced Motion, Offline toggles
+      document.getElementById('themeBtn').addEventListener('click', (e) => {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+        e.currentTarget.textContent = isDark ? '☀ 浅色' : '☾ 深色';
+        e.currentTarget.classList.toggle('active', !isDark);
+      });
+
+      document.getElementById('mobileSimBtn').addEventListener('click', (e) => {
+        isMobileSim = !isMobileSim;
+        viewportRoot.classList.toggle('mobile-sim', isMobileSim);
+        e.currentTarget.classList.toggle('active', isMobileSim);
+        if (!isMobileSim && activeTab === 'sources') {
+          switchTab('notes');
+        } else {
+          updateImmersiveMode();
+          requestAnimationFrame(() => positionSegmentedIndicator('mobileSegmented', 'mobileSegIndicator', '.seg-btn.active'));
+        }
+      });
+
+      document.getElementById('reducedMotionBtn').addEventListener('click', (e) => {
+        reducedMotionManual = !reducedMotionManual;
+        e.currentTarget.classList.toggle('active', reducedMotionManual);
+        telemetryTextEl.textContent = reducedMotionManual
+          ? 'prefers-reduced-motion: reduce 已启用（3D 翻转与抖动降级为 opacity）'
+          : 'Spring Engine Ready · 物理弹簧与触觉已恢复';
+      });
+
+      const offlineBanner = document.getElementById('offlineBanner');
+      const offlineBtn = document.getElementById('offlineBtn');
+      function setOffline(state) {
+        offlineBanner.classList.toggle('visible', state);
+        offlineBtn.classList.toggle('active', state);
+        offlineBtn.textContent = state ? '✈ 离线' : '✈ 在线';
+      }
+      offlineBtn.addEventListener('click', () => setOffline(!offlineBanner.classList.contains('visible')));
+      document.getElementById('restoreOnlineBtn').addEventListener('click', () => setOffline(false));
+
+      // =========================================================================
+      //  Sources List Rendering
+      // =========================================================================
+      const sourcesListEl = document.getElementById('sourcesList');
+      const mobileSourcesMirrorEl = document.getElementById('mobileSourcesMirror');
+      const sourceScopeCountEl = document.getElementById('sourceScopeCount');
+      const mobileSourcesTabBtn = document.getElementById('mobileSourcesTabBtn');
+
+      function renderSources() {
+        const checkedCount = sourcesData.filter((s) => s.checked).length;
+        sourceScopeCountEl.textContent = `已勾选 ${checkedCount} / ${sourcesData.length} 份范围`;
+        mobileSourcesTabBtn.textContent = `资料源 (${checkedCount})`;
+
+        const buildItem = (s) => {
+          const item = document.createElement('div');
+          item.className = `source-item${s.checked ? ' checked' : ''}`;
+          item.innerHTML = `
+            <span class="source-checkbox">${s.checked ? '✓' : ''}</span>
+            <div style="min-width:0;flex:1;">
+              <div class="source-title">${s.name}</div>
+              <div class="source-sub">${s.meta}</div>
+            </div>
+          `;
+          item.addEventListener('click', () => {
+            s.checked = !s.checked;
+            renderSources();
+            animateSpring(`src-${s.id}`, {
+              from: 0.96,
+              to: 1.0,
+              preset: 'snappy',
+              onUpdate: (v) => { item.style.transform = `scale(${v.toFixed(4)})`; },
+            });
+            reportTelemetry('snappy');
+          });
+          return item;
+        };
+
+        sourcesListEl.innerHTML = '';
+        mobileSourcesMirrorEl.innerHTML = '';
+        sourcesData.forEach((s) => {
+          sourcesListEl.appendChild(buildItem(s));
+          mobileSourcesMirrorEl.appendChild(buildItem(s));
+        });
+      }
+      renderSources();
+
+      document.getElementById('selectAllSourcesBtn').addEventListener('click', () => {
+        sourcesData.forEach((s) => { s.checked = true; });
+        renderSources();
+      });
+      document.getElementById('sidebarEmptyBtn').addEventListener('click', () => switchTab('empty'));
+
+      // Sample Packs in Empty State
+      document.querySelectorAll('.sample-pack-card').forEach((card) => {
+        card.addEventListener('click', () => {
+          const preset = samplePackPresets[card.dataset.sample];
+          if (!preset) return;
+          notebookTitleEl.textContent = preset.title;
+          sourcesData.splice(0, sourcesData.length, ...preset.sources.map((s) => ({ ...s })));
+          renderSources();
+          switchTab('notes');
+          reportTelemetry('drawer', 'Notification Success');
+        });
+      });
+      document.getElementById('restoreDefaultPackBtn').addEventListener('click', () => {
+        const preset = samplePackPresets.dl;
+        notebookTitleEl.textContent = preset.title;
+        sourcesData.splice(0, sourcesData.length, ...preset.sources.map((s) => ({ ...s })));
+        renderSources();
+        switchTab('notes');
+      });
+      document.getElementById('mockUploadBtn').addEventListener('click', () => {
+        document.getElementById('restoreDefaultPackBtn').click();
+      });
+
+      // =========================================================================
+      //  Citation Badge -> Right Source Viewer / Mobile 45% Bottom Sheet
+      // =========================================================================
+      const sourceViewerCard = document.getElementById('sourceViewerCard');
+      const citeSourceNameEl = document.getElementById('citeSourceName');
+      const citeSourceBodyEl = document.getElementById('citeSourceBody');
+      const mobileCiteBackdrop = document.getElementById('mobileCiteBackdrop');
+      const mobileCiteSheet = document.getElementById('mobileCiteSheet');
+      const mobileCiteTitleEl = document.getElementById('mobileCiteTitle');
+      const mobileCiteBodyEl = document.getElementById('mobileCiteBody');
+
+      function openCitation(citeKey, badgeEl) {
+        const entry = citationsMap[citeKey] || citationsMap.c1;
+        if (badgeEl) {
+          animateSpring('cite-press', {
+            from: 0.90,
+            to: 1.0,
+            preset: 'snappy',
+            onUpdate: (v) => { badgeEl.style.transform = `scale(${v.toFixed(3)})`; },
+          });
+        }
+
+        const narrowMobile = isMobileSim || window.innerWidth < 768;
+        if (narrowMobile) {
+          mobileCiteTitleEl.textContent = entry.title;
+          mobileCiteBodyEl.innerHTML = entry.body;
+          mobileCiteBackdrop.classList.add('open');
+          animateSpring('mobile-sheet', {
+            from: 180,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (y) => { mobileCiteSheet.style.transform = `translate3d(0, ${y.toFixed(1)}px, 0)`; },
+          });
+        } else {
+          if (!isRightOpen) {
+            isRightOpen = true;
+            rightSidebar.classList.remove('closed');
+          }
+          citeSourceNameEl.textContent = entry.title;
+          citeSourceBodyEl.innerHTML = entry.body;
+          animateSpring('source-viewer', {
+            from: 36,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (x) => { sourceViewerCard.style.transform = `translate3d(${x.toFixed(1)}px, 0, 0)`; },
+          });
+        }
+        reportTelemetry('drawer', 'Selection Changed');
+      }
+
+      document.getElementById('closeMobileSheetBtn').addEventListener('click', () => {
+        mobileCiteBackdrop.classList.remove('open');
+      });
+      mobileCiteBackdrop.addEventListener('click', (e) => {
+        if (e.target === mobileCiteBackdrop) mobileCiteBackdrop.classList.remove('open');
+      });
+
+      document.addEventListener('click', (e) => {
+        const badge = e.target.closest('.cite-badge');
+        if (badge) {
+          openCitation(badge.dataset.cite || 'c1', badge);
+        }
+      });
+
+      // Copilot Quick Replies
+      const copilotThreadEl = document.getElementById('copilotThread');
+      const copilotReplies = {
+        '为什么 Sigmoid 导数最大只有 0.25？': '由 σ\'(x) = σ(x)(1 - σ(x))，均值不等式决定当 σ(x)=0.5 时导数取峰值 0.25，因此每跨过一层网络梯度至少衰减至 1/4。',
+        '对比 Pre-LN 和 Post-LN 的训练收敛差异': 'Pre-LN 将归一化放在残差分支内（x + F(LN(x))），深层到浅层恒等路径不被压缩，无需长 Warmup 即可稳定收敛。',
+      };
+      document.querySelectorAll('.copilot-prompt-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const q = btn.dataset.q;
+          const userMsg = document.createElement('div');
+          userMsg.className = 'copilot-bubble';
+          userMsg.style.background = 'var(--brand-tint)';
+          userMsg.style.borderColor = 'var(--brand-alpha-22)';
+          userMsg.textContent = `我：${q}`;
+          const aiMsg = document.createElement('div');
+          aiMsg.className = 'copilot-bubble';
+          aiMsg.textContent = `AI 助教：${copilotReplies[q] || '已结合所选讲义生成解释。'}`;
+          copilotThreadEl.appendChild(userMsg);
+          copilotThreadEl.appendChild(aiMsg);
+          animateSpring('copilot-msg', {
+            from: 18,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (y) => { aiMsg.style.transform = `translate3d(0, ${y.toFixed(1)}px, 0)`; },
+          });
+          reportTelemetry('drawer');
+        });
+      });
+
+      // =========================================================================
+      //  Interactive Quiz State Machine (Section V.2) + AI Generation Stream
+      // =========================================================================
+      const quizContainer = document.getElementById('quizContainer');
+      const quizProgressLabel = document.getElementById('quizProgressLabel');
+      const quizProgressFill = document.getElementById('quizProgressFill');
+      const immersiveProgressFill = document.getElementById('immersiveProgressFill');
+      const immersiveCounter = document.getElementById('immersiveCounter');
+      const wrongCountHint = document.getElementById('wrongCountHint');
+
+      const quizAnswers = new Map(); // id -> { selectedIdx, isCorrect, inNotebook }
+
+      function updateQuizMetrics() {
+        const total = quizBank.length;
+        const answered = quizAnswers.size;
+        let wrongCount = 0;
+        quizAnswers.forEach((v) => { if (!v.isCorrect) wrongCount += 1; });
+
+        const pct = total > 0 ? Math.round((answered / total) * 100) : 0;
+        quizProgressLabel.textContent = `已作答 ${answered} / ${total} 题 · 错题本 ${wrongCount} 题`;
+        quizProgressFill.style.width = `${pct}%`;
+        immersiveProgressFill.style.width = `${Math.max(15, pct)}%`;
+        immersiveCounter.textContent = `${answered} / ${total}`;
+        wrongCountHint.textContent = `当前错题本包含 ${wrongCount} 题`;
+      }
+
+      function renderQuizCards() {
+        quizContainer.innerHTML = '';
+        quizBank.forEach((q, qIdx) => {
+          const state = quizAnswers.get(q.id);
+          const card = document.createElement('article');
+          card.className = 'paper-card quiz-card';
+          card.dataset.qid = q.id;
+
+          const topHtml = `
+            <div class="quiz-card-top">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="t-caption mono" style="background:var(--brand-tint);color:var(--brand-primary);padding:2px 8px;border-radius:var(--r-sm);">Q${qIdx + 1}</span>
+                <span class="t-caption">${q.tag}</span>
+              </div>
+              <button class="cite-badge" data-cite="${q.citeKey}">${q.citeLabel}</button>
+            </div>
+            <h3 class="t-h3">${q.stem}</h3>
+          `;
+
+          const optList = document.createElement('div');
+          optList.className = 'options-list';
+
+          const drawer = document.createElement('div');
+          drawer.className = `ai-drawer${state && !state.isCorrect ? ' open' : ''}`;
+          drawer.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="t-h3" style="font-size:14px;color:var(--semantic-warning);">💡 AI 错题解析抽屉</span>
+              <button class="cite-badge" data-cite="${q.citeKey}">${q.citeLabel}</button>
+            </div>
+            <p class="t-small" style="color:var(--text-primary);">${q.explanation}</p>
+            <div class="drawer-actions">
+              <button class="btn-secondary add-notebook-btn">${state && state.inNotebook ? '✓ 已加入错题本' : '+ 加入错题本'}</button>
+              <button class="btn-secondary regen-topic-btn">✨ 针对此知识点再出一题</button>
+            </div>
+          `;
+
+          q.options.forEach((opt, optIdx) => {
+            const btn = document.createElement('button');
+            btn.className = 'option-btn';
+            let badgeText = opt.label;
+            if (state) {
+              btn.disabled = true;
+              if (optIdx === q.correctIdx) {
+                btn.classList.add('state-correct');
+                badgeText = '✓';
+              } else if (optIdx === state.selectedIdx && !state.isCorrect) {
+                btn.classList.add('state-wrong');
+              }
+            }
+            btn.innerHTML = `
+              <span class="opt-letter">${badgeText}</span>
+              <span class="t-small" style="color:var(--text-primary);">${opt.text}</span>
+            `;
+
+            btn.addEventListener('click', () => {
+              if (quizAnswers.has(q.id)) return;
+              const isCorrect = optIdx === q.correctIdx;
+              quizAnswers.set(q.id, { selectedIdx: optIdx, isCorrect, inNotebook: !isCorrect });
+              updateQuizMetrics();
+
+              // Lock all options immediately and update semantic colors
+              const allOptionBtns = optList.querySelectorAll('.option-btn');
+              allOptionBtns.forEach((ob, i) => {
+                ob.disabled = true;
+                if (i === q.correctIdx) {
+                  ob.classList.add('state-correct');
+                  ob.querySelector('.opt-letter').textContent = '✓';
+                }
+              });
+
+              if (isCorrect) {
+                // Correct: spring-snappy scale bounce 0.98 -> 1.0 + Light Impact
+                animateSpring(`opt-ok-${q.id}`, {
+                  from: 0.98,
+                  to: 1.0,
+                  preset: 'snappy',
+                  onUpdate: (s) => { btn.style.transform = `scale(${s.toFixed(4)})`; },
+                });
+                reportTelemetry('snappy', 'Light Impact');
+              } else {
+                // Wrong: spring-tactile horizontal shake ±4px + auto-highlight correct + open AI drawer
+                btn.classList.add('state-wrong');
+                animateSpring(`opt-err-${q.id}`, {
+                  from: 5.5,
+                  to: 0,
+                  velocity: -190,
+                  preset: 'tactile',
+                  onUpdate: (dx) => { btn.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`; },
+                });
+                drawer.classList.add('open');
+                animateSpring(`drawer-${q.id}`, {
+                  from: 0,
+                  to: 1,
+                  preset: 'drawer',
+                  onUpdate: (p) => {
+                    drawer.style.opacity = p.toFixed(3);
+                    drawer.style.transform = `translate3d(0, ${((1 - p) * -10).toFixed(2)}px, 0) scaleY(${(0.94 + 0.06 * p).toFixed(4)})`;
+                  },
+                });
+                const nbBtn = drawer.querySelector('.add-notebook-btn');
+                if (nbBtn) nbBtn.textContent = '✓ 已自动收录错题本';
+                reportTelemetry('tactile', 'Notification Warning');
+              }
+            });
+
+            optList.appendChild(btn);
+          });
+
+          card.innerHTML = topHtml;
+          card.appendChild(optList);
+          card.appendChild(drawer);
+
+          const addNbBtn = drawer.querySelector('.add-notebook-btn');
+          if (addNbBtn) {
+            addNbBtn.addEventListener('click', () => {
+              const st = quizAnswers.get(q.id);
+              if (st) st.inNotebook = true;
+              addNbBtn.textContent = '✓ 已加入错题本';
+              reportTelemetry('snappy', 'Light Impact');
+            });
+          }
+          const regenBtn = drawer.querySelector('.regen-topic-btn');
+          if (regenBtn) {
+            regenBtn.addEventListener('click', () => triggerAiQuizGeneration(`针对「${q.citeLabel}」变式加练`));
+          }
+
+          quizContainer.appendChild(card);
+        });
+        updateQuizMetrics();
+      }
+      renderQuizCards();
+
+      document.getElementById('resetQuizBtn').addEventListener('click', () => {
+        quizAnswers.clear();
+        renderQuizCards();
+        reportTelemetry('snappy');
+      });
+
+      // Prompt Pills Selection
+      document.querySelectorAll('.prompt-pill').forEach((pill) => {
+        pill.addEventListener('click', () => {
+          const grp = pill.dataset.pillGroup;
+          document.querySelectorAll(`.prompt-pill[data-pill-group="${grp}"]`).forEach((p) => p.classList.remove('selected'));
+          pill.classList.add('selected');
+          reportTelemetry('snappy');
+        });
+      });
+
+      // AI Shimmer Streaming Generation (Section V.4)
+      const aiGenBtn = document.getElementById('aiGenBtn');
+      const shimmerCard = document.getElementById('shimmerCard');
+      const shimmerMicroCopy = document.getElementById('shimmerMicroCopy');
+      const genStatusText = document.getElementById('genStatusText');
+      let genInFlight = false;
+
+      function triggerAiQuizGeneration(customTopic) {
+        if (genInFlight) return;
+        genInFlight = true;
+        aiGenBtn.disabled = true;
+        shimmerCard.classList.add('active');
+
+        const activeChecked = sourcesData.filter((s) => s.checked).length;
+        const steps = [
+          `1. 正在分析 ${activeChecked} 份文档结构...`,
+          '2. 正在提炼核心考点...',
+          '3. 正在生成交互题目...',
+        ];
+        shimmerMicroCopy.textContent = steps[0];
+        genStatusText.textContent = customTopic ? `正在${customTopic}...` : steps[0];
+
+        setTimeout(() => { shimmerMicroCopy.textContent = steps[1]; }, 450);
+        setTimeout(() => { shimmerMicroCopy.textContent = steps[2]; }, 900);
+        setTimeout(() => {
+          shimmerCard.classList.remove('active');
+          const newId = `q_${Date.now()}`;
+          quizBank.unshift({
+            id: newId,
+            tag: customTopic || 'AI 流式新出变式 · 高频易错',
+            citeKey: 'c3',
+            citeLabel: '[来源2 p.19]',
+            stem: '若多头注意力中某组 Q、K 向量维度 d_k 从 64 翻倍至 256，在未进行 1/√d_k 缩放前，点积标准差将如何变化？（ ）',
+            options: [
+              { label: 'A', text: '标准差增大为原来的 2 倍，极易把 Softmax 推入梯度饱和边缘。' },
+              { label: 'B', text: '标准差保持不变，因为向量维度的变化会自动互相抵消。' },
+              { label: 'C', text: '标准差缩小为原来的 1/2，使注意力权重分布趋向于均匀。' },
+            ],
+            correctIdx: 0,
+            explanation: '点积方差与维度 d_k 成正比，因此 d_k 扩大为 4 倍（64 -> 256）时标准差扩大为 √4 = 2 倍，更必须除以 √d_k 以稳定梯度。',
+          });
+          renderQuizCards();
+          const firstCard = quizContainer.firstElementChild;
+          if (firstCard) {
+            animateSpring('stream-card', {
+              from: 0,
+              to: 1,
+              preset: 'drawer',
+              onUpdate: (p) => {
+                firstCard.style.opacity = p.toFixed(3);
+                firstCard.style.transform = `translate3d(0, ${((1 - p) * 20).toFixed(1)}px, 0)`;
+              },
+            });
+          }
+          genStatusText.textContent = '已流式追加 1 道高匹配度变式题（可继续点击作答）';
+          aiGenBtn.disabled = false;
+          genInFlight = false;
+          reportTelemetry('drawer', 'Notification Success');
+        }, 1350);
+      }
+
+      aiGenBtn.addEventListener('click', () => triggerAiQuizGeneration());
+
+      // =========================================================================
+      //  3D Flashcard Stack: Spring Flip + Drag Tilt + Velocity Hand-off (V.3)
+      // =========================================================================
+      const flashCarrier = document.getElementById('flashCarrier');
+      const flashFlipper = document.getElementById('flashFlipper');
+      const stampReview = document.getElementById('stampReview');
+      const stampMastered = document.getElementById('stampMastered');
+      const flashStatsEl = document.getElementById('flashStats');
+
+      let flashIndex = 0;
+      let flashFlipped = false;
+      let masteredCount = 0;
+      let reviewCount = 0;
+
+      function renderFlashcard() {
+        const card = flashcardsData[flashIndex];
+        document.getElementById('flashCardIndexBadge').textContent = `${flashIndex + 1} / ${flashcardsData.length}`;
+        document.getElementById('flashFrontTitle').textContent = card.front;
+        document.getElementById('flashFrontHint').textContent = card.hint;
+        document.getElementById('flashBackBody').textContent = card.back;
+        document.getElementById('flashBackFormula').textContent = card.formula;
+        const citeBtn = document.getElementById('flashBackCiteBtn');
+        citeBtn.dataset.cite = card.citeKey;
+        citeBtn.textContent = card.citeLabel;
+        flashStatsEl.textContent = `第 ${flashIndex + 1} / ${flashcardsData.length} 张 · 已掌握 ${masteredCount} · 需复习 ${reviewCount}`;
+      }
+      const flashFrontFace = flashFlipper.querySelector('.flashcard-front');
+      const flashBackFace = flashFlipper.querySelector('.flashcard-back');
+
+      function applyFlashFlipAngle(deg) {
+        const showBack = Math.abs(deg) > 90;
+        const renderDeg = showBack ? (deg - 180) : deg;
+        flashFlipper.style.transform = `perspective(1200px) rotateY(${renderDeg.toFixed(2)}deg)`;
+        if (flashFrontFace && flashBackFace) {
+          flashFrontFace.style.visibility = showBack ? 'hidden' : 'visible';
+          flashFrontFace.style.opacity = showBack ? '0' : '1';
+          flashFrontFace.style.pointerEvents = showBack ? 'none' : 'auto';
+          flashBackFace.style.visibility = showBack ? 'visible' : 'hidden';
+          flashBackFace.style.opacity = showBack ? '1' : '0';
+          flashBackFace.style.pointerEvents = showBack ? 'auto' : 'none';
+        }
+      }
+
+      renderFlashcard();
+      applyFlashFlipAngle(0);
+
+      function flipFlashcard() {
+        const fromDeg = flashFlipped ? 180 : 0;
+        const toDeg = flashFlipped ? 0 : 180;
+        flashFlipped = !flashFlipped;
+        if (isReducedMotion()) {
+          applyFlashFlipAngle(toDeg);
+        } else {
+          animateSpring('flash-flip', {
+            from: fromDeg,
+            to: toDeg,
+            preset: 'card',
+            onUpdate: (deg) => { applyFlashFlipAngle(deg); },
+          });
+        }
+        reportTelemetry('card');
+      }
+
+      function swipeFlashcardOut(direction, initialVelocityX = 0) {
+        if (direction > 0) masteredCount += 1;
+        else reviewCount += 1;
+        reportTelemetry('card', direction > 0 ? 'Light Impact' : 'Selection Changed');
+
+        const exitX = direction * 460;
+        animateSpring('flash-drag', {
+          from: dragCurrentX,
+          to: exitX,
+          velocity: initialVelocityX,
+          preset: 'card',
+          onUpdate: (dx) => {
+            const theta = Math.max(-12, Math.min(12, dx / 25));
+            flashCarrier.style.transform = `translate3d(${dx.toFixed(1)}px, 0, 0) rotate(${theta.toFixed(2)}deg)`;
+            flashCarrier.style.opacity = Math.max(0, 1 - Math.abs(dx) / 420).toFixed(3);
+          },
+          onComplete: () => {
+            flashIndex = (flashIndex + 1) % flashcardsData.length;
+            flashFlipped = false;
+            applyFlashFlipAngle(0);
+            stampReview.style.opacity = '0';
+            stampMastered.style.opacity = '0';
+            dragCurrentX = 0;
+            renderFlashcard();
+            flashCarrier.style.opacity = '1';
+            animateSpring('flash-enter', {
+              from: 0.92,
+              to: 1.0,
+              preset: 'card',
+              onUpdate: (s) => { flashCarrier.style.transform = `scale(${s.toFixed(4)})`; },
+            });
+          },
+        });
+      }
+
+      let draggingFlash = false;
+      let dragStartX = 0;
+      let dragCurrentX = 0;
+      let dragMoved = false;
+      let lastMoveTime = 0;
+      let lastMoveX = 0;
+      let pointerVx = 0;
+
+      flashCarrier.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.cite-badge')) return;
+        draggingFlash = true;
+        dragMoved = false;
+        dragStartX = e.clientX;
+        lastMoveX = e.clientX;
+        lastMoveTime = performance.now();
+        pointerVx = 0;
+        dragCurrentX = 0;
+        flashCarrier.setPointerCapture(e.pointerId);
+      });
+
+      window.addEventListener('pointermove', (e) => {
+        if (!draggingFlash) return;
+        const dx = e.clientX - dragStartX;
+        const now = performance.now();
+        const dt = Math.max(0.008, (now - lastMoveTime) / 1000);
+        pointerVx = (e.clientX - lastMoveX) / dt;
+        lastMoveX = e.clientX;
+        lastMoveTime = now;
+        dragCurrentX = dx;
+        if (Math.abs(dx) > 6) dragMoved = true;
+
+        const theta = Math.max(-12, Math.min(12, dx / 25));
+        flashCarrier.style.transform = `translate3d(${dx.toFixed(1)}px, 0, 0) rotate(${theta.toFixed(2)}deg)`;
+        const ratio = Math.min(1, Math.abs(dx) / 90);
+        stampReview.style.opacity = dx < -12 ? ratio.toFixed(2) : '0';
+        stampMastered.style.opacity = dx > 12 ? ratio.toFixed(2) : '0';
+      });
+
+      window.addEventListener('pointerup', () => {
+        if (!draggingFlash) return;
+        draggingFlash = false;
+        if (!dragMoved) {
+          flipFlashcard();
+          return;
+        }
+        const thresholdPx = flashCarrier.offsetWidth * 0.30;
+        if (Math.abs(dragCurrentX) > thresholdPx || Math.abs(pointerVx) > 800) {
+          const dir = Math.abs(dragCurrentX) > thresholdPx
+            ? (dragCurrentX > 0 ? 1 : -1)
+            : (pointerVx > 0 ? 1 : -1);
+          swipeFlashcardOut(dir, pointerVx);
+        } else {
+          // Spring rebound with Haptics: Selection Changed
+          animateSpring('flash-rebound', {
+            from: dragCurrentX,
+            to: 0,
+            velocity: pointerVx,
+            preset: 'card',
+            onUpdate: (dx) => {
+              const theta = Math.max(-12, Math.min(12, dx / 25));
+              flashCarrier.style.transform = `translate3d(${dx.toFixed(1)}px, 0, 0) rotate(${theta.toFixed(2)}deg)`;
+            },
+          });
+          stampReview.style.opacity = '0';
+          stampMastered.style.opacity = '0';
+          reportTelemetry('card', 'Selection Changed');
+        }
+      });
+
+      document.getElementById('flipCardBtn').addEventListener('click', flipFlashcard);
+      document.getElementById('markReviewBtn').addEventListener('click', () => {
+        dragCurrentX = -40;
+        swipeFlashcardOut(-1, -600);
+      });
+      document.getElementById('markMasteredBtn').addEventListener('click', () => {
+        dragCurrentX = 40;
+        swipeFlashcardOut(1, 600);
+      });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.target.closest('input, textarea, select')) return;
+        if (document.getElementById('exportModalBackdrop')?.classList.contains('open')) return;
+        if (activeTab !== 'flashcards') return;
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          stampReview.style.opacity = '1';
+          dragCurrentX = -40;
+          swipeFlashcardOut(-1, -700);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          stampMastered.style.opacity = '1';
+          dragCurrentX = 40;
+          swipeFlashcardOut(1, 700);
+        } else if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          flipFlashcard();
+        }
+      });
+
+      // =========================================================================
+      //  Aggregate Export Modal + Workbench Depth Recession + Live Mini A4
+      // =========================================================================
+      const exportBackdrop = document.getElementById('exportModalBackdrop');
+      const exportModal = document.getElementById('exportModal');
+      const pdfWordSwitches = document.getElementById('pdfWordSwitches');
+      const a4Sheet = document.getElementById('a4Sheet');
+      const exportFeedbackMsg = document.getElementById('exportFeedbackMsg');
+
+      const exportState = {
+        format: 'pdf',
+        includeAnswers: true,
+        wrongOnly: false,
+        includeCitations: true,
+      };
+
+      function renderA4Preview() {
+        const formatLabels = {
+          pdf: '打印刷题卷（A4 PDF）',
+          docx: '结构化讲义（Word .docx）',
+          anki: '记忆卡包（Anki APKG/CSV）',
+          md: '纯文本笔记（Markdown）',
+        };
+        const showSwitches = exportState.format === 'pdf' || exportState.format === 'docx';
+        pdfWordSwitches.style.display = showSwitches ? 'flex' : 'none';
+
+        const filteredQs = exportState.wrongOnly
+          ? quizBank.filter((q) => {
+              const st = quizAnswers.get(q.id);
+              return st && !st.isCorrect;
+            })
+          : quizBank.slice(0, 2);
+
+        let bodyHtml = `
+          <div style="border-bottom:1.5px solid #111827;padding-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
+            <strong>Auto Study · 同步练习卷</strong>
+            <span style="color:#6B7280;font-size:8px;">${formatLabels[exportState.format]}</span>
+          </div>
+        `;
+
+        if (filteredQs.length === 0) {
+          bodyHtml += `<div style="margin:auto 0;text-align:center;color:#9CA3AF;padding:24px 0;">当前错题本暂无错题记录<br/>（可在练习区错答后自动归档）</div>`;
+        } else {
+          filteredQs.forEach((q, idx) => {
+            const citeTag = exportState.includeCitations ? `<span style="color:#3B5BDB;background:#EDF2FF;padding:0 3px;border-radius:3px;">${q.citeLabel}</span>` : '';
+            const ansBlock = exportState.includeAnswers
+              ? `<div class="a4-answer-box">✓ 答案：${q.options[q.correctIdx].label} · ${q.explanation.slice(0, 38)}…</div>`
+              : `<div class="a4-blank-lines"><div class="a4-blank-line"></div><div class="a4-blank-line"></div><div class="a4-blank-line"></div></div>`;
+
+            bodyHtml += `
+              <div class="a4-q-item">
+                <div><strong>${idx + 1}.</strong> ${q.stem.slice(0, 34)}… ${citeTag}</div>
+                ${ansBlock}
+              </div>
+            `;
+          });
+        }
+        a4Sheet.innerHTML = bodyHtml;
+      }
+
+      function setExportModalOpen(open) {
+        if (open) {
+          renderA4Preview();
+          exportBackdrop.classList.add('open');
+          animateSpring('export-recede', {
+            from: 0,
+            to: 1,
+            preset: 'drawer',
+            onUpdate: (p) => {
+              const scale = 1 - 0.04 * p; // 1.0 -> 0.96
+              const rad = 16 * p;
+              const bright = 1 - 0.08 * p;
+              workbenchStage.style.transform = `scale(${scale.toFixed(4)})`;
+              workbenchStage.style.borderRadius = `${rad.toFixed(1)}px`;
+              workbenchStage.style.filter = `brightness(${bright.toFixed(3)})`;
+              exportModal.style.opacity = p.toFixed(3);
+              exportModal.style.transform = `translate3d(0, ${((1 - p) * 24).toFixed(1)}px, 0) scale(${(0.96 + 0.04 * p).toFixed(4)})`;
+            },
+          });
+          reportTelemetry('drawer');
+        } else {
+          animateSpring('export-recede', {
+            from: 1,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (p) => {
+              const scale = 1 - 0.04 * p;
+              workbenchStage.style.transform = p < 0.01 ? '' : `scale(${scale.toFixed(4)})`;
+              workbenchStage.style.borderRadius = p < 0.01 ? '' : `${(16 * p).toFixed(1)}px`;
+              workbenchStage.style.filter = p < 0.01 ? '' : `brightness(${(1 - 0.08 * p).toFixed(3)})`;
+              exportModal.style.opacity = p.toFixed(3);
+            },
+            onComplete: () => {
+              exportBackdrop.classList.remove('open');
+              workbenchStage.style.transform = '';
+              workbenchStage.style.borderRadius = '';
+              workbenchStage.style.filter = '';
+            },
+          });
+        }
+      }
+
+      document.getElementById('openExportBtn').addEventListener('click', () => setExportModalOpen(true));
+      document.getElementById('closeExportBtn').addEventListener('click', () => setExportModalOpen(false));
+      exportBackdrop.addEventListener('click', (e) => {
+        if (e.target === exportBackdrop) setExportModalOpen(false);
+      });
+
+      document.querySelectorAll('.format-card').forEach((fc) => {
+        fc.addEventListener('click', () => {
+          document.querySelectorAll('.format-card').forEach((c) => c.classList.remove('active'));
+          fc.classList.add('active');
+          exportState.format = fc.dataset.fmt;
+          renderA4Preview();
+          reportTelemetry('snappy');
+        });
+      });
+
+      function bindSwitch(id, key) {
+        const el = document.getElementById(id);
+        el.addEventListener('click', () => {
+          exportState[key] = !exportState[key];
+          el.setAttribute('aria-checked', String(exportState[key]));
+          renderA4Preview();
+          reportTelemetry('snappy');
+        });
+      }
+      bindSwitch('swAnswers', 'includeAnswers');
+      bindSwitch('swWrongOnly', 'wrongOnly');
+      bindSwitch('swCitations', 'includeCitations');
+
+      document.getElementById('confirmExportBtn').addEventListener('click', () => {
+        exportFeedbackMsg.textContent = `✓ 已模拟生成 ${exportState.format.toUpperCase()} 导出包（纯界面规范展示）`;
+        reportTelemetry('snappy', 'Notification Success');
+      });
+
+      window.addEventListener('resize', () => {
+        positionSegmentedIndicator('desktopSegmented', 'desktopSegIndicator', '.seg-btn.active');
+        updateImmersiveMode();
+      });
+    })();
+  </script>
+</body>
+</html>

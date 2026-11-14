@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Awaitable, Callable, List, Optional
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from app.parsers.ocr_engine import extract_text_from_image_vision
 from app.parsers.pdf_parser import extract_key_terms
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
+
+OcrProgressCallback = Optional[Callable[[int, str, str], Awaitable[None]]]
 
 
 @dataclass
@@ -36,13 +38,20 @@ async def parse_pptx(
     project_id: str,
     assets_dir: Path,
     settings: RouterSettings,
+    progress_cb: OcrProgressCallback = None,
 ) -> DocumentIR:
     prs = Presentation(str(file_path))
     slides_data: List[_SlideData] = []
     all_assets: List[AssetItem] = []
     ocr_applied = False
+    total_slides = max(1, len(prs.slides))
+    if progress_cb:
+        await progress_cb(8, "ocr_init", f"已加载 PPTX 共 {len(prs.slides)} 张幻灯片，正在解析文本与图片 OCR...")
 
     for idx, slide in enumerate(prs.slides, start=1):
+        pct = 10 + int(80 * idx / total_slides)
+        if progress_cb:
+            await progress_cb(pct, "ocr_scanning", f"正在提取第 {idx}/{len(prs.slides)} 张幻灯片内容...")
         slide_title = ""
         if slide.shapes.title and slide.shapes.title.text:
             slide_title = slide.shapes.title.text.strip()

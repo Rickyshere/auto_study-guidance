@@ -40,7 +40,7 @@ export const OnboardingGuideModal: React.FC<Props> = ({
 }) => {
   const [step, setStep] = useState<GuideStep>('walkthrough');
   const [ocrEngine, setOcrEngine] = useState<OcrEngineType>('auto_recommend');
-  const [provider, setProvider] = useState<ProviderType>('heuristic');
+  const [provider, setProvider] = useState<ProviderType>('harness');
   const [cloudBaseUrl, setCloudBaseUrl] = useState('https://api.deepseek.com/v1');
   const [cloudModel, setCloudModel] = useState('deepseek-chat');
   const [cloudKey, setCloudKey] = useState('');
@@ -163,10 +163,10 @@ export const OnboardingGuideModal: React.FC<Props> = ({
             />
             <div>
               <div style={{ fontSize: '15.5px', fontWeight: 800, color: '#0F172A' }}>
-                第一次使用？功能导览与 3 分钟快速上手设置
+                快速上手指南 · v1.0.0
               </div>
               <div style={{ fontSize: '12px', color: '#64748B', marginTop: '1px' }}>
-                了解双阶段工作流，并快速完成显存分级 OCR 与 AI 模型通道配置
+                快速完成 OCR 文本识别与 AI 模型通道配置
               </div>
             </div>
           </div>
@@ -396,28 +396,10 @@ export const OnboardingGuideModal: React.FC<Props> = ({
                 value={provider}
                 onChange={setProvider}
                 options={[
-                  { value: 'heuristic', label: '内置规则引擎 (免Key立即可用)' },
-                  { value: 'cloud', label: '云端 OpenAI/DeepSeek API' },
-                  { value: 'harness', label: '本地 CLI (DSH/Claude/Codex)' },
-                  { value: 'local', label: 'Ollama 本地模型' },
+                  { value: 'harness', label: '① 免费 AI 反代 (Magpie + DSH)' },
+                  { value: 'cloud', label: '② 云端 OpenAI/DeepSeek API' },
                 ]}
               />
-
-              {provider === 'heuristic' && (
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: '#F0FDF4',
-                    border: '1px solid #BBF7D0',
-                    padding: '12px 14px',
-                    fontSize: '12.5px',
-                    color: '#166534',
-                    lineHeight: 1.6,
-                  }}
-                >
-                  <strong>零配置模式已就绪：</strong> 无需任何 API Key 或本地 GPU 大模型，即可毫秒级完成章节分析、导学讲义（含典型例题）、分级互动题库、考前速记及 PDF 印刷导出。
-                </div>
-              )}
 
               {provider === 'cloud' && (
                 <div
@@ -513,51 +495,6 @@ export const OnboardingGuideModal: React.FC<Props> = ({
                   <div style={{ fontSize: '11.5px', color: '#64748B' }}>
                     若尚未在本机安装 CLI，可在顶栏「设置图标」中一键安装。
                   </div>
-                </div>
-              )}
-
-              {provider === 'local' && (
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: '#F8FAFC',
-                    border: '1px solid rgba(60, 60, 67, 0.14)',
-                    padding: '12px 14px',
-                    fontSize: '12px',
-                    color: '#334155',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '10px',
-                  }}
-                >
-                  <span>
-                    Ollama 本地服务状态：
-                    <strong style={{ color: status?.ollama_available ? '#16A34A' : '#DC2626' }}>
-                      {status?.ollama_available ? ' 运行中' : ' 未检测到运行中的 Ollama'}
-                    </strong>
-                  </span>
-                  <SpringButton
-                    springLabel="去完整设置"
-                    onClick={() => {
-                      markSeenAndClose();
-                      onOpenFullConfig();
-                    }}
-                    maxShift={4}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(0, 122, 255, 0.3)',
-                      backgroundColor: '#FFFFFF',
-                      color: '#007AFF',
-                      padding: '5px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Settings className="w-3.5 h-3.5 inline mr-1" />
-                    高级模型端口设置
-                  </SpringButton>
                 </div>
               )}
 

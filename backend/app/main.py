@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import shutil
 import uuid
@@ -31,16 +32,17 @@ from app.parsers.ocr_engine import (
 )
 from app.router import (
     ModelRouter,
+    detect_free_ai_apps_and_magpie,
     detect_installed_harnesses,
     install_cli_harness,
-    probe_lmstudio,
-    probe_ollama,
     stream_manage_cli_harness,
+    stream_setup_magpie_and_dsh,
     uninstall_cli_harness,
 )
-from app.router.fallback_provider import HeuristicStudyEngine
 from app.schemas import (
+    CloudConfig,
     DocumentIR,
+    FreeAiAuthConfig,
     GenerateRequest,
     NegotiateRequest,
     OcrEngineType,
@@ -52,10 +54,14 @@ from app.schemas import (
     RouterSettings,
     StudyBlueprint,
     StudyPackage,
+    VariantQuestionRequest,
 )
 from app.workflows import (
     PRESET_TEMPLATES,
+    ai_fill_study_blueprint,
+    build_default_blueprint_from_ir,
     generate_study_package,
+    generate_variant_question,
     get_preset,
     negotiate_study_blueprint,
 )
@@ -152,17 +158,17 @@ async def health_check() -> Dict[str, str]:
 async def get_providers_status() -> ProviderStatusResponse:
     settings = load_settings()
     harnesses = detect_installed_harnesses()
-    ollama_ok, ollama_models = await probe_ollama(settings.local_config.ollama_url)
-    lms_ok, lms_models = await probe_lmstudio(settings.local_config.lmstudio_url)
+    magpie_info = detect_free_ai_apps_and_magpie(settings.free_ai_auth.magpie_gateway_url)
     gpu_vram = detect_gpu_vram(settings.ocr_config.vram_override_gb)
     ocr_engines = await get_ocr_engines_status(settings)
     return ProviderStatusResponse(
         settings=redact_settings(settings),
         harnesses=harnesses,
-        ollama_available=ollama_ok,
-        ollama_models=ollama_models,
-        lmstudio_available=lms_ok,
-        lmstudio_models=lms_models,
+        free_ai_apps=magpie_info["free_ai_apps"],
+        magpie_available=magpie_info["magpie_available"],
+        magpie_gateway_running=magpie_info["magpie_gateway_running"],
+        magpie_models=magpie_info["magpie_models"],
+        dsh_available=magpie_info["dsh_available"],
         rapidocr_available=is_rapidocr_available(),
         gpu_vram=gpu_vram,
         ocr_engines=ocr_engines,
@@ -238,6 +244,46 @@ async def uninstall_harness_cli(payload: Dict[str, Any]) -> Any:
     return await uninstall_cli_harness(cli_name)
 
 
+@app.post("/api/harnesses/setup-magpie-dsh")
+async def setup_magpie_and_dsh_endpoint(payload: Optional[Dict[str, Any]] = None) -> Any:
+    settings = load_settings()
+    gateway_url = str((payload or {}).get("gateway_url") or settings.free_ai_auth.magpie_gateway_url or "http://127.0.0.1:3425/v1")
+    stream = bool((payload or {}).get("stream", True))
+
+    if stream:
+        async def event_gen():
+            try:
+                async for evt in stream_setup_magpie_and_dsh(gateway_url):
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'progress': 100, 'ok': False, 'message': str(exc)}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+    last_evt: Dict[str, Any] = {"ok": False, "message": "未执行任何步骤"}
+    async for evt in stream_setup_magpie_and_dsh(gateway_url):
+        last_evt = evt
+    return last_evt
+
+
+@app.post("/api/harnesses/authorize-free-ai", response_model=RouterSettings)
+async def authorize_free_ai_proxy(payload: Dict[str, Any]) -> RouterSettings:
+    settings = load_settings()
+    authorized = bool(payload.get("authorized", True))
+    cur = settings.free_ai_auth
+    updated_auth = cur.model_copy(
+        update={
+            "authorized_use_local_ai": authorized,
+            "authorized_at": datetime.now().isoformat() if authorized else None,
+            "preferred_proxy_mode": str(payload.get("preferred_proxy_mode") or cur.preferred_proxy_mode),
+            "selected_free_model": str(payload.get("selected_free_model") or cur.selected_free_model),
+            "magpie_gateway_url": str(payload.get("magpie_gateway_url") or cur.magpie_gateway_url),
+        }
+    )
+    updated = save_settings(settings.model_copy(update={"free_ai_auth": updated_auth}))
+    return redact_settings(updated)
+
+
 @app.post("/api/providers/settings", response_model=RouterSettings)
 async def update_provider_settings(settings: RouterSettings) -> RouterSettings:
     return redact_settings(save_settings(settings))
@@ -245,8 +291,21 @@ async def update_provider_settings(settings: RouterSettings) -> RouterSettings:
 
 @app.post("/api/providers/test")
 async def test_provider_connection(payload: Dict[str, Any]) -> Dict[str, Any]:
-    provider = payload.get("provider", "heuristic")
+    provider = payload.get("provider", "harness")
+    if provider not in ("harness", "cloud"):
+        provider = "harness"
     settings = load_settings()
+
+    if isinstance(payload.get("cloud_config"), dict):
+        raw_cloud = dict(payload["cloud_config"])
+        if not raw_cloud.get("api_key") or "****" in str(raw_cloud.get("api_key", "")):
+            raw_cloud["api_key"] = settings.cloud_config.api_key
+        settings = settings.model_copy(update={"cloud_config": CloudConfig.model_validate(raw_cloud)})
+
+    if isinstance(payload.get("free_ai_auth"), dict):
+        raw_auth = dict(payload["free_ai_auth"])
+        settings = settings.model_copy(update={"free_ai_auth": FreeAiAuthConfig.model_validate(raw_auth)})
+
     test_settings = settings.model_copy(update={"routing_mode": "single", "active_provider": provider, "enable_fallback": False})
     router = ModelRouter(test_settings)
     try:
@@ -259,7 +318,7 @@ async def test_provider_connection(payload: Dict[str, Any]) -> Dict[str, Any]:
             "ok": True,
             "provider": provider,
             "label": label,
-            "sample_response": (text or "内置规则引擎就绪")[:120],
+            "sample_response": (text or "连接成功")[:120],
         }
     except Exception as exc:
         return {"ok": False, "provider": provider, "error": str(exc)}
@@ -304,7 +363,7 @@ async def list_projects() -> List[ProjectSummary]:
 @app.post("/api/projects/upload", response_model=ProjectDetailResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    default_preset_id: str = Form("self_study_guide"),
+    default_preset_id: str = Form("A_beginner"),
 ) -> ProjectDetailResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
@@ -332,9 +391,80 @@ async def upload_document(
 
     _save_project_ir(doc_ir)
     preset = get_preset(default_preset_id)
-    blueprint = HeuristicStudyEngine.build_blueprint_from_ir(doc_ir, preset)
+    blueprint = build_default_blueprint_from_ir(doc_ir, preset)
     _save_blueprint(project_id, blueprint)
     return ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+
+
+@app.post("/api/projects/upload-stream")
+async def upload_document_stream(
+    file: UploadFile = File(...),
+    default_preset_id: str = Form("A_beginner"),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件格式 {suffix}，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+
+    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+    pdir = get_project_dir(project_id)
+    assets_dir = pdir / "assets"
+    safe_name = Path(file.filename).name
+    dest_path = pdir / safe_name
+    content = await file.read()
+    dest_path.write_bytes(content)
+    settings = load_settings()
+    preset = get_preset(default_preset_id)
+
+    async def event_stream():
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_ocr_progress(percent: int, stage: str, message: str):
+            payload = json.dumps(
+                {"type": "progress", "percent": percent, "stage": stage, "message": message},
+                ensure_ascii=False,
+            )
+            await queue.put(f"data: {payload}\n\n")
+
+        async def runner():
+            try:
+                await on_ocr_progress(3, "upload_saved", f"文件《{safe_name}》已接收（{len(content) // 1024} KB），正在启动 OCR 引擎...")
+                doc_ir = await parse_uploaded_file(
+                    dest_path, project_id, assets_dir, settings, progress_cb=on_ocr_progress
+                )
+                _save_project_ir(doc_ir)
+                blueprint = build_default_blueprint_from_ir(doc_ir, preset)
+                _save_blueprint(project_id, blueprint)
+                detail = ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+                done_payload = json.dumps(
+                    {"type": "complete", "percent": 100, "detail": detail.model_dump()},
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {done_payload}\n\n")
+            except Exception as exc:
+                shutil.rmtree(pdir, ignore_errors=True)
+                err_payload = json.dumps({"type": "error", "message": f"OCR 与解析失败: {exc}"}, ensure_ascii=False)
+                await queue.put(f"data: {err_payload}\n\n")
+            finally:
+                await queue.put("__END__")
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item == "__END__":
+                    break
+                yield item
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/projects/demo", response_model=ProjectDetailResponse)
@@ -342,10 +472,34 @@ async def load_demo_project() -> ProjectDetailResponse:
     settings = load_settings()
     doc_ir = await create_demo_courseware_project(settings)
     _save_project_ir(doc_ir)
-    preset = get_preset("self_study_guide")
-    blueprint = HeuristicStudyEngine.build_blueprint_from_ir(doc_ir, preset)
+    preset = get_preset("A_beginner")
+    blueprint = build_default_blueprint_from_ir(doc_ir, preset)
     _save_blueprint(doc_ir.project_id, blueprint)
     return ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+
+
+@app.post("/api/projects/demo-stream")
+async def load_demo_project_stream():
+    settings = load_settings()
+
+    async def event_stream():
+        try:
+            yield f"data: {json.dumps({'type': 'progress', 'percent': 15, 'stage': 'ocr_init', 'message': '正在装载示例课件：第1-3章 梯度下降与反向传播（含公式图片）...'}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.18)
+            yield f"data: {json.dumps({'type': 'progress', 'percent': 48, 'stage': 'ocr_vision', 'message': '正在识别课件公式图片并校验 LaTeX 块...'}, ensure_ascii=False)}\n\n"
+            doc_ir = await create_demo_courseware_project(settings)
+            _save_project_ir(doc_ir)
+            yield f"data: {json.dumps({'type': 'progress', 'percent': 86, 'stage': 'ocr_done', 'message': f'已提取 {len(doc_ir.chapters)} 个章节与核心关键词，正在生成目录大纲...'}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.12)
+            preset = get_preset("A_beginner")
+            blueprint = build_default_blueprint_from_ir(doc_ir, preset)
+            _save_blueprint(doc_ir.project_id, blueprint)
+            detail = ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+            yield f"data: {json.dumps({'type': 'complete', 'percent': 100, 'detail': detail.model_dump()}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
@@ -396,82 +550,67 @@ async def negotiate_requirements(project_id: str, req: NegotiateRequest) -> Stud
     settings = load_settings()
     router = ModelRouter(settings)
     current_bp = req.current_blueprint or _load_blueprint(project_id)
-    blueprint = await negotiate_study_blueprint(
-        document_ir=doc_ir,
-        preset_id=req.preset_id,
-        user_prompt=req.user_prompt,
-        current_blueprint=current_bp,
-        router=router,
-    )
+    try:
+        blueprint = await negotiate_study_blueprint(
+            document_ir=doc_ir,
+            preset_id=req.preset_id,
+            user_prompt=req.user_prompt,
+            current_blueprint=current_bp,
+            router=router,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     _save_blueprint(project_id, blueprint)
     return blueprint
 
 
 @app.post("/api/projects/{project_id}/ai-fill-params", response_model=StudyBlueprint)
 async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> StudyBlueprint:
-    """One-click AI calculation of optimal question counts, timing, score, and focus topics."""
+    """AI calculation of optimal question counts, timing, score, and focus topics for A/B/C scenario."""
     doc_ir = _load_project_ir(project_id)
+    settings = load_settings()
+    router = ModelRouter(settings)
     current_bp = req.current_blueprint or _load_blueprint(project_id)
-    preset = get_preset(req.preset_id or (current_bp.preset_id if current_bp else "self_study_guide"))
-
-    sel_ids = (
-        current_bp.selected_chapter_ids
-        if current_bp and current_bp.selected_chapter_ids
-        else [c.chapter_id for c in doc_ir.chapters]
-    )
-    sel_chapters = [c for c in doc_ir.chapters if c.chapter_id in sel_ids] or doc_ir.chapters
-    chap_count = max(1, len(sel_chapters))
-    total_chars = sum(c.char_count for c in sel_chapters)
-    density_scale = min(1.8, max(0.8, total_chars / 3500.0))
-
-    mcq = max(3, min(18, round((3 * chap_count) * density_scale)))
-    fill_blank = max(2, min(12, round((1.5 * chap_count) * density_scale)))
-    short_ans = max(1, min(8, round(chap_count * density_scale)))
-
-    if preset.preset_id == "in_class_practice":
-        mcq, fill_blank, short_ans = min(8, max(4, chap_count * 2)), min(4, chap_count), 1
-        minutes, total_score = 15, 50
-    elif preset.preset_id == "exam_cheatsheet":
-        mcq, fill_blank, short_ans = 3, 2, 1
-        minutes, total_score = 15, 40
-    elif preset.preset_id == "self_test_exam":
-        mcq, fill_blank, short_ans = max(8, mcq), max(4, fill_blank), max(2, short_ans)
-        minutes, total_score = 60, 100
-    else:
-        minutes = min(90, max(20, mcq * 2 + fill_blank * 3 + short_ans * 8))
-        total_score = mcq * 5 + fill_blank * 5 + short_ans * 10
-
-    focus_topics: List[str] = []
-    for ch in sel_chapters:
-        focus_topics.extend(ch.key_terms[:3])
-    focus_topics = list(dict.fromkeys(focus_topics))[:10]
-
-    base_bp = current_bp or HeuristicStudyEngine.build_blueprint_from_ir(doc_ir, preset)
-    updated_deliverables = base_bp.deliverables.model_copy(
-        update={
-            "mcq_count": mcq,
-            "fill_blank_count": fill_blank,
-            "short_answer_count": short_ans,
-            "suggested_minutes": minutes,
-            "total_score": total_score,
-        }
-    )
-    updated_bp = base_bp.model_copy(
-        update={
-            "deliverables": updated_deliverables,
-            "focus_topics": focus_topics or base_bp.focus_topics,
-            "parsed_intent_summary": (
-                f"AI 已结合已选 {chap_count} 个章节（约 {total_chars:,} 字）智能填充题量："
-                f"{mcq} 单选 + {fill_blank} 填空 + {short_ans} 简答（共 {total_score} 分 / {minutes} 分钟）。"
-            ),
-            "ai_feedback_message": (
-                f"已根据文档信息密度自动填好题量与考核重点（单选 {mcq} / 填空 {fill_blank} / 简答 {short_ans}），"
-                "您也可以继续手动微调具体数字。"
-            ),
-        }
-    )
+    try:
+        updated_bp = await ai_fill_study_blueprint(
+            document_ir=doc_ir,
+            preset_id=req.preset_id,
+            user_prompt=req.user_prompt,
+            current_blueprint=current_bp,
+            router=router,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     _save_blueprint(project_id, updated_bp)
     return updated_bp
+
+
+@app.post("/api/projects/{project_id}/variant-question")
+async def create_variant_question(project_id: str, req: VariantQuestionRequest) -> Dict[str, Any]:
+    """Generate one fresh variant question targeting the same knowledge point as an existing quiz item."""
+    doc_ir = _load_project_ir(project_id)
+    settings = load_settings()
+    router = ModelRouter(settings)
+    try:
+        new_q = await generate_variant_question(
+            document_ir=doc_ir,
+            source_question=req.source_question,
+            selected_chapter_ids=req.selected_chapter_ids,
+            router=router,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    package = _load_package(project_id)
+    if package is not None and package.quiz_paper is not None:
+        updated_qs = [*package.quiz_paper.questions, new_q]
+        updated_paper = package.quiz_paper.model_copy(
+            update={
+                "questions": updated_qs,
+                "total_score": sum(q.score for q in updated_qs),
+            }
+        )
+        _save_package(project_id, package.model_copy(update={"quiz_paper": updated_paper}))
+    return {"question": new_q.model_dump()}
 
 
 from app.router.harness_provider import HarnessCancelToken
@@ -594,7 +733,7 @@ async def quick_generate_from_preset(project_id: str, req: QuickGenerateRequest)
     cancel_token = HarnessCancelToken()
     router = ModelRouter(settings, cancel_token=cancel_token)
 
-    blueprint = HeuristicStudyEngine.build_blueprint_from_ir(
+    blueprint = build_default_blueprint_from_ir(
         doc_ir, preset, user_prompt=req.user_prompt
     )
     if req.selected_chapter_ids:
@@ -627,6 +766,7 @@ def _build_pdf_export_response(
     paper_size: str,
     include_answers: bool,
     inline: bool = False,
+    paper_id: Optional[str] = None,
 ) -> Response:
     doc_ir = _load_project_ir(project_id)
     package = _load_package(project_id)
@@ -638,16 +778,25 @@ def _build_pdf_export_response(
     base_name = Path(doc_ir.filename).stem
 
     if doc_type == "quiz":
-        if not package.quiz_paper.questions:
-            raise HTTPException(status_code=400, detail="当前方案未生成题库试题")
+        all_papers = [package.quiz_paper, *(package.extra_quiz_papers or [])]
+        selected_paper = package.quiz_paper
+        if paper_id:
+            for p in all_papers:
+                if p.paper_id == paper_id or p.deliverable_type == paper_id:
+                    selected_paper = p
+                    break
+        if not selected_paper.questions:
+            raise HTTPException(status_code=400, detail="当前所选试卷未生成题库试题")
         pdf_bytes = export_quiz_pdf_bytes(
             doc_ir,
             package,
             paper_size=size,  # type: ignore[arg-type]
             include_answers=include_answers,
             assets_dir=assets_dir,
+            quiz_override=selected_paper,
         )
-        suffix = f"_{size.upper()}{'双栏密封线试卷' if size == 'a3' else '标准试卷'}{'_含答案解析' if include_answers else ''}.pdf"
+        paper_suffix = f"_{selected_paper.deliverable_type}" if selected_paper.deliverable_type not in ("quiz", "none") else ""
+        suffix = f"{paper_suffix}_{size.upper()}{'双栏密封线试卷' if size == 'a3' else '标准试卷'}{'_含答案解析' if include_answers else ''}.pdf"
     elif doc_type == "cheatsheet":
         pdf_bytes = export_cheatsheet_pdf_bytes(
             doc_ir,
@@ -664,7 +813,7 @@ def _build_pdf_export_response(
             include_answers=include_answers,
             assets_dir=assets_dir,
         )
-        suffix = f"_{size.upper()}自学案印刷讲义_含例题解析.pdf"
+        suffix = f"_{size.upper()}印刷讲义与知识提取.pdf"
 
     filename = f"{base_name}{suffix}"
     encoded_name = quote(filename)
@@ -685,8 +834,9 @@ async def export_project_pdf_get(
     paper_size: str = Query("a4"),
     include_answers: bool = Query(True),
     inline: bool = Query(True),
+    paper_id: Optional[str] = Query(None),
 ) -> Response:
-    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=inline)
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=inline, paper_id=paper_id)
 
 
 @app.post("/api/projects/{project_id}/export-pdf")
@@ -694,7 +844,8 @@ async def export_project_pdf_post(project_id: str, payload: Dict[str, Any]) -> R
     doc_type = str(payload.get("doc_type") or "quiz")
     paper_size = str(payload.get("paper_size") or "a4")
     include_answers = bool(payload.get("include_answers", True))
-    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=False)
+    paper_id = payload.get("paper_id")
+    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=False, paper_id=paper_id)
 
 
 @app.get("/api/system/update-status")

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-from app.router.fallback_provider import HeuristicStudyEngine
 from app.router.routing_engine import ModelRouter
 from app.schemas import (
     ChapterNode,
@@ -14,6 +14,7 @@ from app.schemas import (
     StudyBlueprint,
     StudyPackage,
 )
+from app.workflows.presets import sync_deliverable_flags_with_items
 
 ProgressCallback = Optional[Callable[[str, int, str], Awaitable[None]]]
 
@@ -218,24 +219,38 @@ def build_notes_prompts(
     focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
     chapter_anchors = _build_chapter_anchor_table(selected_chapters)
 
+    items_set = set(d.selected_items or [])
+    is_c_extract = d.scenario_type == "C_sprint" or "key_knowledge_extraction" in items_set
+
+    if is_c_extract:
+        style_block = (
+            "二、教学风格（当前为【场景C · 考前冲刺 / 重要知识提取】）：\n"
+            "   - 目标是在最短时间内提取**核心必考知识点、高频结论定理、公式适用边界与典型考场大题套路**：\n"
+            "     (1) 高频核心考点与必背结论清单（按重要程度星级排序，注明前提假设与易丢分细节）；\n"
+            "     (2) 核心公式推导逻辑与快速记忆口诀；\n"
+            "     (3) 2~3 道【高频考场母题与得分套路示范】（每题标注 **【题目】**、**【命题意图】**、**【思路引导】**、**【详细解答】**、**【易错点拨与变式】**）；\n"
+            "     (4) 易混概念对比表与考前急救自检 Checklist。"
+        )
+    else:
+        style_block = (
+            "二、教学风格（当前为【场景A · 详细自学案（附带例题）】）：\n"
+            "   - 面向零基础/初次学习，必须通俗易懂、逻辑递进，完整包含以下模块：\n"
+            "     (1) 学习目标与重难点拆解；(2) 前置概念导读与直觉类比（用日常现象或几何直觉解释抽象概念）；(3) 核心概念与定理公式精讲；\n"
+            "     (4) 不少于 4 道高质量、难度递进的【典型例题与深度解析】（须覆盖「概念辨析型 → 公式推导/定量计算型 → 综合应用/反例探究型」，每道例题均须包含完整条件/数据或选项，并严格按以下五个加粗标签分节：\n"
+            "         - **【题目】**：交代清晰条件、待求目标或完整情景；\n"
+            "         - **【命题意图】**：一句话点明本题考察的核心能力与知识陷阱；\n"
+            "         - **【思路引导】**：给出切入突破口与关键转化步骤，不直接剧透答案；\n"
+            "         - **【详细解答】**：逐步推导计算并给出严谨结论；\n"
+            "         - **【易错点拨与变式】**：剖析学生最易混淆的错误做法，并附 1 句简短变式思考）；\n"
+            "     (5) 易混概念对比表与自学自检 Checklist。"
+        )
+
     notes_sys = (
-        "你是一位顶尖学科导师、命题研究专家与教材主编。请严格依据提供的教材/课件原文内容，编写高水准的结构化学习讲义/导学案。\n"
+        "你是一位顶尖学科导师、命题研究专家与教材主编。请严格依据提供的教材/课件原文内容，编写高水准的结构化学习资料。\n"
         "一、内容真实性与格式规范：\n"
         "1. 严格忠于原文事实、符号体系与推导逻辑，切勿编造教材未出现的定理或数据；若原文附有配图 Markdown 链接（如 `![...](...)`），请在对应知识点段落自然内联引用。\n"
         "2. 规范使用 Markdown 层级标题、对比表格与要点清单；所有行内数学公式必须严格使用 `$...$`，独立公式块使用 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；Markdown 表格内的范数请写 `\\parallel W \\parallel` 而非 `\\|W\\|`。\n"
-        f"二、教学风格与【典型例题】深度设计（当前模板：【{blueprint.preset_name}】｜风格：{d.notes_style}｜目标难度：{blueprint.target_difficulty}）：\n"
-        "   - 若为【自学案】（或 `guided_learning`）：必须完整包含以下模块：\n"
-        "     (1) 学习目标与重难点拆解；(2) 前置概念导读与直觉类比；(3) 核心概念与定理公式精讲；\n"
-        "     (4) 不少于 4 道高质量、难度递进的【典型例题与深度解析】（须覆盖「概念辨析型 → 公式推导/定量计算型 → 综合应用/反例探究型」，每道例题均须包含完整条件/数据或选项，并严格按以下五个加粗标签分节：\n"
-        "         - **【题目】**：交代清晰条件、待求目标或完整情景；\n"
-        "         - **【命题意图】**：一句话点明本题考察的核心能力与知识陷阱；\n"
-        "         - **【思路引导】**：给出切入突破口与关键转化步骤，不直接剧透答案；\n"
-        "         - **【详细解答】**：逐步推导计算并给出严谨结论；\n"
-        "         - **【易错点拨与变式】**：剖析学生最易混淆的错误做法，并附 1 句简短变式思考）；\n"
-        "     (5) 易混概念对比表与自学自检 Checklist。\n"
-        "   - 若为【随堂练习】：输出精炼的“当堂核心要点速览”、易错预警及 2 道课堂示范例题（须含 **【题目】**、**【思路引导】**、**【详细解答】**、**【易错点拨】**）。\n"
-        "   - 若为【同步练习】：输出“章节知识框架梳理、高频题型示范例题（含上述结构化解析）与避坑清单”。\n"
-        "   - 若为【自测卷】：输出“考前核心考点复盘提纲、高频压轴母题示例与答题规范模板”。"
+        f"{style_block}"
     )
     notes_user = (
         f"文档名称: {document_ir.filename}\n"
@@ -386,6 +401,155 @@ async def generate_study_package(
         router.status_cb = prev_status_cb
 
 
+_PAPER_SPECS: Dict[str, Tuple[str, str, str]] = {
+    "sync_homework": (
+        "同步练习（作业）",
+        "sync_layered",
+        "立足各章基础概念与机理推导的课后同步训练：从基础达标到能力提升循序渐进，适合边学边练巩固课堂内容。",
+    ),
+    "unit_test_paper": (
+        "单元检测卷",
+        "exam_paper",
+        "标准化闭卷单元测评试卷：题型分布均衡、覆盖核心概念与典型应用题，检验零基础学习后的阶段掌握效果。",
+    ),
+    "chapter_consolidation_paper": (
+        "分章节巩固卷",
+        "sync_layered",
+        "按选中章节逐章设计查漏补缺题组，专门打击易混概念辨析、条件边界误区与公式变形错误。",
+    ),
+    "comprehensive_test_paper": (
+        "综合检测卷",
+        "exam_paper",
+        "跨章节知识点深度串联与综合推导测评卷：强化综合应用、情景迁移与高区分度能力拔高。",
+    ),
+    "cram_exam_paper": (
+        "佛教卷（考前冲刺突击卷）",
+        "exam_paper",
+        "面向考前临阵磨枪的终极突击卷：聚焦历年/教材最高频考点、必拿分计算套路与经典易错陷阱，直击得分采分点。",
+    ),
+}
+
+
+def _parse_quiz_questions(raw_questions: list, default_chapter: str) -> List[QuizQuestion]:
+    valid_qs: List[QuizQuestion] = []
+    for idx, item in enumerate(raw_questions, start=1):
+        if not isinstance(item, dict):
+            continue
+        q_type = item.get("type", "mcq")
+        if q_type not in ("mcq", "fill_blank", "short_answer"):
+            q_type = "mcq"
+        tier = item.get("tier", "基础达标")
+        if tier not in ("基础达标", "能力提升", "拓展探究"):
+            tier = "能力提升"
+        diff = item.get("difficulty", "medium")
+        if diff not in ("easy", "medium", "hard"):
+            diff = "medium"
+        valid_qs.append(
+            QuizQuestion(
+                id=str(item.get("id") or f"q_{idx}"),
+                type=q_type,
+                difficulty=diff,
+                tier=tier,
+                score=max(1, int(item.get("score") or 5)),
+                question=normalize_markdown_math(str(item.get("question") or "")),
+                options=[normalize_markdown_math(str(o)) for o in (item.get("options") or [])],
+                answer=normalize_markdown_math(str(item.get("answer") or "")),
+                explanation=normalize_markdown_math(str(item.get("explanation") or "")),
+                source_chapter=str(item.get("source_chapter") or default_chapter),
+                source_page=str(item.get("source_page") or ""),
+            )
+        )
+    return valid_qs
+
+
+async def _generate_single_quiz_paper(
+    document_ir: DocumentIR,
+    selected_chapters: List[ChapterNode],
+    blueprint: StudyBlueprint,
+    context_text: str,
+    paper_id: str,
+    router: ModelRouter,
+) -> QuizPaper:
+    label, mode, directive = _PAPER_SPECS.get(
+        paper_id,
+        (blueprint.preset_name, blueprint.deliverables.quiz_mode, "高质量同步练习与测评卷"),
+    )
+    d = blueprint.deliverables
+    quiz_sys, quiz_user = build_quiz_prompts(
+        document_ir, selected_chapters, blueprint, context_text
+    )
+    paper_user = (
+        f"## 本套试卷专项定位（paper_id={paper_id}）\n"
+        f"- 试卷名称：{document_ir.filename} · {label}\n"
+        f"- 命题要求：{directive}\n\n"
+        + quiz_user
+    )
+    quiz_data, _ = await router.execute_json("quiz_generation", quiz_sys, paper_user)
+    if not (isinstance(quiz_data, dict) and isinstance(quiz_data.get("questions"), list) and quiz_data["questions"]):
+        raise RuntimeError(f"AI 未能为《{label}》返回有效的 JSON 试题列表，请检查模型配置或重试。")
+
+    valid_qs = _parse_quiz_questions(quiz_data["questions"], selected_chapters[0].title)
+    if not valid_qs:
+        raise RuntimeError(f"《{label}》解析后有效试题为空，请重试。")
+
+    return QuizPaper(
+        paper_id=paper_id,
+        deliverable_type=paper_id,
+        title=str(quiz_data.get("title") or f"{document_ir.filename} · {label}"),
+        mode=mode,  # type: ignore
+        total_score=sum(q.score for q in valid_qs),
+        suggested_minutes=d.suggested_minutes,
+        instructions=str(quiz_data.get("instructions") or f"共 {len(valid_qs)} 题，建议用时 {d.suggested_minutes} 分钟。"),
+        questions=valid_qs,
+    )
+
+
+async def generate_variant_question(
+    document_ir: DocumentIR,
+    source_question: QuizQuestion,
+    selected_chapter_ids: List[str],
+    router: ModelRouter,
+) -> QuizQuestion:
+    """Generate a single targeted variant question on the same knowledge point for [✨ 针对此知识点再出一题]."""
+    chapters = [c for c in document_ir.chapters if c.chapter_id in selected_chapter_ids] or document_ir.chapters
+    matched = [c for c in chapters if source_question.source_chapter and source_question.source_chapter in c.title] or chapters
+    excerpt = _collect_chapters_context(matched[:2], max_chars=7000)
+
+    sys_prompt = (
+        "你是一位资深学科命题专家。请针对用户刚才练习的原题所考察的【同一核心知识点/误区】，"
+        "独立命制 **1 道全新变式题**（改变情景、参数、提问角度或反例条件，切忌照抄原题题干或选项），并只输出单个合法 JSON 对象：\n"
+        "{\n"
+        '  "id": "var_xxx",\n'
+        '  "type": "mcq" | "fill_blank" | "short_answer",\n'
+        '  "difficulty": "easy" | "medium" | "hard",\n'
+        '  "tier": "基础达标" | "能力提升" | "拓展探究",\n'
+        '  "score": 5,\n'
+        '  "question": "全新变式题干（所有公式用 $...$ 或 $$...$$，JSON 反斜杠须双写）",\n'
+        '  "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
+        '  "answer": "标准答案",\n'
+        '  "explanation": "【考点定位】...\\n【详解与推导】...\\n【易错点拨】...",\n'
+        '  "source_chapter": "对应章节",\n'
+        '  "source_page": "P..."\n'
+        "}"
+    )
+    user_prompt = (
+        f"## 原题参考\n"
+        f"- 题型: {source_question.type} | 梯度: {source_question.tier} | 来源: {source_question.source_chapter} ({source_question.source_page})\n"
+        f"- 原题干: {source_question.question}\n"
+        f"- 原答案: {source_question.answer}\n"
+        f"- 原解析: {source_question.explanation[:400]}\n\n"
+        f"## 教材参考原文\n{excerpt}"
+    )
+    data, _ = await router.execute_json("quiz_generation", sys_prompt, user_prompt)
+    if not isinstance(data, dict):
+        raise RuntimeError("AI 未返回合法的变式题 JSON，请重试。")
+    q_dict = data["questions"][0] if isinstance(data.get("questions"), list) and data["questions"] else data
+    parsed = _parse_quiz_questions([q_dict], source_question.source_chapter or chapters[0].title)
+    if not parsed:
+        raise RuntimeError("生成的变式题格式校验失败，请重试。")
+    return parsed[0].model_copy(update={"id": f"var_{uuid.uuid4().hex[:6]}"})
+
+
 async def _run_generate_study_package(
     document_ir: DocumentIR,
     blueprint: StudyBlueprint,
@@ -399,120 +563,103 @@ async def _run_generate_study_package(
     ] or document_ir.chapters
 
     context_text = _collect_chapters_context(selected_chapters)
-    d = blueprint.deliverables
+    d = sync_deliverable_flags_with_items(blueprint.deliverables)
+    blueprint = blueprint.model_copy(update={"deliverables": d})
+    items_set = set(d.selected_items or [])
     focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
 
-    # 1. Study Notes / Guided Study Sheet
+    # 1. Study Notes / Knowledge Extraction
     study_notes_md = ""
     if d.include_study_guide_notes:
         router.check_cancelled()
         current_stage_state["stage"] = "notes"
-        current_stage_state["percent"] = 20
+        current_stage_state["percent"] = 18
+        notes_label = "重要知识提取" if "key_knowledge_extraction" in items_set or d.scenario_type == "C_sprint" else "详细自学案（附带例题）"
         if progress_cb:
-            await progress_cb("notes", 20, f"正在生成【{blueprint.preset_name}】讲义与精要笔记...")
+            await progress_cb("notes", 18, f"正在生成【{notes_label}】...")
         notes_sys, notes_user = build_notes_prompts(
             document_ir, selected_chapters, blueprint, context_text
         )
         res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
-        study_notes_md = normalize_markdown_math(
-            res_notes or HeuristicStudyEngine.generate_notes_from_ir(document_ir, blueprint)
-        )
+        if not res_notes or not res_notes.strip():
+            raise RuntimeError(f"AI 未生成有效的{notes_label}内容，请检查模型配置后重试。")
+        study_notes_md = normalize_markdown_math(res_notes)
 
     # 2. Cheat Sheet
     cheatsheet_md = ""
     if d.include_cheatsheet:
         router.check_cancelled()
         current_stage_state["stage"] = "cheatsheet"
-        current_stage_state["percent"] = 45
+        current_stage_state["percent"] = 36
         if progress_cb:
-            await progress_cb("cheatsheet", 45, "正在浓缩考前速记表 (Cheat Sheet)...")
+            await progress_cb("cheatsheet", 36, "正在浓缩考前速记表 (知识点与公式 Cheat Sheet)...")
         cs_sys = (
-            "请根据以下教材/课件原文，提炼一份高密度、适合考前突击复盘的《考前速记表 (Cheat Sheet)》。\n"
+            "请根据以下教材/课件原文，提炼一份高密度、适合考前突击复盘与日常速查的《考前速记表 (Cheat Sheet)》。\n"
             "格式严格要求：所有行内/块级数学公式必须使用 `$...$` 或 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；"
             "Markdown 表格内的范数请用 `\\parallel W \\parallel^2` 而非 `\\|W\\|^2`，并控制单元格文本紧凑以免表格过宽溢出。\n"
             "内容要求包含：1) 核心概念/公式与适用边界速查 Markdown 表格；2) 高频易混概念/公式对比表；3) 考前必背与常见计算陷阱 Checklist。"
         )
         cs_user = (
-            f"密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
+            f"场景: {blueprint.preset_name} | 密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
         )
         res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
-        cheatsheet_md = normalize_markdown_math(
-            res_cs or HeuristicStudyEngine.generate_cheatsheet_from_ir(document_ir, blueprint)
-        )
+        if not res_cs or not res_cs.strip():
+            raise RuntimeError("AI 未生成有效的考前速记表内容，请重试。")
+        cheatsheet_md = normalize_markdown_math(res_cs)
 
-    # 3. Quiz Paper
-    quiz_paper: QuizPaper
-    if d.include_quiz:
-        router.check_cancelled()
-        current_stage_state["stage"] = "quiz"
-        current_stage_state["percent"] = 70
-        if progress_cb:
-            await progress_cb("quiz", 70, f"正在命制【{blueprint.preset_name}】配套题库与详细解析...")
-        quiz_sys, quiz_user = build_quiz_prompts(
-            document_ir, selected_chapters, blueprint, context_text
+    # 3. Quiz Papers (supporting 1 or multiple selected papers for A/B/C scenarios)
+    ordered_paper_ids = [
+        pid
+        for pid in (
+            "sync_homework",
+            "unit_test_paper",
+            "chapter_consolidation_paper",
+            "comprehensive_test_paper",
+            "cram_exam_paper",
         )
-        quiz_data, _ = await router.execute_json("quiz_generation", quiz_sys, quiz_user)
-        if isinstance(quiz_data, dict) and isinstance(quiz_data.get("questions"), list) and quiz_data["questions"]:
-            valid_qs: List[QuizQuestion] = []
-            for idx, item in enumerate(quiz_data["questions"], start=1):
-                try:
-                    q_type = item.get("type", "mcq")
-                    if q_type not in ("mcq", "fill_blank", "short_answer"):
-                        q_type = "mcq"
-                    tier = item.get("tier", "基础达标")
-                    if tier not in ("基础达标", "能力提升", "拓展探究"):
-                        tier = "能力提升"
-                    diff = item.get("difficulty", "medium")
-                    if diff not in ("easy", "medium", "hard"):
-                        diff = "medium"
-                    valid_qs.append(
-                        QuizQuestion(
-                            id=str(item.get("id") or f"q_{idx}"),
-                            type=q_type,
-                            difficulty=diff,
-                            tier=tier,
-                            score=int(item.get("score") or 5),
-                            question=str(item.get("question") or ""),
-                            options=[str(o) for o in (item.get("options") or [])],
-                            answer=str(item.get("answer") or ""),
-                            explanation=str(item.get("explanation") or ""),
-                            source_chapter=str(item.get("source_chapter") or selected_chapters[0].title),
-                            source_page=str(item.get("source_page") or ""),
-                        )
-                    )
-                except Exception:
-                    continue
-            if valid_qs:
-                quiz_paper = QuizPaper(
-                    title=str(quiz_data.get("title") or f"{document_ir.filename} · {blueprint.preset_name}"),
-                    mode=d.quiz_mode,
-                    total_score=sum(q.score for q in valid_qs),
-                    suggested_minutes=d.suggested_minutes,
-                    instructions=str(quiz_data.get("instructions") or f"共 {len(valid_qs)} 题，建议用时 {d.suggested_minutes} 分钟。"),
-                    questions=valid_qs,
+        if pid in items_set
+    ]
+    if not ordered_paper_ids and d.include_quiz:
+        ordered_paper_ids = ["cram_exam_paper" if d.scenario_type == "C_sprint" else "sync_homework"]
+
+    generated_papers: List[QuizPaper] = []
+    if ordered_paper_ids:
+        for idx, pid in enumerate(ordered_paper_ids):
+            router.check_cancelled()
+            paper_name = _PAPER_SPECS.get(pid, (pid,))[0]
+            pct = 48 + int(34 * idx / max(1, len(ordered_paper_ids)))
+            current_stage_state["stage"] = "quiz"
+            current_stage_state["percent"] = pct
+            if progress_cb:
+                await progress_cb("quiz", pct, f"正在命制《{paper_name}》（{idx + 1}/{len(ordered_paper_ids)}）及详细解析...")
+            generated_papers.append(
+                await _generate_single_quiz_paper(
+                    document_ir, selected_chapters, blueprint, context_text, pid, router
                 )
-            else:
-                quiz_paper = HeuristicStudyEngine.generate_quiz_from_ir(document_ir, blueprint)
-        else:
-            quiz_paper = HeuristicStudyEngine.generate_quiz_from_ir(document_ir, blueprint)
+            )
+        quiz_paper = generated_papers[0]
+        extra_quiz_papers = generated_papers[1:]
     else:
         quiz_paper = QuizPaper(
-            title=f"{document_ir.filename} · 未启用题库",
+            paper_id="none",
+            deliverable_type="none",
+            title=f"{document_ir.filename} · 未勾选题库试卷",
             mode=d.quiz_mode,
             total_score=0,
             suggested_minutes=0,
-            instructions="当前方案未开启题库生成。",
+            instructions="当前勾选方案未包含在线/可打印练习卷。",
             questions=[],
         )
+        extra_quiz_papers = []
 
     # 4. Mindmap
     mindmap_mermaid = ""
     if d.include_mindmap:
         router.check_cancelled()
         current_stage_state["stage"] = "mindmap"
-        current_stage_state["percent"] = 90
+        current_stage_state["percent"] = 88
         if progress_cb:
-            await progress_cb("mindmap", 90, "正在构建 Mermaid 可视化知识图谱...")
+            await progress_cb("mindmap", 88, "正在构建 Mermaid 可视化 MindMap 知识图谱...")
         mm_sys = (
             "请根据教材章节结构与核心概念，生成一段可直接渲染的 Mermaid `flowchart LR` 知识图谱代码。\n"
             "语法要求：所有节点文本必须用英文双引号包裹，例如 `c1[\"核心概念\"]`，节点文本内不要包含双引号、括号或分号。只输出 Mermaid 代码。"
@@ -525,24 +672,22 @@ async def _run_generate_study_package(
             )
         )
         res_mm, _ = await router.execute_text("mindmap_generation", mm_sys, mm_user)
-        cleaned_mm = _sanitize_mermaid_code(res_mm) if res_mm else ""
-        mindmap_mermaid = cleaned_mm or HeuristicStudyEngine.generate_mindmap_from_ir(
-            document_ir, blueprint
-        )
+        mindmap_mermaid = _sanitize_mermaid_code(res_mm) if res_mm else ""
+        if not mindmap_mermaid:
+            lines = ["flowchart LR", f'  root["{document_ir.filename[:24]}"]']
+            for idx, c in enumerate(selected_chapters[:8], start=1):
+                safe_title = c.title.replace('"', "'")[:24]
+                lines.append(f'  ch{idx}["{safe_title}"]')
+                lines.append(f"  root --> ch{idx}")
+            mindmap_mermaid = "\n".join(lines)
 
-    # 5. Global Quality Verification (Strictly enabled ONLY when non-heuristic engine is used)
+    # 5. Global Quality Verification
     router.check_cancelled()
     quality_audit_report = ""
     audit_sel = router.resolve_quality_audit_provider()
     if audit_sel is None:
-        if not router.is_non_heuristic_active():
-            router.routing_trace["global_quality_audit"] = "未启用 (仅在使用非内置规则引擎时启用)"
-            quality_audit_report = (
-                "当前使用内置智能规则引擎，全局质量验收通道自动跳过（仅在启用 CLI Harness / 云端 API / 本地模型时触发）。"
-            )
-        else:
-            router.routing_trace["global_quality_audit"] = "已手动关闭"
-            quality_audit_report = "全局质量验收已手动关闭。"
+        router.routing_trace["global_quality_audit"] = "已手动关闭"
+        quality_audit_report = "全局质量验收已手动关闭。"
     else:
         current_stage_state["stage"] = "quality_audit"
         current_stage_state["percent"] = 95
@@ -550,76 +695,13 @@ async def _run_generate_study_package(
             await progress_cb(
                 "quality_audit",
                 95,
-                "正在通过非内置引擎执行【全局质量验收】（校验公式、题量契约与解析完整性）...",
+                "正在执行【全局质量验收】（校验公式、区分度、题量契约与解析完整性）...",
             )
-        repairs: List[str] = []
-
-        # 5.1 Normalize LaTeX delimiters across quiz questions & options
-        if d.include_quiz and quiz_paper.questions:
-            norm_qs: List[QuizQuestion] = []
-            for q in quiz_paper.questions:
-                norm_qs.append(
-                    q.model_copy(
-                        update={
-                            "question": normalize_markdown_math(q.question),
-                            "options": [normalize_markdown_math(o) for o in q.options],
-                            "answer": normalize_markdown_math(q.answer),
-                            "explanation": normalize_markdown_math(q.explanation),
-                        }
-                    )
-                )
-            quiz_paper = quiz_paper.model_copy(update={"questions": norm_qs})
-
-            # Verify blueprint question counts; top up missing items deterministically if short
-            target_total_qs = d.mcq_count + d.fill_blank_count + d.short_answer_count
-            if len(quiz_paper.questions) < target_total_qs:
-                fallback_quiz = HeuristicStudyEngine.generate_quiz_from_ir(document_ir, blueprint)
-                need_by_type = {
-                    "mcq": max(0, d.mcq_count - sum(1 for q in quiz_paper.questions if q.type == "mcq")),
-                    "fill_blank": max(
-                        0, d.fill_blank_count - sum(1 for q in quiz_paper.questions if q.type == "fill_blank")
-                    ),
-                    "short_answer": max(
-                        0, d.short_answer_count - sum(1 for q in quiz_paper.questions if q.type == "short_answer")
-                    ),
-                }
-                existing_ids = {q.id for q in quiz_paper.questions}
-                added = 0
-                updated_qs = list(quiz_paper.questions)
-                for fq in fallback_quiz.questions:
-                    if need_by_type.get(fq.type, 0) > 0:
-                        new_id = fq.id
-                        while new_id in existing_ids:
-                            new_id = f"{fq.id}_{len(existing_ids) + 1}"
-                        existing_ids.add(new_id)
-                        updated_qs.append(fq.model_copy(update={"id": new_id}))
-                        need_by_type[fq.type] -= 1
-                        added += 1
-                if added > 0:
-                    quiz_paper = quiz_paper.model_copy(
-                        update={
-                            "questions": updated_qs,
-                            "total_score": sum(q.score for q in updated_qs),
-                        }
-                    )
-                    repairs.append(f"自动补全 {added} 道缺失试题以匹配方案题量契约")
-
-        # 5.2 Ensure self-study guide includes worked examples
-        if d.include_study_guide_notes and "典型例题" not in study_notes_md:
-            fallback_notes = HeuristicStudyEngine.generate_notes_from_ir(document_ir, blueprint)
-            ex_idx = fallback_notes.find("典型例题")
-            if ex_idx != -1:
-                section_start = fallback_notes.rfind("\n##", 0, ex_idx)
-                patch = fallback_notes[section_start if section_start != -1 else ex_idx :]
-                study_notes_md = normalize_markdown_math(f"{study_notes_md.rstrip()}\n\n{patch.strip()}")
-                repairs.append("自动补充结构化典型例题与解析模块")
-
-        # 5.3 Invoke non-heuristic engine for semantic global quality verification
         audit_sys = (
             "你是教学资料总审校与命题测量专家（Global Quality Auditor）。请重点审查以下质量维度，并输出合法 JSON：\n"
-            "1. 题量与总分契约是否对齐，三级认知梯队（基础达标 / 能力提升 / 拓展探究）分布是否合理；\n"
+            "1. 题量与结构是否符合场景定位，三级认知梯队（基础达标 / 能力提升 / 拓展探究）分布是否合理；\n"
             "2. 抽检试题质量：单选题干扰项是否具有真实迷惑性、填空题答案是否唯一客观、解析是否涵盖【考点定位】【详解与推导】【易错点拨】；\n"
-            "3. 讲义例题完整性与 `$...$` / `$$...$$` LaTeX 公式排版合规性。\n"
+            "3. 讲义与速记表中 `$...$` / `$$...$$` LaTeX 公式排版合规性。\n"
             '输出格式：{"passed": true, "score": 96, "summary": "一句简明中文验收结论（包含试题区分度与解析质量评价）", "issues": []}'
         )
         quiz_samples = _format_quiz_samples_for_audit(quiz_paper)
@@ -628,13 +710,10 @@ async def _run_generate_study_package(
             for t in ("基础达标", "能力提升", "拓展探究")
         }
         audit_user = (
-            f"方案名称: {blueprint.blueprint_title} | 预设: {blueprint.preset_name}\n"
-            f"目标题量: 单选 {d.mcq_count} + 填空 {d.fill_blank_count} + 简答 {d.short_answer_count} (目标总分 {d.total_score})\n"
-            f"实际题量: {len(quiz_paper.questions)} 道 | 实际总分: {quiz_paper.total_score} | 梯度分布: {tier_counts}\n"
-            f"讲义含典型例题: {'是' if '典型例题' in study_notes_md else '否'} | "
+            f"方案名称: {blueprint.blueprint_title} | 场景: {blueprint.preset_name}\n"
+            f"勾选交付项: {', '.join(d.selected_items)}\n"
+            f"主试卷题量: {len(quiz_paper.questions)} 道 | 总分: {quiz_paper.total_score} | 梯度分布: {tier_counts} | 附带试卷数: {len(extra_quiz_papers)}\n"
             f"讲义长度: {len(study_notes_md)} 字 | 速记表长度: {len(cheatsheet_md)} 字\n"
-            f"Mermaid 语法前缀: {mindmap_mermaid.splitlines()[0] if mindmap_mermaid else '无'}\n"
-            f"已执行自动修正: {', '.join(repairs) if repairs else '无'}\n"
             f"代表性试题抽检（最多3题）：\n{quiz_samples}\n"
             f"讲义前350字摘要:\n{study_notes_md[:350]}"
         )
@@ -643,12 +722,10 @@ async def _run_generate_study_package(
             audit_score = int(audit_data.get("score") or 95)
             audit_summary = str(audit_data.get("summary") or "格式、公式与题量契约校验通过")
             router.routing_trace["global_quality_audit"] = f"{audit_label} · 验收 {audit_score}分"
-            repair_note = f"；自动修复项：{', '.join(repairs)}" if repairs else ""
-            quality_audit_report = f"[{audit_label}] 全局质量验收通过（{audit_score}/100）：{audit_summary}{repair_note}。"
+            quality_audit_report = f"[{audit_label}] 全局质量验收通过（{audit_score}/100）：{audit_summary}。"
         else:
             router.routing_trace["global_quality_audit"] = f"{audit_label} · 结构契约校验完成"
-            repair_note = f"（已自动补全：{', '.join(repairs)}）" if repairs else "（全部契约项一次通过）"
-            quality_audit_report = f"已完成数学公式规范化、题量契约核验与 Mermaid 语法清洗{repair_note}。"
+            quality_audit_report = "已完成数学公式规范化、多试卷生成核验与 Mermaid 语法清洗。"
 
     router.check_cancelled()
     if progress_cb:
@@ -663,5 +740,6 @@ async def _run_generate_study_package(
         study_notes_markdown=study_notes_md,
         cheatsheet_markdown=cheatsheet_md,
         quiz_paper=quiz_paper,
+        extra_quiz_papers=extra_quiz_papers,
         mindmap_mermaid=mindmap_mermaid,
     )

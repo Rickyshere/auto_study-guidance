@@ -14,7 +14,9 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
-from app.schemas import HarnessConfig, HarnessStatusItem
+import httpx
+
+from app.schemas import FreeAiAppItem, FreeAiAuthConfig, HarnessConfig, HarnessStatusItem
 
 WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 VENV_SCRIPTS = Path(r"D:\auto_study_guidance\backend\.venv\Scripts")
@@ -39,6 +41,7 @@ def detect_installed_harnesses() -> List[HarnessStatusItem]:
         [
             str(VENV_SCRIPTS / "dsh.cmd"),
             str(VENV_SCRIPTS / "dsh.exe"),
+            str(home / "AppData" / "Local" / "Programs" / "DeepSeek Harness" / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd"),
             str(home / ".local" / "bin" / "dsh.exe"),
             str(home / "AppData" / "Roaming" / "npm" / "dsh.cmd"),
         ],
@@ -98,6 +101,251 @@ def detect_installed_harnesses() -> List[HarnessStatusItem]:
             install_command_hint="npm install -g @google/gemini-cli",
         ),
     ]
+
+
+def _query_magpie_models(gateway_url: str = "http://127.0.0.1:3425/v1") -> tuple[bool, List[str]]:
+    url = f"{gateway_url.rstrip('/')}/models"
+    try:
+        with httpx.Client(timeout=1.2) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return False, []
+            payload = resp.json()
+            data = payload.get("data", []) if isinstance(payload, dict) else []
+            models = [str(m.get("id", "")).strip() for m in data if isinstance(m, dict) and m.get("id")]
+            return True, models
+    except Exception:
+        return False, []
+
+
+def _find_first_existing(paths: List[Path]) -> Optional[str]:
+    for p in paths:
+        if p.exists():
+            return str(p)
+    return None
+
+
+def detect_free_ai_apps_and_magpie(gateway_url: str = "http://127.0.0.1:3425/v1") -> Dict[str, Any]:
+    """Detect local free AI desktop apps (Qoder CN, WorkBuddy, Trae CN), Magpie proxy gateway, and DeepSeek Harness."""
+    home = Path.home()
+    local_prog = home / "AppData" / "Local" / "Programs"
+
+    magpie_exe = _find_first_existing([
+        local_prog / "Magpie" / "Magpie.exe",
+        local_prog / "magpie" / "magpie.exe",
+        home / "AppData" / "Local" / "Magpie" / "Magpie.exe",
+    ]) or shutil.which("magpie") or shutil.which("magpie-cli")
+    magpie_running, magpie_models = _query_magpie_models(gateway_url)
+
+    qoder_exe = _find_first_existing([
+        local_prog / "Qoder CN" / "Qoder CN.exe",
+        local_prog / "Qoder" / "Qoder.exe",
+    ])
+    qoder_cfg = _find_first_existing([
+        home / ".qoder-cn" / "settings.json",
+        home / ".qoder" / "settings.json",
+    ])
+    qoder_models = [m for m in magpie_models if m.lower().startswith("qoder")]
+
+    workbuddy_exe = _find_first_existing([
+        local_prog / "WorkBuddy" / "WorkBuddy.exe",
+    ])
+    workbuddy_cfg = _find_first_existing([
+        home / ".workbuddy" / "models.json",
+    ])
+    workbuddy_models = [m for m in magpie_models if "workbuddy" in m.lower()]
+
+    trae_exe = _find_first_existing([
+        local_prog / "Trae CN" / "Trae CN.exe",
+        local_prog / "Trae" / "Trae.exe",
+    ])
+    trae_cfg = _find_first_existing([
+        home / ".trae-cn" / "User" / "settings.json",
+        home / "AppData" / "Roaming" / "Trae CN" / "User" / "settings.json",
+    ])
+    trae_models = [m for m in magpie_models if "trae" in m.lower()]
+
+    dsh_app_exe = _find_first_existing([
+        local_prog / "DeepSeek Harness" / "DeepSeek Harness.exe",
+        local_prog / "DeepSeek Harness" / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd",
+        VENV_SCRIPTS / "dsh.cmd",
+        home / ".local" / "bin" / "dsh.exe",
+    ])
+    dsh_cfg = _find_first_existing([
+        home / ".dsh" / ".env",
+        home / ".dsh" / "profiles" / "web" / "cordis.patch.yml",
+    ])
+
+    apps = [
+        FreeAiAppItem(
+            app_id="qoder_cn",
+            name="Qoder CN",
+            installed=bool(qoder_exe or qoder_cfg or qoder_models),
+            running=bool(qoder_models),
+            executable_path=qoder_exe,
+            config_path=qoder_cfg,
+            proxy_available=bool(qoder_models),
+            available_models=qoder_models,
+            description="免费 AI 编程助手，可通过 Magpie 反代提供 qoder-cn/fast 等高速模型",
+        ),
+        FreeAiAppItem(
+            app_id="workbuddy",
+            name="WorkBuddy",
+            installed=bool(workbuddy_exe or workbuddy_cfg or workbuddy_models),
+            running=bool(workbuddy_models),
+            executable_path=workbuddy_exe,
+            config_path=workbuddy_cfg,
+            proxy_available=bool(workbuddy_models),
+            available_models=workbuddy_models,
+            description="桌面 AI 伙伴，可通过 Magpie 反代提供 DeepSeek V4 / GLM 5.3 等模型",
+        ),
+        FreeAiAppItem(
+            app_id="trae_cn",
+            name="Trae CN",
+            installed=bool(trae_exe or trae_cfg or trae_models),
+            running=bool(trae_models),
+            executable_path=trae_exe,
+            config_path=trae_cfg,
+            proxy_available=bool(trae_models),
+            available_models=trae_models,
+            description="字节 Trae 国内版，若本机已安装并登录同样可接入 Magpie 反代池",
+        ),
+        FreeAiAppItem(
+            app_id="magpie",
+            name="Magpie 反代网关",
+            installed=bool(magpie_exe or magpie_running),
+            running=magpie_running,
+            executable_path=magpie_exe,
+            config_path=None,
+            proxy_available=magpie_running,
+            available_models=magpie_models,
+            description="将本机 Qoder CN / WorkBuddy / Trae CN 转换为本地 OpenAI 兼容网关 (127.0.0.1:3425)",
+        ),
+        FreeAiAppItem(
+            app_id="dsh",
+            name="DeepSeek Harness (dsh)",
+            installed=bool(dsh_app_exe),
+            running=bool(dsh_app_exe and magpie_running),
+            executable_path=dsh_app_exe,
+            config_path=dsh_cfg,
+            proxy_available=bool(dsh_app_exe and magpie_running),
+            available_models=magpie_models[:6],
+            description="DeepSeek Harness CLI 执行引擎，自动对接 Magpie 网关完成流式出题",
+        ),
+    ]
+
+    return {
+        "free_ai_apps": apps,
+        "magpie_available": bool(magpie_exe or magpie_running),
+        "magpie_gateway_running": magpie_running,
+        "magpie_models": magpie_models,
+        "dsh_available": bool(dsh_app_exe),
+    }
+
+
+async def stream_setup_magpie_and_dsh(gateway_url: str = "http://127.0.0.1:3425/v1") -> AsyncIterator[Dict[str, Any]]:
+    """SSE stream: one-click install/start/configure Magpie gateway + DeepSeek Harness + DSH adapter."""
+    home = Path.home()
+    local_prog = home / "AppData" / "Local" / "Programs"
+    yield {"type": "log", "progress": 8, "message": "正在扫描本机已安装的免费 AI 软件 (Qoder CN / WorkBuddy / Trae CN)..."}
+    status_info = detect_free_ai_apps_and_magpie(gateway_url)
+    installed_free = [a.name for a in status_info["free_ai_apps"] if a.app_id in ("qoder_cn", "workbuddy", "trae_cn") and a.installed]
+    if installed_free:
+        yield {"type": "log", "progress": 18, "message": f"检测到本机 AI 软件：{', '.join(installed_free)}"}
+    else:
+        yield {"type": "log", "progress": 18, "message": "暂未在本机检测到 Qoder CN / WorkBuddy / Trae CN，将先配置 Magpie 与 DSH 框架。"}
+
+    magpie_running = bool(status_info["magpie_gateway_running"])
+    magpie_exe = _find_first_existing([
+        local_prog / "Magpie" / "Magpie.exe",
+        local_prog / "magpie" / "magpie.exe",
+        home / "AppData" / "Local" / "Magpie" / "Magpie.exe",
+    ]) or shutil.which("magpie") or shutil.which("magpie-cli")
+
+    if not magpie_running and not magpie_exe:
+        yield {"type": "log", "progress": 26, "message": "未检测到 Magpie，正在访问 https://usemagpie.ai 获取最新版安装包..."}
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                page_resp = await client.get("https://usemagpie.ai")
+                installer_url = None
+                if page_resp.status_code == 200:
+                    import re as _re
+                    matches = _re.findall(r'https://[^\s"\'<>]+?(?:Setup|installer|magpie)[^\s"\'<>]*\.exe', page_resp.text, _re.I)
+                    if not matches:
+                        matches = _re.findall(r'https://github\.com/[^\s"\'<>]+?releases/download/[^\s"\'<>]+?\.exe', page_resp.text, _re.I)
+                    if matches:
+                        installer_url = matches[0]
+                if installer_url:
+                    dl_path = Path(tempfile.gettempdir()) / "MagpieSetup.exe"
+                    yield {"type": "log", "progress": 38, "message": f"正在下载 Magpie 安装包: {installer_url}"}
+                    async with client.stream("GET", installer_url) as dl_stream:
+                        dl_stream.raise_for_status()
+                        with dl_path.open("wb") as fp:
+                            async for chunk in dl_stream.aiter_bytes(chunk_size=65536):
+                                fp.write(chunk)
+                    yield {"type": "log", "progress": 52, "message": "安装包下载完成，正在执行静默安装 / 引导安装..."}
+                    proc = subprocess.Popen([str(dl_path), "/S"], creationflags=WIN_NO_WINDOW)
+                    proc.wait(timeout=180)
+                else:
+                    yield {"type": "log", "progress": 48, "message": "已探测官网，未能自动提取直链，请访问 https://usemagpie.ai 手动下载一次或运行 winget。"}
+        except Exception as exc:
+            yield {"type": "log", "progress": 48, "message": f"自动下载 Magpie 时遇到网络限制 ({str(exc)[:100]})，请检查网络后重试或手动下载 usemagpie.ai。"}
+
+    status_info = detect_free_ai_apps_and_magpie(gateway_url)
+    if not status_info["magpie_gateway_running"]:
+        magpie_cli = shutil.which("magpie-cli") or _find_first_existing([
+            local_prog / "Magpie" / "resources" / "bin" / "magpie-cli.exe",
+            local_prog / "Magpie" / "Magpie.exe",
+        ])
+        if magpie_cli:
+            yield {"type": "log", "progress": 62, "message": f"检测到 Magpie ({magpie_cli})，正在启动本地网关服务..."}
+            try:
+                cmd = [magpie_cli, "serve"] if "magpie-cli" in Path(magpie_cli).name.lower() else [magpie_cli]
+                subprocess.Popen(cmd, creationflags=WIN_NO_WINDOW)
+                for _ in range(16):
+                    await asyncio.sleep(0.5)
+                    ok, _ = _query_magpie_models(gateway_url)
+                    if ok:
+                        break
+            except Exception as exc:
+                yield {"type": "log", "progress": 65, "message": f"尝试拉起 Magpie 网关提示: {exc}"}
+
+    yield {"type": "log", "progress": 72, "message": "正在配置 DeepSeek Harness (dsh) 与 Magpie 环境变量联动..."}
+    # Ensure VENV dsh.cmd + ~/.dsh/.env exist
+    async for ev in stream_manage_cli_harness("dsh", action="install"):
+        pct = 72 + int(ev.get("progress", 0) * 0.18)
+        yield {"type": "log", "progress": min(90, pct), "message": ev.get("message", "")}
+
+    dsh_dir = home / ".dsh"
+    dsh_dir.mkdir(parents=True, exist_ok=True)
+    env_file = dsh_dir / ".env"
+    existing_env = env_file.read_text(encoding="utf-8", errors="ignore") if env_file.exists() else ""
+    env_lines = existing_env.splitlines()
+    has_magpie_url = any(l.strip().startswith("MAGPIE_BASE_URL=") for l in env_lines)
+    has_magpie_key = any(l.strip().startswith("MAGPIE_GATEWAY_KEY=") for l in env_lines)
+    if not has_magpie_url or not has_magpie_key:
+        if not has_magpie_url:
+            env_lines.append(f"MAGPIE_BASE_URL={gateway_url}")
+        if not has_magpie_key:
+            env_lines.append("MAGPIE_GATEWAY_KEY=magpie")
+        env_file.write_text("\n".join(env_lines).strip() + "\n", encoding="utf-8")
+
+    final_info = detect_free_ai_apps_and_magpie(gateway_url)
+    if final_info["magpie_gateway_running"] and final_info["magpie_models"]:
+        msg = f"配置完成！Magpie 本地网关已在线，可用免费反代模型 {len(final_info['magpie_models'])} 个（如 {final_info['magpie_models'][0]}）。"
+    elif final_info["dsh_available"]:
+        msg = "DeepSeek Harness (dsh) 已部署完成！若需使用本机 Qoder/WorkBuddy/Trae 反代，请确保 Magpie 客户端已打开并登录。"
+    else:
+        msg = "配置步骤已执行，请确认 Magpie 客户端与免费 AI 软件已就绪。"
+
+    yield {
+        "type": "done",
+        "progress": 100,
+        "ok": bool(final_info["dsh_available"]),
+        "message": msg,
+        "magpie_running": final_info["magpie_gateway_running"],
+        "models": final_info["magpie_models"],
+    }
 
 
 async def _stream_harness_cmd(
@@ -931,6 +1179,7 @@ async def run_cli_harness(
     harness_config: HarnessConfig,
     cancel_token: Optional[HarnessCancelToken] = None,
     status_cb: Optional[Callable[[str], Any]] = None,
+    free_ai_auth: Optional[FreeAiAuthConfig] = None,
 ) -> str:
     """Invoke a local CLI Agent Harness with stream-json progress, cancellation, strict exit validation, and auto-retry."""
     if cancel_token:
@@ -948,6 +1197,11 @@ async def run_cli_harness(
                 break
 
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if preferred == "dsh" and free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
+        env["DSH_BASE_URL"] = (free_ai_auth.magpie_gateway_url or "http://127.0.0.1:3425/v1").strip()
+        env["DSH_API_KEY"] = (free_ai_auth.magpie_gateway_key or "magpie").strip()
+        if free_ai_auth.selected_free_model.strip():
+            env["DSH_MODEL"] = free_ai_auth.selected_free_model.strip()
     max_retries = max(0, int(getattr(harness_config, "max_retries", 2)))
     total_attempts = 1 + max_retries
 

@@ -6,7 +6,8 @@ import argparse
 import json
 import os
 import sys
-from typing import Iterator
+from pathlib import Path
+from typing import Dict, Iterator
 
 import httpx
 
@@ -16,25 +17,66 @@ def _emit_ndjson(payload: dict) -> None:
     sys.stdout.flush()
 
 
+def _read_dsh_env_file() -> Dict[str, str]:
+    env_map: Dict[str, str] = {}
+    env_path = Path.home() / ".dsh" / ".env"
+    if not env_path.exists():
+        return env_map
+    try:
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            k, v = stripped.split("=", 1)
+            env_map[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return env_map
+
+
+def _is_magpie_alive(base_url: str) -> bool:
+    check_url = f"{base_url.rstrip('/')}/models"
+    try:
+        with httpx.Client(timeout=0.8) as client:
+            resp = client.get(check_url)
+            return resp.status_code < 500
+    except Exception:
+        return False
+
+
 def _resolve_config() -> tuple[str, str, str]:
-    api_key = (
+    dsh_env = _read_dsh_env_file()
+    explicit_key = (
         os.environ.get("DSH_API_KEY")
         or os.environ.get("DEEPSEEK_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
         or ""
     ).strip()
-    base_url = (
+    explicit_url = (
         os.environ.get("DSH_BASE_URL")
         or os.environ.get("DEEPSEEK_BASE_URL")
         or os.environ.get("OPENAI_BASE_URL")
-        or "https://api.deepseek.com"
+        or ""
     ).strip().rstrip("/")
-    model = (
+    explicit_model = (
         os.environ.get("DSH_MODEL")
         or os.environ.get("DEEPSEEK_MODEL")
         or os.environ.get("OPENAI_MODEL")
-        or "deepseek-chat"
+        or ""
     ).strip()
+
+    magpie_url = (dsh_env.get("MAGPIE_BASE_URL") or "http://127.0.0.1:3425/v1").strip().rstrip("/")
+    magpie_key = (dsh_env.get("MAGPIE_GATEWAY_KEY") or "magpie").strip()
+
+    if not explicit_url and not explicit_key and _is_magpie_alive(magpie_url):
+        return magpie_key, magpie_url, explicit_model or "qoder-cn/fast"
+
+    if explicit_url and "127.0.0.1:3425" in explicit_url:
+        return explicit_key or magpie_key, explicit_url, explicit_model or "qoder-cn/fast"
+
+    api_key = explicit_key or dsh_env.get("DEEPSEEK_API_KEY", "") or dsh_env.get("OPENAI_API_KEY", "")
+    base_url = explicit_url or "https://api.deepseek.com"
+    model = explicit_model or ("qoder-cn/fast" if "127.0.0.1:3425" in base_url else "deepseek-chat")
     return api_key, base_url, model
 
 

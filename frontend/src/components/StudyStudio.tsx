@@ -1,33 +1,34 @@
-import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import {
+  ArrowLeft,
+  ArrowRight,
+  BookmarkCheck,
+  BookmarkPlus,
   BookOpen,
-  Zap,
-  ClipboardCheck,
-  Network,
-  Download,
-  Printer,
   CheckCircle2,
-  XCircle,
+  ClipboardCheck,
+  Columns2,
+  Copy,
+  Download,
   Eye,
-  Play,
+  FileText,
+  Layers,
+  Network,
+  Printer,
   RotateCcw,
+  Shuffle,
+  Sparkles,
+  X,
+  XCircle,
+  Zap,
   ZoomIn,
   ZoomOut,
-  Copy,
-  Layers,
-  FileText,
-  Columns2,
-  X,
 } from 'lucide-react';
 import { api } from '../api';
-import { DocumentIR, QuizQuestion, StudyPackage } from '../types';
-import { normalizeMathMarkdown } from '../utils/mathMarkdown';
+import { DocumentIR, QuizPaper, QuizQuestion, ScenarioType, StudyPackage } from '../types';
 import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
+import { MathMarkdown } from './MathMarkdown';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -37,28 +38,40 @@ mermaid.initialize({
 
 export type StudioTabKey = 'notes' | 'quiz' | 'cheatsheet' | 'mindmap' | 'blueprint_trace';
 
-export interface Props {
+interface Props {
   studyPackage: StudyPackage;
   documentIr?: DocumentIR | null;
   activeTab: StudioTabKey;
-  onChangeTab?: (tab: StudioTabKey) => void;
-  darkMode?: boolean;
+  onChangeTab: (tab: StudioTabKey) => void;
+  onUpdatePackage?: (updated: StudyPackage) => void;
+  onRequestAuth?: () => void;
+  darkMode: boolean;
+}
+
+interface FlashcardItem {
+  id: string;
+  front: string;
+  answer: string;
+  explanation: string;
+  badge: string;
+  source: string;
 }
 
 function sanitizeMermaidClient(raw: string): string {
-  const cleaned = (raw || '')
+  if (!raw) return 'flowchart LR\n  A["知识核心"] --> B["内容空"]';
+  let text = raw
+    .trim()
     .replace(/^```(?:mermaid)?\s*/i, '')
-    .replace(/```\s*$/i, '')
+    .replace(/```\s*$/, '')
     .trim();
-  return cleaned
-    .split('\n')
-    .map((line) =>
-      line.replace(/\b([A-Za-z0-9_]+)\[(?!")([^\[\]"\n]+)\]/g, (_m, id, label) => {
-        const safe = String(label).replace(/"/g, "'").trim();
-        return `${id}["${safe}"]`;
-      })
-    )
-    .join('\n');
+  text = text.replace(/\[([^\]"'\n]+)\]/g, (_m, inner) => {
+    const clean = String(inner).replace(/"/g, "'").trim();
+    return `["${clean}"]`;
+  });
+  if (!/^(flowchart|graph|mindmap|sequenceDiagram)/m.test(text)) {
+    text = `flowchart LR\n${text}`;
+  }
+  return text;
 }
 
 function downloadText(filename: string, content: string, mime = 'text/markdown;charset=utf-8') {
@@ -67,8 +80,122 @@ function downloadText(filename: string, content: string, mime = 'text/markdown;c
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
+}
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function extractOptionLetter(opt: string, index: number): string {
+  const match = opt.trim().match(/^([A-D])[.、:：\s]/i);
+  if (match) return match[1].toUpperCase();
+  return String.fromCharCode(65 + index);
+}
+
+function isMcqOptionCorrect(opt: string, index: number, answer: string): boolean {
+  const ans = (answer || '').trim().toUpperCase();
+  const letter = extractOptionLetter(opt, index);
+  if (!ans) return false;
+  if (ans === letter) return true;
+  if (ans.startsWith(`${letter}.`) || ans.startsWith(`${letter}、`) || ans.startsWith(`${letter} `)) {
+    return true;
+  }
+  const cleanOpt = opt.trim().replace(/^[A-D][.、:：\s]+/i, '').trim().toUpperCase();
+  return cleanOpt === ans;
+}
+
+function normalizeBlankAnswer(val: string): string {
+  return (val || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[，。；：、“”‘’"'`]/g, '');
+}
+
+function getScenarioMeta(scenario?: ScenarioType): {
+  tag: string;
+  notesTitle: string;
+  cheatsheetTitle: string;
+  quizSectionTitle: string;
+} {
+  if (scenario === 'A_beginner') {
+    return {
+      tag: 'A · 入门 / 零基础学习',
+      notesTitle: '详细自学案（附带例题）',
+      cheatsheetTitle: '考前速记（核心知识点与公式）',
+      quizSectionTitle: '同步练习与单元检测',
+    };
+  }
+  if (scenario === 'C_sprint') {
+    return {
+      tag: 'C · 考前冲刺（抱佛脚）',
+      notesTitle: '重要知识提取',
+      cheatsheetTitle: '考前速记浓缩卡',
+      quizSectionTitle: '佛教卷（高频考点冲刺突击）',
+    };
+  }
+  return {
+    tag: 'B · 巩固提高',
+    notesTitle: '结构化深化笔记',
+    cheatsheetTitle: '核心公式与方法速记',
+    quizSectionTitle: '分章节巩固与综合检测',
+  };
+}
+
+function buildFlashcardDeck(paper: QuizPaper | undefined, notesMarkdown: string): FlashcardItem[] {
+  const cards: FlashcardItem[] = [];
+  if (paper?.questions) {
+    for (const q of paper.questions) {
+      const optPreview =
+        q.type === 'mcq' && q.options.length > 0
+          ? `\n\n${q.options.map((o) => `- ${o}`).join('\n')}`
+          : '';
+      cards.push({
+        id: `fc_${q.id}`,
+        front: `${q.question}${optPreview}`,
+        answer: q.answer || '（见下方解析）',
+        explanation: q.explanation || '结合教材原文重点回顾该考点推导过程。',
+        badge:
+          q.type === 'mcq'
+            ? '选择记忆卡'
+            : q.type === 'fill_blank'
+            ? '概念填空卡'
+            : '简答逻辑卡',
+        source: `${q.source_chapter || '核心章节'} ${q.source_page || ''}`.trim(),
+      });
+    }
+  }
+
+  // Supplement from markdown headings if question count is small
+  if (cards.length < 3 && notesMarkdown) {
+    const sections = notesMarkdown.split(/\n(?=##+ )/).slice(0, 6);
+    sections.forEach((sec, idx) => {
+      const lines = sec.trim().split('\n');
+      const heading = (lines[0] || '').replace(/^#+\s*/, '').trim();
+      const body = lines.slice(1).join('\n').trim();
+      if (heading && body) {
+        cards.push({
+          id: `fc_note_${idx}`,
+          front: `**核心模块梳理：** ${heading}`,
+          answer: heading,
+          explanation: body.slice(0, 520) + (body.length > 520 ? '\n...' : ''),
+          badge: '笔记精要卡',
+          source: '自学知识讲义',
+        });
+      }
+    });
+  }
+
+  return cards;
 }
 
 export const StudyStudio: React.FC<Props> = ({
@@ -76,60 +203,136 @@ export const StudyStudio: React.FC<Props> = ({
   documentIr,
   activeTab,
   onChangeTab,
-  darkMode = false,
+  onUpdatePackage,
+  onRequestAuth,
+  darkMode,
 }) => {
-  const [quizStudyMode, setQuizStudyMode] = useState<'exam' | 'review'>('exam');
-  const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
-  const [submitted, setSubmitted] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const scenarioMeta = useMemo(
+    () => getScenarioMeta(studyPackage.blueprint_used.scenario_type),
+    [studyPackage.blueprint_used.scenario_type]
+  );
+
+  // Combine main paper and extra papers for Scenario A / B multi-paper support
+  const allPapers: QuizPaper[] = useMemo(() => {
+    const raw = [studyPackage.quiz_paper, ...(studyPackage.extra_quiz_papers || [])];
+    const unique: QuizPaper[] = [];
+    const seen = new Set<string>();
+    for (const p of raw) {
+      if (!p) continue;
+      if (seen.has(p.paper_id)) continue;
+      seen.add(p.paper_id);
+      if (p.questions.length > 0 || unique.length === 0) {
+        unique.push(p);
+      }
+    }
+    return unique;
+  }, [studyPackage.quiz_paper, studyPackage.extra_quiz_papers]);
+
+  const [selectedPaperId, setSelectedPaperId] = useState<string>(
+    studyPackage.quiz_paper?.paper_id || 'default'
+  );
+
+  const activePaper: QuizPaper = useMemo(() => {
+    return (
+      allPapers.find((p) => p.paper_id === selectedPaperId) ||
+      allPapers[0] ||
+      studyPackage.quiz_paper
+    );
+  }, [allPapers, selectedPaperId, studyPackage.quiz_paper]);
+
+  // Quiz state scoped by paper_id -> question_id
+  const [practiceMode, setPracticeMode] = useState<'cards' | 'flashcards'>('cards');
+  const [answersByPaper, setAnswersByPaper] = useState<Record<string, Record<string, string>>>({});
+  const [checkedBlankByPaper, setCheckedBlankByPaper] = useState<
+    Record<string, Record<string, boolean>>
+  >({});
+  const [openDrawerIds, setOpenDrawerIds] = useState<Record<string, boolean>>({});
+  const [wrongBookIds, setWrongBookIds] = useState<Record<string, boolean>>({});
+  const [wrongBookFilterOnly, setWrongBookFilterOnly] = useState<boolean>(false);
+  const [currentCardIdx, setCurrentCardIdx] = useState<number>(0);
+  const [shakeQuestionId, setShakeQuestionId] = useState<string | null>(null);
+  const [generatingVariantId, setGeneratingVariantId] = useState<string | null>(null);
+  const [variantError, setVariantError] = useState<string | null>(null);
+
+  // Flashcards state + 3D single-face Chromium-safe flip animation
+  const [flashDeck, setFlashDeck] = useState<FlashcardItem[]>([]);
+  const [flashIdx, setFlashIdx] = useState<number>(0);
+  const [isFlashFlipped, setIsFlashFlipped] = useState<boolean>(false);
+  const [visualFlipDeg, setVisualFlipDeg] = useState<number>(0);
+  const [masteredFlashIds, setMasteredFlashIds] = useState<Record<string, boolean>>({});
+  const [reviewFlashIds, setReviewFlashIds] = useState<Record<string, boolean>>({});
+  const [flashRoundFinished, setFlashRoundFinished] = useState<boolean>(false);
+  const flipRafRef = useRef<number | null>(null);
+
+  // PDF / Print / Mermaid states
   const [exportingPdfKey, setExportingPdfKey] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [previewSpec, setPreviewSpec] = useState<{
     docType: 'quiz' | 'study_guide' | 'cheatsheet';
     paperSize: 'a4' | 'a3';
     includeAnswers: boolean;
   } | null>(null);
 
-  const handleExportPdf = async (
-    docType: 'quiz' | 'study_guide' | 'cheatsheet',
-    paperSize: 'a4' | 'a3',
-    includeAnswers = true
-  ) => {
-    const key = `${docType}-${paperSize}`;
-    setExportingPdfKey(key);
-    setPdfError(null);
-    try {
-      await api.exportPdf(studyPackage.project_id, {
-        doc_type: docType,
-        paper_size: paperSize,
-        include_answers: includeAnswers,
-      });
-    } catch (e: any) {
-      setPdfError(e?.message || 'PDF 导出失败');
-    } finally {
-      setExportingPdfKey(null);
-    }
-  };
-
-  // Mermaid rendering state
   const mermaidRef = useRef<HTMLDivElement | null>(null);
   const [mermaidSvg, setMermaidSvg] = useState<string>('');
   const [mermaidError, setMermaidError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState<number>(1);
 
-  // Reset quiz state when a new package arrives
+  // Reset per package generation
   useEffect(() => {
-    setUserAnswers({});
-    setSubmitted(false);
-    setElapsedSeconds(0);
-  }, [studyPackage.generated_at, studyPackage.blueprint_used.preset_id]);
+    setSelectedPaperId(studyPackage.quiz_paper?.paper_id || 'default');
+    setAnswersByPaper({});
+    setCheckedBlankByPaper({});
+    setOpenDrawerIds({});
+    setWrongBookIds({});
+    setWrongBookFilterOnly(false);
+    setCurrentCardIdx(0);
+    setVariantError(null);
+  }, [studyPackage.generated_at, studyPackage.project_id]);
 
-  // Quiz timer
+  // Rebuild flashcard deck when activePaper changes
+  const baseFlashDeck = useMemo(
+    () => buildFlashcardDeck(activePaper, studyPackage.study_notes_markdown),
+    [activePaper, studyPackage.study_notes_markdown]
+  );
+
   useEffect(() => {
-    if (activeTab !== 'quiz' || quizStudyMode !== 'exam' || submitted) return;
-    const timer = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
-  }, [activeTab, quizStudyMode, submitted]);
+    setFlashDeck(baseFlashDeck);
+    setFlashIdx(0);
+    setIsFlashFlipped(false);
+    setVisualFlipDeg(0);
+    setMasteredFlashIds({});
+    setReviewFlashIds({});
+    setFlashRoundFinished(false);
+  }, [baseFlashDeck]);
+
+  // Smooth RAF-driven angle animation for 3D single-face flip (0 <-> 180)
+  useEffect(() => {
+    if (flipRafRef.current) cancelAnimationFrame(flipRafRef.current);
+    const target = isFlashFlipped ? 180 : 0;
+    const start = visualFlipDeg;
+    if (Math.abs(target - start) < 0.5) {
+      setVisualFlipDeg(target);
+      return;
+    }
+    const startTime = performance.now();
+    const duration = 340;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      // ease-out cubic mimicking spring-card curve
+      const eased = 1 - Math.pow(1 - t, 3);
+      setVisualFlipDeg(start + (target - start) * eased);
+      if (t < 1) {
+        flipRafRef.current = requestAnimationFrame(step);
+      }
+    };
+    flipRafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (flipRafRef.current) cancelAnimationFrame(flipRafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFlashFlipped]);
 
   // Render Mermaid diagram
   useEffect(() => {
@@ -159,466 +362,340 @@ export const StudyStudio: React.FC<Props> = ({
     };
   }, [activeTab, studyPackage.mindmap_mermaid, darkMode]);
 
-  const quiz = studyPackage.quiz_paper;
-  const formatTime = (sec: number) =>
-    `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+  const currentPaperAnswers = answersByPaper[activePaper.paper_id] || {};
+  const currentPaperChecked = checkedBlankByPaper[activePaper.paper_id] || {};
 
-  const evaluateQuestion = (q: QuizQuestion): boolean | null => {
-    const ans = (userAnswers[q.id] || '').trim();
-    if (!ans) return false;
-    if (q.type === 'mcq') {
-      return ans.toUpperCase().startsWith(q.answer.trim().toUpperCase().charAt(0));
+  const visibleQuestions: QuizQuestion[] = useMemo(() => {
+    const qs = activePaper?.questions || [];
+    if (!wrongBookFilterOnly) return qs;
+    return qs.filter((q) => Boolean(wrongBookIds[q.id]));
+  }, [activePaper?.questions, wrongBookFilterOnly, wrongBookIds]);
+
+  useEffect(() => {
+    if (currentCardIdx >= visibleQuestions.length && visibleQuestions.length > 0) {
+      setCurrentCardIdx(visibleQuestions.length - 1);
+    } else if (visibleQuestions.length === 0 && currentCardIdx !== 0) {
+      setCurrentCardIdx(0);
     }
+  }, [visibleQuestions.length, currentCardIdx]);
+
+  const currentQuestion = visibleQuestions[currentCardIdx];
+
+  const handleSelectMcqOption = (q: QuizQuestion, opt: string, optIdx: number) => {
+    const letter = extractOptionLetter(opt, optIdx);
+    setAnswersByPaper((prev) => ({
+      ...prev,
+      [activePaper.paper_id]: {
+        ...(prev[activePaper.paper_id] || {}),
+        [q.id]: letter,
+      },
+    }));
+    const correct = isMcqOptionCorrect(opt, optIdx, q.answer);
+    if (!correct) {
+      setShakeQuestionId(q.id);
+      setTimeout(() => setShakeQuestionId((id) => (id === q.id ? null : id)), 420);
+      setOpenDrawerIds((prev) => ({ ...prev, [q.id]: true }));
+      setWrongBookIds((prev) => ({ ...prev, [q.id]: true }));
+    }
+  };
+
+  const handleSubmitNonMcq = (q: QuizQuestion) => {
+    setCheckedBlankByPaper((prev) => ({
+      ...prev,
+      [activePaper.paper_id]: {
+        ...(prev[activePaper.paper_id] || {}),
+        [q.id]: true,
+      },
+    }));
+    setOpenDrawerIds((prev) => ({ ...prev, [q.id]: true }));
     if (q.type === 'fill_blank') {
-      return (
-        ans.toLowerCase() === q.answer.trim().toLowerCase() ||
-        q.answer.toLowerCase().includes(ans.toLowerCase())
+      const userAns = normalizeBlankAnswer(currentPaperAnswers[q.id] || '');
+      const stdAns = normalizeBlankAnswer(q.answer);
+      if (userAns && stdAns && userAns !== stdAns) {
+        setWrongBookIds((prev) => ({ ...prev, [q.id]: true }));
+      }
+    }
+  };
+
+  const toggleWrongBook = (qId: string) => {
+    setWrongBookIds((prev) => ({
+      ...prev,
+      [qId]: !prev[qId],
+    }));
+  };
+
+  const handleGenerateVariant = async (q: QuizQuestion) => {
+    setGeneratingVariantId(q.id);
+    setVariantError(null);
+    try {
+      const selectedChapterIds = studyPackage.blueprint_used?.selected_chapter_ids || [];
+      const res = await api.generateVariantQuestion(
+        studyPackage.project_id,
+        q,
+        selectedChapterIds
+      );
+      const newQ = res.question;
+      if (onUpdatePackage) {
+        const injectIntoPaper = (paper: QuizPaper): QuizPaper => {
+          if (paper.paper_id !== activePaper.paper_id) return paper;
+          const idx = paper.questions.findIndex((item) => item.id === q.id);
+          const nextQuestions = [...paper.questions];
+          nextQuestions.splice(idx >= 0 ? idx + 1 : nextQuestions.length, 0, newQ);
+          return {
+            ...paper,
+            total_score: paper.total_score + (newQ.score || 0),
+            questions: nextQuestions,
+          };
+        };
+
+        const updatedPkg: StudyPackage = {
+          ...studyPackage,
+          quiz_paper: injectIntoPaper(studyPackage.quiz_paper),
+          extra_quiz_papers: (studyPackage.extra_quiz_papers || []).map(injectIntoPaper),
+        };
+        onUpdatePackage(updatedPkg);
+      }
+      setWrongBookFilterOnly(false);
+      setCurrentCardIdx((prev) => prev + 1);
+    } catch (e: any) {
+      const msg = e?.message || '变式题生成失败';
+      setVariantError(msg);
+      if (
+        msg.includes('AUTH_REQUIRED') ||
+        msg.includes('未授权') ||
+        msg.includes('CLOUD_NOT_CONFIGURED')
+      ) {
+        onRequestAuth?.();
+      }
+    } finally {
+      setGeneratingVariantId(null);
+    }
+  };
+
+  const advanceFlashcard = useCallback(
+    (status: 'mastered' | 'review') => {
+      if (flashRoundFinished || flashDeck.length === 0) return;
+      const cur = flashDeck[flashIdx];
+      if (!cur) return;
+
+      if (status === 'mastered') {
+        setMasteredFlashIds((prev) => ({ ...prev, [cur.id]: true }));
+        setReviewFlashIds((prev) => {
+          const next = { ...prev };
+          delete next[cur.id];
+          return next;
+        });
+      } else {
+        setReviewFlashIds((prev) => ({ ...prev, [cur.id]: true }));
+        setMasteredFlashIds((prev) => {
+          const next = { ...prev };
+          delete next[cur.id];
+          return next;
+        });
+      }
+
+      setIsFlashFlipped(false);
+      setVisualFlipDeg(0);
+      if (flashIdx + 1 >= flashDeck.length) {
+        setFlashRoundFinished(true);
+      } else {
+        setFlashIdx((i) => i + 1);
+      }
+    },
+    [flashDeck, flashIdx, flashRoundFinished]
+  );
+
+  const handleReviewPendingFlashcards = () => {
+    const needReview = baseFlashDeck.filter((c) => reviewFlashIds[c.id]);
+    const nextDeck = needReview.length > 0 ? needReview : flashDeck.filter((c) => reviewFlashIds[c.id]);
+    if (nextDeck.length === 0) return;
+    setFlashDeck(nextDeck);
+    setFlashIdx(0);
+    setIsFlashFlipped(false);
+    setVisualFlipDeg(0);
+    setFlashRoundFinished(false);
+  };
+
+  const handleShuffleRestartFlashcards = () => {
+    setFlashDeck(shuffleArray(baseFlashDeck));
+    setFlashIdx(0);
+    setIsFlashFlipped(false);
+    setVisualFlipDeg(0);
+    setMasteredFlashIds({});
+    setReviewFlashIds({});
+    setFlashRoundFinished(false);
+  };
+
+  // Global keyboard shortcuts when Quiz / Flashcard tab is open
+  useEffect(() => {
+    if (activeTab !== 'quiz' || previewSpec) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if (practiceMode === 'cards') {
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          setCurrentCardIdx((i) => Math.max(0, i - 1));
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          setCurrentCardIdx((i) => Math.min(Math.max(0, visibleQuestions.length - 1), i + 1));
+        }
+      } else if (practiceMode === 'flashcards' && !flashRoundFinished) {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          setIsFlashFlipped((f) => !f);
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          advanceFlashcard('review');
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          advanceFlashcard('mastered');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    activeTab,
+    practiceMode,
+    previewSpec,
+    visibleQuestions.length,
+    flashRoundFinished,
+    advanceFlashcard,
+  ]);
+
+  const handleExportPdf = async (
+    docType: 'quiz' | 'study_guide' | 'cheatsheet',
+    paperSize: 'a4' | 'a3',
+    includeAnswers = true,
+    overridePaperId?: string
+  ) => {
+    const paperId = docType === 'quiz' ? overridePaperId || activePaper.paper_id : undefined;
+    const key = `${docType}-${paperSize}-${paperId || 'main'}`;
+    setExportingPdfKey(key);
+    setPdfError(null);
+    try {
+      await api.exportPdf(studyPackage.project_id, {
+        doc_type: docType,
+        paper_size: paperSize,
+        include_answers: includeAnswers,
+        paper_id: paperId,
+      });
+    } catch (e: any) {
+      setPdfError(e?.message || 'PDF 导出失败');
+    } finally {
+      setExportingPdfKey(null);
+    }
+  };
+
+  const handleCopyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1800);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const handleExportMindmapSvg = () => {
+    if (mermaidSvg) {
+      downloadText(
+        `${studyPackage.blueprint_used.blueprint_title || 'mindmap'}.svg`,
+        mermaidSvg,
+        'image/svg+xml;charset=utf-8'
+      );
+      return;
+    }
+    const svgEl = mermaidRef.current?.querySelector('svg');
+    if (svgEl) {
+      const serializer = new XMLSerializer();
+      downloadText(
+        `${studyPackage.blueprint_used.blueprint_title || 'mindmap'}.svg`,
+        serializer.serializeToString(svgEl),
+        'image/svg+xml;charset=utf-8'
       );
     }
-    return null;
   };
 
-  const objectiveQs = quiz.questions.filter((q) => q.type !== 'short_answer');
-  const objectiveScore = objectiveQs.reduce(
-    (sum, q) => sum + (evaluateQuestion(q) ? q.score : 0),
-    0
-  );
-  const objectiveMax = objectiveQs.reduce((sum, q) => sum + q.score, 0);
+  // Statistics for progress bar & wrongbook count
+  const answeredCount = useMemo(() => {
+    const qs = activePaper?.questions || [];
+    return qs.filter((q) => {
+      const ans = currentPaperAnswers[q.id];
+      if (q.type === 'mcq') return Boolean(ans);
+      return Boolean(currentPaperChecked[q.id] || (ans && ans.trim().length > 0));
+    }).length;
+  }, [activePaper?.questions, currentPaperAnswers, currentPaperChecked]);
 
-  const exportQuizMarkdown = (withAnswers: boolean) => {
-    const lines = [`# ${quiz.title}`, `> ${quiz.instructions}`, ''];
-    quiz.questions.forEach((q, idx) => {
-      lines.push(`### ${idx + 1}. [${q.tier} · ${q.score}分] ${q.question}`);
-      if (q.options.length > 0) {
-        q.options.forEach((o) => lines.push(`- ${o}`));
-      }
-      if (withAnswers) {
-        lines.push(`- **参考答案**：${q.answer}`);
-        lines.push(`- **解析**：${q.explanation} *(${q.source_chapter} ${q.source_page})*`);
-      }
-      lines.push('');
-    });
-    downloadText(
-      `${quiz.title}_${withAnswers ? '教师解析版' : '学生空白卷'}.md`,
-      lines.join('\n')
-    );
-  };
+  const wrongBookCount = useMemo(() => {
+    const qs = activePaper?.questions || [];
+    return qs.filter((q) => Boolean(wrongBookIds[q.id])).length;
+  }, [activePaper?.questions, wrongBookIds]);
 
-  const selectedChapters =
-    documentIr?.chapters.filter((ch) =>
-      studyPackage.blueprint_used.selected_chapter_ids.includes(ch.chapter_id)
-    ) || [];
+  const progressPercent =
+    activePaper?.questions?.length > 0
+      ? Math.round((answeredCount / activePaper.questions.length) * 100)
+      : 0;
 
-  const stage2HasNotes = Boolean(studyPackage.study_notes_markdown);
-  const stage2HasCheatsheet = Boolean(studyPackage.cheatsheet_markdown);
-  const stage2HasQuiz = quiz.questions.length > 0;
-  const stage2HasMindmap = Boolean(studyPackage.mindmap_mermaid);
+  // Derived counters for flashcards end-of-round settlement
+  const masteredCount = Object.keys(masteredFlashIds).length;
+  const reviewCount = Object.keys(reviewFlashIds).length;
+
+  const hasNotes = Boolean(studyPackage.study_notes_markdown?.trim());
+  const hasCheatsheet = Boolean(studyPackage.cheatsheet_markdown?.trim());
+  const hasQuiz = (activePaper?.questions?.length || 0) > 0;
+  const hasMindmap = Boolean(studyPackage.mindmap_mermaid?.trim());
+
+  const showFrontSide = visualFlipDeg <= 90;
+  const uprightFlipAngle = visualFlipDeg > 90 ? visualFlipDeg - 180 : visualFlipDeg;
 
   return (
-    <div style={{ maxWidth: '1080px', margin: '0 auto' }}>
-      {/* Document Sheet Header */}
-      <div
-        className="no-print"
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          gap: '12px',
-          paddingBottom: '16px',
-          borderBottom: '1px solid rgba(60, 60, 67, 0.12)',
-          marginBottom: '20px',
-        }}
-      >
-        <div>
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              borderRadius: '999px',
-              backgroundColor: 'rgba(52, 199, 89, 0.12)',
-              color: '#248A3D',
-              padding: '3px 10px',
-              fontSize: '11px',
-              fontWeight: 700,
-              marginBottom: '6px',
-            }}
-          >
-            阶段 2 · 已生成学习资料包 · {studyPackage.blueprint_used.preset_name}
-          </div>
-          <h2
-            className="mac-sp-display"
-            style={{
-              fontSize: '24px',
-              fontWeight: 700,
-              color: '#1C1C1E',
-              lineHeight: 1.25,
-            }}
-          >
-            {studyPackage.blueprint_used.blueprint_title}
-          </h2>
-          <p
-            style={{
-              marginTop: '4px',
-              fontSize: '12.5px',
-              color: '#636366',
-              lineHeight: 1.5,
-            }}
-          >
-            {studyPackage.blueprint_used.parsed_intent_summary}
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-          {activeTab === 'quiz' && stage2HasQuiz && (
-            <>
-              <SpringButton
-                springLabel="导出A4试卷"
-                disabled={Boolean(exportingPdfKey)}
-                onClick={() => handleExportPdf('quiz', 'a4', true)}
-                maxShift={6}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  borderRadius: '999px',
-                  border: 'none',
-                  backgroundColor: '#007AFF',
-                  color: '#FFFFFF',
-                  padding: '7px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: exportingPdfKey ? 'wait' : 'pointer',
-                }}
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>{exportingPdfKey === 'quiz-a4' ? '生成中...' : '导出 A4 试卷 PDF (附答案)'}</span>
-              </SpringButton>
-              <SpringButton
-                springLabel="导出A3试卷"
-                disabled={Boolean(exportingPdfKey)}
-                onClick={() => handleExportPdf('quiz', 'a3', true)}
-                maxShift={6}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  borderRadius: '999px',
-                  border: '1px solid rgba(0, 122, 255, 0.35)',
-                  backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                  color: '#007AFF',
-                  padding: '7px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: exportingPdfKey ? 'wait' : 'pointer',
-                }}
-              >
-                <Columns2 className="w-3.5 h-3.5" />
-                <span>{exportingPdfKey === 'quiz-a3' ? '生成中...' : '导出 A3 双栏试卷 PDF (附答案)'}</span>
-              </SpringButton>
-            </>
-          )}
-          {activeTab === 'notes' && stage2HasNotes && (
-            <SpringButton
-              springLabel="导出自学案PDF"
-              disabled={Boolean(exportingPdfKey)}
-              onClick={() => handleExportPdf('study_guide', 'a4', true)}
-              maxShift={6}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                borderRadius: '999px',
-                border: 'none',
-                backgroundColor: '#007AFF',
-                color: '#FFFFFF',
-                padding: '7px 14px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: exportingPdfKey ? 'wait' : 'pointer',
-              }}
-            >
-              <FileText className="w-3.5 h-3.5" />
-              <span>
-                {exportingPdfKey === 'study_guide-a4'
-                  ? '排版生成中...'
-                  : '导出自学案讲义 PDF (含例题解析)'}
-              </span>
-            </SpringButton>
-          )}
-          <SpringButton
-            springLabel="印刷预览"
-            onClick={() =>
-              setPreviewSpec({
-                docType:
-                  activeTab === 'quiz'
-                    ? 'quiz'
-                    : activeTab === 'cheatsheet'
-                    ? 'cheatsheet'
-                    : 'study_guide',
-                paperSize: 'a4',
-                includeAnswers: true,
-              })
-            }
-            maxShift={6}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              borderRadius: '999px',
-              border: '1px solid rgba(60, 60, 67, 0.14)',
-              backgroundColor: '#F9F9FB',
-              color: '#1C1C1E',
-              padding: '7px 14px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>印刷版式预览</span>
-          </SpringButton>
-        </div>
-      </div>
-
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {pdfError && (
         <div
           className="no-print"
           style={{
-            marginBottom: '12px',
             borderRadius: '10px',
-            backgroundColor: 'rgba(255, 59, 48, 0.08)',
-            border: '1px solid rgba(255, 59, 48, 0.25)',
-            color: '#C62828',
-            padding: '8px 12px',
-            fontSize: '12px',
+            border: '1px solid rgba(217, 119, 6, 0.35)',
+            backgroundColor: darkMode ? '#3B2E17' : '#FEF3C7',
+            color: darkMode ? '#FBBF24' : '#92400E',
+            padding: '10px 14px',
+            fontSize: '13px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}
         >
-          <span>PDF 导出异常：{pdfError}</span>
+          <span>{pdfError}</span>
           <button
             onClick={() => setPdfError(null)}
-            style={{ fontSize: '11.5px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', color: '#C62828' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
           >
-            关闭
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Tab Content */}
+      {/* ================= TAB 1: NOTES / KEY EXTRACTION ================= */}
       {activeTab === 'notes' && (
-        <div>
-          {!stage2HasNotes ? (
+        <section
+          className="asg-card"
+          data-glass-panel="true"
+          style={{ padding: '24px' }}
+        >
+          {!hasNotes ? (
             <EmptyDeliverableBanner
-              title="本次方案未启用「导学精要笔记」模块"
-              hint="可在左侧 Stage 1 方案微调面板勾选「导学笔记」并重新生成，或切换上方分段控制器查看其他产物。"
-              onSwitch={() => onChangeTab?.('quiz')}
-              switchLabel={stage2HasQuiz ? '前往互动题库' : '查看方案细目'}
+              title="本次学习包未勾选讲义笔记类产物"
+              hint="你可以切换到「在线练习」「考前速记」或「MindMap」，或在左侧步骤 3 中勾选生成对应资料。"
+              onSwitch={() => onChangeTab('quiz')}
+              switchLabel="前往在线练习"
             />
           ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(0, 65ch) 1px minmax(200px, 1fr)',
-                gap: '24px',
-                alignItems: 'start',
-              }}
-            >
-              {/* Primary 65ch Reading Column */}
-              <div>
-                <div
-                  className="no-print"
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    marginBottom: '12px',
-                  }}
-                >
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#636366' }}>
-                    <BookOpen className="w-3.5 h-3.5 inline mr-1.5 text-[#007AFF]" />
-                    结构化导学精要讲义 · 典型例题与解析
-                  </span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
-                    <SpringButton
-                      springLabel="讲义A4PDF"
-                      disabled={Boolean(exportingPdfKey)}
-                      onClick={() => handleExportPdf('study_guide', 'a4', true)}
-                      maxShift={5}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        borderRadius: '999px',
-                        border: '1px solid rgba(0, 122, 255, 0.35)',
-                        backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                        padding: '5px 11px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        color: '#007AFF',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <FileText className="w-3.5 h-3.5" />
-                      <span>A4 讲义 PDF</span>
-                    </SpringButton>
-                    <SpringButton
-                      springLabel="讲义A3PDF"
-                      disabled={Boolean(exportingPdfKey)}
-                      onClick={() => handleExportPdf('study_guide', 'a3', true)}
-                      maxShift={5}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        borderRadius: '999px',
-                        border: '1px solid rgba(60, 60, 67, 0.14)',
-                        backgroundColor: '#FFFFFF',
-                        padding: '5px 11px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        color: '#1C1C1E',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Columns2 className="w-3.5 h-3.5" />
-                      <span>A3 双栏讲义 PDF</span>
-                    </SpringButton>
-                    <SpringButton
-                      springLabel="导出笔记"
-                      onClick={() =>
-                        downloadText(
-                          `${studyPackage.blueprint_used.blueprint_title}_精要笔记.md`,
-                          studyPackage.study_notes_markdown
-                        )
-                      }
-                      maxShift={5}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        borderRadius: '999px',
-                        border: '1px solid rgba(60, 60, 67, 0.14)',
-                        backgroundColor: '#FFFFFF',
-                        padding: '5px 11px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        color: '#1C1C1E',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>.md</span>
-                    </SpringButton>
-                  </div>
-                </div>
-
-                <div className="markdown-body">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                  >
-                    {normalizeMathMarkdown(studyPackage.study_notes_markdown)}
-                  </ReactMarkdown>
-                </div>
-              </div>
-
-              <div style={{ backgroundColor: 'rgba(60, 60, 67, 0.12)', height: '100%' }} />
-
-              {/* Right Contextual Margin Column */}
-              <aside style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: '#F9F9FB',
-                    border: '1px solid rgba(60, 60, 67, 0.08)',
-                    padding: '12px',
-                  }}
-                >
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#1C1C1E', marginBottom: '6px' }}>
-                    纳入范围章节 ({selectedChapters.length})
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {selectedChapters.map((ch) => (
-                      <div
-                        key={ch.chapter_id}
-                        style={{
-                          fontSize: '11.5px',
-                          color: '#3A3A3C',
-                          padding: '6px 8px',
-                          borderRadius: '8px',
-                          backgroundColor: '#FFFFFF',
-                          border: '1px solid rgba(60, 60, 67, 0.08)',
-                        }}
-                      >
-                        <div style={{ fontWeight: 600 }}>{ch.title}</div>
-                        <div className="mac-sp-tabular" style={{ fontSize: '10.5px', color: '#8E8E93', marginTop: '2px' }}>
-                          P{ch.start_page}–{ch.end_page} · {ch.key_terms.slice(0, 3).join(' / ')}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {documentIr && documentIr.all_assets.length > 0 && (
-                  <div
-                    style={{
-                      borderRadius: '12px',
-                      backgroundColor: '#F9F9FB',
-                      border: '1px solid rgba(60, 60, 67, 0.08)',
-                      padding: '12px',
-                    }}
-                  >
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#1C1C1E', marginBottom: '8px' }}>
-                      配套教材原图索引
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {documentIr.all_assets.slice(0, 4).map((a) => (
-                        <div
-                          key={a.asset_id}
-                          style={{
-                            borderRadius: '8px',
-                            overflow: 'hidden',
-                            backgroundColor: '#FFFFFF',
-                            border: '1px solid rgba(60, 60, 67, 0.1)',
-                          }}
-                        >
-                          <img
-                            src={a.url}
-                            alt={a.caption}
-                            style={{ width: '100%', height: '86px', objectFit: 'contain' }}
-                          />
-                          <div style={{ padding: '4px 8px', fontSize: '10.5px', color: '#636366' }}>
-                            P{a.page_or_slide} · {a.caption}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </aside>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'quiz' && (
-        <div>
-          {!stage2HasQuiz ? (
-            <EmptyDeliverableBanner
-              title="本次方案未生成题库试题"
-              hint="可在左侧 Stage 1 调整单选 / 填空 / 简答题数量后重新生成。"
-              onSwitch={() => onChangeTab?.('notes')}
-              switchLabel="返回导学笔记"
-            />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Quiz Action Bar */}
+            <>
               <div
                 className="no-print"
                 style={{
@@ -626,667 +703,1413 @@ export const StudyStudio: React.FC<Props> = ({
                   flexWrap: 'wrap',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  gap: '10px',
-                  borderRadius: '12px',
-                  backgroundColor: '#F2F2F7',
-                  border: '1px solid rgba(60, 60, 67, 0.08)',
-                  padding: '10px 14px',
+                  gap: '12px',
+                  paddingBottom: '16px',
+                  borderBottom: '1px solid var(--asg-border-default)',
+                  marginBottom: '20px',
                 }}
               >
                 <div>
-                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#1C1C1E' }}>
-                    {quiz.title}
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: 'var(--asg-brand-primary)',
+                      backgroundColor: 'var(--asg-brand-tint)',
+                      padding: '3px 10px',
+                      borderRadius: '9999px',
+                      marginBottom: '6px',
+                    }}
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>{scenarioMeta.tag}</span>
                   </div>
-                  <div className="mac-sp-tabular" style={{ fontSize: '11.5px', color: '#636366', marginTop: '2px' }}>
-                    {quiz.instructions} · 满分 {quiz.total_score} 分 · 共 {quiz.questions.length} 题
-                  </div>
+                  <h2
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: 700,
+                      color: 'var(--asg-text-primary)',
+                      margin: 0,
+                    }}
+                  >
+                    {scenarioMeta.notesTitle} · {studyPackage.blueprint_used.blueprint_title}
+                  </h2>
                 </div>
 
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                  {quizStudyMode === 'exam' && (
-                    <span
-                      className="mac-sp-tabular"
-                      style={{
-                        borderRadius: '999px',
-                        backgroundColor: '#FFFFFF',
-                        border: '1px solid rgba(60, 60, 67, 0.12)',
-                        padding: '4px 10px',
-                        fontSize: '11.5px',
-                        fontWeight: 700,
-                        color: '#1C1C1E',
-                      }}
-                    >
-                      ⏱ {formatTime(elapsedSeconds)}
-                    </span>
-                  )}
-
-                  <SpringSegmentedControl<'exam' | 'review'>
-                    compact
-                    springLabel="做题模式"
-                    value={quizStudyMode}
-                    onChange={(mode) => setQuizStudyMode(mode)}
-                    options={[
-                      { value: 'exam', label: '▶ 在线作答' },
-                      { value: 'review', label: '👁 背题与解析' },
-                    ]}
-                  />
-
                   <SpringButton
-                    springLabel="导出A4PDF"
+                    springLabel="打印预览讲义"
+                    onClick={() =>
+                      setPreviewSpec({ docType: 'study_guide', paperSize: 'a4', includeAnswers: true })
+                    }
+                    className="asg-btn-spring"
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>打印预览</span>
+                  </SpringButton>
+                  <SpringButton
+                    springLabel="导出A4讲义"
                     disabled={Boolean(exportingPdfKey)}
-                    onClick={() => handleExportPdf('quiz', 'a4', true)}
-                    maxShift={5}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(0, 122, 255, 0.35)',
-                      backgroundColor: 'rgba(0, 122, 255, 0.1)',
-                      padding: '5px 10px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#007AFF',
-                      cursor: 'pointer',
-                    }}
+                    onClick={() => handleExportPdf('study_guide', 'a4', true)}
+                    className="asg-btn-spring"
+                    style={primaryToolbarBtnStyle}
                   >
-                    {exportingPdfKey === 'quiz-a4' ? '生成A4中...' : 'A4 试卷 PDF (附答案)'}
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{exportingPdfKey?.startsWith('study_guide-a4') ? '生成中...' : '导出 A4 PDF'}</span>
                   </SpringButton>
                   <SpringButton
-                    springLabel="导出A3PDF"
+                    springLabel="导出A3讲义"
                     disabled={Boolean(exportingPdfKey)}
-                    onClick={() => handleExportPdf('quiz', 'a3', true)}
-                    maxShift={5}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(0, 122, 255, 0.35)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '5px 10px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#007AFF',
-                      cursor: 'pointer',
-                    }}
+                    onClick={() => handleExportPdf('study_guide', 'a3', true)}
+                    className="asg-btn-spring"
+                    style={secondaryToolbarBtnStyle}
                   >
-                    {exportingPdfKey === 'quiz-a3' ? '生成A3中...' : 'A3 双栏密封线 PDF'}
+                    <Columns2 className="w-3.5 h-3.5" />
+                    <span>A3 双栏 PDF</span>
                   </SpringButton>
-                  <SpringButton
-                    springLabel="导出空白卷"
-                    onClick={() => exportQuizMarkdown(false)}
-                    maxShift={5}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '5px 10px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1C1C1E',
-                      cursor: 'pointer',
-                    }}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadText(
+                        `${scenarioMeta.notesTitle}.md`,
+                        studyPackage.study_notes_markdown
+                      )
+                    }
+                    style={secondaryToolbarBtnStyle}
                   >
-                    空白卷 .md
-                  </SpringButton>
-                  <SpringButton
-                    springLabel="导出解析"
-                    onClick={() => exportQuizMarkdown(true)}
-                    maxShift={5}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '5px 10px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1C1C1E',
-                      cursor: 'pointer',
-                    }}
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>导出 MD</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText('notes', studyPackage.study_notes_markdown)}
+                    style={secondaryToolbarBtnStyle}
                   >
-                    教师解析版 .md
-                  </SpringButton>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copiedKey === 'notes' ? '已复制' : '复制'}</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Score Banner after submit */}
-              {submitted && quizStudyMode === 'exam' && (
+              <div className="asg-academic-prose" style={{ maxWidth: '760px', margin: '0 auto' }}>
+                <MathMarkdown>{studyPackage.study_notes_markdown}</MathMarkdown>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {/* ================= TAB 2: CARD-SWITCHING QUIZ + KEYBOARD FLASHCARDS ================= */}
+      {activeTab === 'quiz' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {!hasQuiz ? (
+            <div className="asg-card" data-glass-panel="true" style={{ padding: '28px' }}>
+              <EmptyDeliverableBanner
+                title="当前试卷暂无习题内容"
+                hint="你可以在左侧步骤 3 中勾选同步练习、单元检测卷、巩固卷或佛教卷后重新生成，或先浏览笔记与闪卡。"
+                onSwitch={() => onChangeTab('notes')}
+                switchLabel="查看知识讲义"
+              />
+            </div>
+          ) : (
+            <>
+              {/* Workspace Controls & Multi-Paper Bar */}
+              <div
+                className="asg-card no-print"
+                data-glass-panel="true"
+                style={{
+                  padding: '16px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}
+              >
                 <div
                   style={{
-                    borderRadius: '12px',
-                    backgroundColor: 'rgba(52, 199, 89, 0.1)',
-                    border: '1px solid rgba(52, 199, 89, 0.28)',
-                    padding: '12px 16px',
                     display: 'flex',
                     flexWrap: 'wrap',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    gap: '10px',
+                    gap: '12px',
                   }}
                 >
-                  <div>
-                    <div className="mac-sp-tabular" style={{ fontSize: '14px', fontWeight: 700, color: '#1B5E20' }}>
-                      客观题自动判分结果：{objectiveScore} / {objectiveMax} 分
-                      {quiz.questions.some((q) => q.type === 'short_answer') &&
-                        '（简答题请对照右栏与解析自评）'}
-                    </div>
-                    <div className="mac-sp-tabular" style={{ fontSize: '11.5px', color: '#2E7D32', marginTop: '2px' }}>
-                      用时 {formatTime(elapsedSeconds)} · 已展开全部参考答案与教材溯源解析
-                    </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+                    <SpringSegmentedControl<'cards' | 'flashcards'>
+                      compact
+                      springLabel="练习模式"
+                      value={practiceMode}
+                      onChange={setPracticeMode}
+                      options={[
+                        { value: 'cards', label: '卡片刷题' },
+                        { value: 'flashcards', label: '键盘闪卡记忆' },
+                      ]}
+                    />
+
+                    {allPapers.length > 1 && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)', fontWeight: 600 }}>
+                          切换试卷：
+                        </span>
+                        {allPapers.map((p) => {
+                          const isAct = p.paper_id === activePaper.paper_id;
+                          return (
+                            <button
+                              key={p.paper_id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPaperId(p.paper_id);
+                                setCurrentCardIdx(0);
+                                setWrongBookFilterOnly(false);
+                              }}
+                              style={{
+                                borderRadius: '9999px',
+                                border: isAct
+                                  ? '1px solid var(--asg-brand-primary)'
+                                  : '1px solid var(--asg-border-default)',
+                                backgroundColor: isAct
+                                  ? 'var(--asg-brand-tint)'
+                                  : 'var(--asg-bg-surface)',
+                                color: isAct
+                                  ? 'var(--asg-brand-primary)'
+                                  : 'var(--asg-text-secondary)',
+                                padding: '4px 12px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {p.title} ({p.questions.length}题)
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <SpringButton
-                    springLabel="重新作答"
-                    onClick={() => {
-                      setSubmitted(false);
-                      setUserAnswers({});
-                      setElapsedSeconds(0);
-                    }}
-                    maxShift={5}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '999px',
-                      border: '1px solid rgba(52, 199, 89, 0.4)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '6px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1B5E20',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    重新作答
-                  </SpringButton>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                    {practiceMode === 'cards' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWrongBookFilterOnly((v) => !v);
+                          setCurrentCardIdx(0);
+                        }}
+                        style={{
+                          ...secondaryToolbarBtnStyle,
+                          borderColor: wrongBookFilterOnly
+                            ? 'var(--asg-semantic-warning)'
+                            : 'var(--asg-border-default)',
+                          backgroundColor: wrongBookFilterOnly
+                            ? 'var(--asg-warning-tint)'
+                            : 'var(--asg-bg-surface)',
+                          color: wrongBookFilterOnly
+                            ? 'var(--asg-semantic-warning)'
+                            : 'var(--asg-text-primary)',
+                        }}
+                      >
+                        <BookmarkCheck className="w-3.5 h-3.5" />
+                        <span>
+                          {wrongBookFilterOnly
+                            ? `仅看错题本 (${wrongBookCount})`
+                            : `错题本 (${wrongBookCount})`}
+                        </span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewSpec({ docType: 'quiz', paperSize: 'a4', includeAnswers: true })
+                      }
+                      style={secondaryToolbarBtnStyle}
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>排版预览</span>
+                    </button>
+                    <SpringButton
+                      springLabel="导出试卷A4"
+                      disabled={Boolean(exportingPdfKey)}
+                      onClick={() => handleExportPdf('quiz', 'a4', true, activePaper.paper_id)}
+                      className="asg-btn-spring"
+                      style={primaryToolbarBtnStyle}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>导出试卷 A4</span>
+                    </SpringButton>
+                    <SpringButton
+                      springLabel="导出试卷A3"
+                      disabled={Boolean(exportingPdfKey)}
+                      onClick={() => handleExportPdf('quiz', 'a3', true, activePaper.paper_id)}
+                      className="asg-btn-spring"
+                      style={secondaryToolbarBtnStyle}
+                    >
+                      <Columns2 className="w-3.5 h-3.5" />
+                      <span>A3 双栏密封线</span>
+                    </SpringButton>
+                  </div>
                 </div>
-              )}
 
-              {/* Widescreen Two-Column Questions */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                {quiz.questions.map((q, idx) => {
-                  const showAns = quizStudyMode === 'review' || submitted;
-                  const isCorrect = submitted ? evaluateQuestion(q) : null;
-                  const typeLabel =
-                    q.type === 'mcq' ? '单选题' : q.type === 'fill_blank' ? '填空题' : '简答/分析';
-
-                  return (
+                {/* Practice Progress Bar + Question Pill Navigator */}
+                {practiceMode === 'cards' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <div
-                      key={q.id}
                       style={{
-                        borderRadius: '14px',
-                        border: '1px solid rgba(60, 60, 67, 0.1)',
-                        backgroundColor: '#FFFFFF',
-                        padding: '16px 18px',
-                        display: 'grid',
-                        gridTemplateColumns: 'minmax(0, 65ch) 1px minmax(185px, 1fr)',
-                        gap: '18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        fontSize: '12.5px',
+                        color: 'var(--asg-text-secondary)',
                       }}
                     >
-                      {/* Question Stem + Interactive Input */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '7px' }}>
-                          <span
-                            className="mac-sp-tabular"
+                      <span>
+                        <strong>{activePaper.title}</strong> · 建议用时 {activePaper.suggested_minutes} 分钟 · 满分 {activePaper.total_score} 分
+                      </span>
+                      <span>
+                        已作答 <strong>{answeredCount}</strong> / {activePaper.questions.length} 题（{progressPercent}%）
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        width: '100%',
+                        height: '6px',
+                        borderRadius: '9999px',
+                        backgroundColor: 'var(--asg-bg-subtle)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${progressPercent}%`,
+                          height: '100%',
+                          backgroundColor: 'var(--asg-brand-primary)',
+                          borderRadius: '9999px',
+                          transition: 'width 320ms cubic-bezier(0.22, 1, 0.36, 1)',
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {visibleQuestions.map((q, idx) => {
+                        const isCur = idx === currentCardIdx;
+                        const selected = currentPaperAnswers[q.id];
+                        let pillBg = 'var(--asg-bg-subtle)';
+                        let pillColor = 'var(--asg-text-secondary)';
+                        let pillBorder = 'var(--asg-border-default)';
+
+                        if (q.type === 'mcq' && selected) {
+                          const optIdx = q.options.findIndex(
+                            (o, oi) => extractOptionLetter(o, oi) === selected
+                          );
+                          const ok =
+                            optIdx >= 0 && isMcqOptionCorrect(q.options[optIdx], optIdx, q.answer);
+                          if (ok) {
+                            pillBg = 'var(--asg-success-tint)';
+                            pillColor = 'var(--asg-semantic-success)';
+                            pillBorder = 'var(--asg-semantic-success)';
+                          } else {
+                            pillBg = 'var(--asg-warning-tint)';
+                            pillColor = 'var(--asg-semantic-warning)';
+                            pillBorder = 'var(--asg-semantic-warning)';
+                          }
+                        } else if (wrongBookIds[q.id]) {
+                          pillBg = 'var(--asg-warning-tint)';
+                          pillColor = 'var(--asg-semantic-warning)';
+                          pillBorder = 'var(--asg-semantic-warning)';
+                        } else if (currentPaperChecked[q.id] || (selected && selected.trim())) {
+                          pillBg = 'var(--asg-brand-tint)';
+                          pillColor = 'var(--asg-brand-primary)';
+                          pillBorder = 'var(--asg-brand-primary)';
+                        }
+
+                        return (
+                          <button
+                            key={q.id}
+                            type="button"
+                            onClick={() => setCurrentCardIdx(idx)}
                             style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              width: '24px',
-                              height: '24px',
-                              borderRadius: '999px',
-                              backgroundColor: '#007AFF',
-                              color: '#FFFFFF',
+                              minWidth: '30px',
+                              height: '30px',
+                              padding: '0 8px',
+                              borderRadius: '8px',
+                              border: `1.5px solid ${isCur ? 'var(--asg-brand-primary)' : pillBorder}`,
+                              backgroundColor: isCur ? 'var(--asg-brand-primary)' : pillBg,
+                              color: isCur ? '#FFFFFF' : pillColor,
                               fontSize: '12px',
                               fontWeight: 700,
+                              cursor: 'pointer',
+                              transition: 'transform 160ms ease',
                             }}
+                            title={`跳转到第 ${idx + 1} 题`}
                           >
                             {idx + 1}
-                          </span>
-                          <span
-                            style={{
-                              borderRadius: '6px',
-                              backgroundColor: '#F2F2F7',
-                              padding: '2px 8px',
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              color: '#3A3A3C',
-                            }}
-                          >
-                            {typeLabel}
-                          </span>
-                          <span
-                            className="mac-sp-tabular"
-                            style={{
-                              fontSize: '11.5px',
-                              fontWeight: 700,
-                              color: '#FF9500',
-                            }}
-                          >
-                            {q.score} 分
-                          </span>
-                        </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
 
+              {/* ---------- MODE A: SINGLE-CARD QUIZ PRACTICE ---------- */}
+              {practiceMode === 'cards' && (
+                <div style={{ maxWidth: '760px', width: '100%', margin: '0 auto' }}>
+                  {visibleQuestions.length === 0 ? (
+                    <div
+                      className="asg-card"
+                      data-glass-panel="true"
+                      style={{ padding: '40px 24px', textAlign: 'center' }}
+                    >
+                      <BookmarkCheck
+                        className="w-10 h-10 mx-auto mb-3"
+                        style={{ color: 'var(--asg-semantic-success)' }}
+                      />
+                      <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--asg-text-primary)' }}>
+                        错题本目前为空
+                      </div>
+                      <p style={{ fontSize: '13.5px', color: 'var(--asg-text-secondary)', marginTop: '6px' }}>
+                        答错题目或点击解析区「+ 加入错题本」后，可在这里集中针对复习。
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setWrongBookFilterOnly(false)}
+                        style={{ ...primaryToolbarBtnStyle, marginTop: '14px' }}
+                      >
+                        返回全部题目 ({activePaper.questions.length} 题)
+                      </button>
+                    </div>
+                  ) : (
+                    currentQuestion && (
+                      <article
+                        key={currentQuestion.id}
+                        className={`asg-card ${shakeQuestionId === currentQuestion.id ? 'asg-shake' : ''}`}
+                        data-glass-panel="true"
+                        style={{
+                          padding: '24px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '20px',
+                        }}
+                      >
+                        {/* Card Metadata Header */}
                         <div
                           style={{
-                            fontSize: '14.5px',
-                            fontWeight: 500,
-                            color: '#1C1C1E',
-                            lineHeight: 1.65,
-                            whiteSpace: 'pre-line',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
                           }}
                         >
-                          {q.question}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                            <span
+                              style={{
+                                fontFamily: 'JetBrains Mono, monospace',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                color: 'var(--asg-brand-primary)',
+                                backgroundColor: 'var(--asg-brand-tint)',
+                                padding: '3px 10px',
+                                borderRadius: '6px',
+                              }}
+                            >
+                              第 {currentCardIdx + 1} / {visibleQuestions.length} 题
+                            </span>
+                            <span style={metaTagStyle}>
+                              {currentQuestion.type === 'mcq'
+                                ? '单选题'
+                                : currentQuestion.type === 'fill_blank'
+                                ? '填空题'
+                                : '简答 / 计算题'}
+                            </span>
+                            <span style={metaTagStyle}>{currentQuestion.difficulty || '核心'}</span>
+                            <span style={metaTagStyle}>{currentQuestion.score} 分</span>
+                          </div>
+
+                          {/* Academic Citation Badge */}
+                          <span
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              color: 'var(--asg-brand-primary)',
+                              backgroundColor: 'var(--asg-brand-tint)',
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                            }}
+                          >
+                            [溯源：{currentQuestion.source_chapter || '教材精讲'}{' '}
+                            {currentQuestion.source_page || ''}]
+                          </span>
                         </div>
 
-                        {q.type === 'mcq' && q.options.length > 0 && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            {q.options.map((opt) => {
-                              const letter = opt.trim().charAt(0);
-                              const selected = userAnswers[q.id] === letter;
-                              const isThisRight =
-                                showAns &&
-                                q.answer.trim().toUpperCase().startsWith(letter.toUpperCase());
+                        {/* Question Stem (with full KaTeX support) */}
+                        <div
+                          className="asg-academic-prose"
+                          style={{
+                            fontSize: '16px',
+                            fontWeight: 600,
+                            lineHeight: 1.65,
+                            color: 'var(--asg-text-primary)',
+                          }}
+                        >
+                          <MathMarkdown>{currentQuestion.question}</MathMarkdown>
+                        </div>
+
+                        {/* Interactive MCQ State Machine */}
+                        {currentQuestion.type === 'mcq' && currentQuestion.options.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {currentQuestion.options.map((opt, oi) => {
+                              const letter = extractOptionLetter(opt, oi);
+                              const chosenLetter = currentPaperAnswers[currentQuestion.id];
+                              const hasAnswered = Boolean(chosenLetter);
+                              const isThisChosen = chosenLetter === letter;
+                              const isThisRight = isMcqOptionCorrect(
+                                opt,
+                                oi,
+                                currentQuestion.answer
+                              );
+
+                              let stateClass = '';
+                              if (hasAnswered) {
+                                if (isThisRight) stateClass = 'is-correct';
+                                else if (isThisChosen) stateClass = 'is-wrong';
+                              }
+
+                              const cleanLabel = opt
+                                .trim()
+                                .replace(/^[A-D][.、:：\s]+/i, '')
+                                .trim();
 
                               return (
-                                <SpringButton
-                                  key={opt}
-                                  springLabel={`选项 ${letter}`}
-                                  disabled={submitted && quizStudyMode === 'exam'}
-                                  onClick={() =>
-                                    setUserAnswers((prev) => ({ ...prev, [q.id]: letter }))
-                                  }
-                                  maxShift={5}
+                                <button
+                                  key={`${currentQuestion.id}-opt-${oi}`}
+                                  type="button"
+                                  onClick={() => handleSelectMcqOption(currentQuestion, opt, oi)}
+                                  className={`asg-quiz-opt ${stateClass}`}
                                   style={{
-                                    width: '100%',
-                                    textAlign: 'left',
-                                    borderRadius: '10px',
-                                    border: isThisRight
-                                      ? '1.5px solid #34C759'
-                                      : selected && submitted && isCorrect === false
-                                      ? '1.5px solid #FF3B30'
-                                      : selected
-                                      ? '1.5px solid #007AFF'
-                                      : '1px solid rgba(60, 60, 67, 0.12)',
-                                    backgroundColor: isThisRight
-                                      ? 'rgba(52, 199, 89, 0.1)'
-                                      : selected && submitted && isCorrect === false
-                                      ? 'rgba(255, 59, 48, 0.08)'
-                                      : selected
-                                      ? 'rgba(0, 122, 255, 0.08)'
-                                      : '#FAFAFC',
-                                    color: '#1C1C1E',
-                                    padding: '9px 12px',
-                                    fontSize: '12.5px',
-                                    fontWeight: isThisRight || selected ? 600 : 400,
                                     display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    cursor:
-                                      submitted && quizStudyMode === 'exam' ? 'default' : 'pointer',
+                                    alignItems: 'flex-start',
+                                    gap: '12px',
+                                    width: '100%',
+                                    padding: '12px 14px',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
                                   }}
                                 >
-                                  <span>{opt}</span>
-                                  {isThisRight && (
-                                    <CheckCircle2 className="w-4 h-4 text-[#34C759] shrink-0" />
-                                  )}
-                                  {selected && submitted && isCorrect === false && (
-                                    <XCircle className="w-4 h-4 text-[#FF3B30] shrink-0" />
-                                  )}
-                                </SpringButton>
+                                  <span
+                                    style={{
+                                      width: '26px',
+                                      height: '26px',
+                                      borderRadius: '9999px',
+                                      flexShrink: 0,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: '12.5px',
+                                      fontWeight: 700,
+                                      marginTop: '1px',
+                                      backgroundColor:
+                                        hasAnswered && isThisRight
+                                          ? 'var(--asg-semantic-success)'
+                                          : hasAnswered && isThisChosen && !isThisRight
+                                          ? 'var(--asg-semantic-warning)'
+                                          : 'var(--asg-bg-subtle)',
+                                      color:
+                                        hasAnswered && (isThisRight || isThisChosen)
+                                          ? '#FFFFFF'
+                                          : 'var(--asg-text-secondary)',
+                                    }}
+                                  >
+                                    {hasAnswered && isThisRight ? (
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    ) : hasAnswered && isThisChosen && !isThisRight ? (
+                                      <XCircle className="w-4 h-4" />
+                                    ) : (
+                                      letter
+                                    )}
+                                  </span>
+
+                                  <div
+                                    style={{
+                                      flex: 1,
+                                      fontSize: '14.5px',
+                                      lineHeight: 1.55,
+                                      color: 'var(--asg-text-primary)',
+                                    }}
+                                  >
+                                    <MathMarkdown inline>{cleanLabel || opt}</MathMarkdown>
+                                  </div>
+                                </button>
                               );
                             })}
                           </div>
                         )}
 
-                        {q.type === 'fill_blank' && (
-                          <input
-                            type="text"
-                            disabled={submitted && quizStudyMode === 'exam'}
-                            value={userAnswers[q.id] || ''}
-                            onChange={(e) =>
-                              setUserAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
-                            }
-                            placeholder="请输入填空答案..."
-                            style={{
-                              width: '100%',
-                              maxWidth: '380px',
-                              borderRadius: '10px',
-                              border: '1px solid rgba(60, 60, 67, 0.2)',
-                              padding: '8px 12px',
-                              fontSize: '12.5px',
-                              outline: 'none',
-                            }}
-                          />
+                        {/* Fill-in-the-blank & Short-answer Inputs */}
+                        {currentQuestion.type !== 'mcq' && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {currentQuestion.type === 'fill_blank' ? (
+                              <input
+                                type="text"
+                                value={currentPaperAnswers[currentQuestion.id] || ''}
+                                onChange={(e) =>
+                                  setAnswersByPaper((prev) => ({
+                                    ...prev,
+                                    [activePaper.paper_id]: {
+                                      ...(prev[activePaper.paper_id] || {}),
+                                      [currentQuestion.id]: e.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="请输入你的填空答案（支持公式文本）..."
+                                style={{
+                                  width: '100%',
+                                  padding: '11px 14px',
+                                  borderRadius: '10px',
+                                  border: '1px solid var(--asg-border-default)',
+                                  backgroundColor: 'var(--asg-bg-subtle)',
+                                  color: 'var(--asg-text-primary)',
+                                  fontSize: '14px',
+                                  outline: 'none',
+                                }}
+                              />
+                            ) : (
+                              <textarea
+                                rows={4}
+                                value={currentPaperAnswers[currentQuestion.id] || ''}
+                                onChange={(e) =>
+                                  setAnswersByPaper((prev) => ({
+                                    ...prev,
+                                    [activePaper.paper_id]: {
+                                      ...(prev[activePaper.paper_id] || {}),
+                                      [currentQuestion.id]: e.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="在此梳理你的解题步骤或关键得分点，提交后核对参考解答与解析..."
+                                style={{
+                                  width: '100%',
+                                  padding: '11px 14px',
+                                  borderRadius: '10px',
+                                  border: '1px solid var(--asg-border-default)',
+                                  backgroundColor: 'var(--asg-bg-subtle)',
+                                  color: 'var(--asg-text-primary)',
+                                  fontSize: '14px',
+                                  lineHeight: 1.6,
+                                  resize: 'vertical',
+                                  outline: 'none',
+                                }}
+                              />
+                            )}
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleSubmitNonMcq(currentQuestion)}
+                                style={primaryToolbarBtnStyle}
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>提交并核对解析</span>
+                              </button>
+                              {currentPaperChecked[currentQuestion.id] &&
+                                currentQuestion.type === 'fill_blank' && (
+                                  <span
+                                    style={{
+                                      fontSize: '13px',
+                                      fontWeight: 600,
+                                      color:
+                                        normalizeBlankAnswer(
+                                          currentPaperAnswers[currentQuestion.id] || ''
+                                        ) === normalizeBlankAnswer(currentQuestion.answer)
+                                          ? 'var(--asg-semantic-success)'
+                                          : 'var(--asg-semantic-warning)',
+                                    }}
+                                  >
+                                    {normalizeBlankAnswer(
+                                      currentPaperAnswers[currentQuestion.id] || ''
+                                    ) === normalizeBlankAnswer(currentQuestion.answer)
+                                      ? '核对一致，答对了！'
+                                      : '与标准答案有差异，请核对下方解析'}
+                                  </span>
+                                )}
+                            </div>
+                          </div>
                         )}
 
-                        {q.type === 'short_answer' && (
-                          <textarea
-                            rows={3}
-                            disabled={submitted && quizStudyMode === 'exam'}
-                            value={userAnswers[q.id] || ''}
-                            onChange={(e) =>
-                              setUserAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                        {/* Quick Toggle Explanation Button if not yet opened */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            borderTop: '1px solid var(--asg-border-default)',
+                            paddingTop: '14px',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenDrawerIds((prev) => ({
+                                ...prev,
+                                [currentQuestion.id]: !prev[currentQuestion.id],
+                              }))
                             }
-                            placeholder="在此输入分析与作答要点..."
                             style={{
-                              width: '100%',
-                              borderRadius: '10px',
-                              border: '1px solid rgba(60, 60, 67, 0.2)',
-                              padding: '8px 12px',
-                              fontSize: '12.5px',
-                              outline: 'none',
-                            }}
-                          />
-                        )}
-
-                        {showAns && (
-                          <div
-                            style={{
-                              borderRadius: '10px',
-                              backgroundColor: '#F2F2F7',
-                              border: '1px solid rgba(60, 60, 67, 0.08)',
-                              padding: '10px 12px',
-                              fontSize: '12px',
-                              lineHeight: 1.6,
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              cursor: 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 600,
+                              color: 'var(--asg-brand-primary)',
                             }}
                           >
-                            <div style={{ fontWeight: 700, color: '#248A3D', marginBottom: '3px' }}>
-                              参考答案：{q.answer}
+                            {openDrawerIds[currentQuestion.id]
+                              ? '收起答案与解析 ▲'
+                              : '查看参考答案与 AI 解析 ▼'}
+                          </button>
+
+                          <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
+                            支持键盘 ← / → 快速切题
+                          </span>
+                        </div>
+
+                        {/* AI Explanation Drawer */}
+                        {(openDrawerIds[currentQuestion.id] ||
+                          (currentQuestion.type === 'mcq' &&
+                            Boolean(currentPaperAnswers[currentQuestion.id]))) && (
+                          <div
+                            className="asg-drawer-enter"
+                            style={{
+                              borderRadius: '12px',
+                              border: '1px solid var(--asg-border-default)',
+                              backgroundColor: 'var(--asg-bg-subtle)',
+                              padding: '16px 18px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '12px',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                fontSize: '14px',
+                                fontWeight: 700,
+                                color: 'var(--asg-semantic-success)',
+                              }}
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>参考答案：</span>
+                              <span style={{ color: 'var(--asg-text-primary)' }}>
+                                <MathMarkdown inline>{currentQuestion.answer}</MathMarkdown>
+                              </span>
                             </div>
-                            <div style={{ color: '#3A3A3C' }}>
-                              <strong>解析：</strong>
-                              {q.explanation}
+
+                            <div
+                              className="asg-academic-prose"
+                              style={{ fontSize: '14px', lineHeight: 1.65, color: 'var(--asg-text-secondary)' }}
+                            >
+                              <MathMarkdown>{currentQuestion.explanation}</MathMarkdown>
+                            </div>
+
+                            {variantError && (
+                              <div
+                                style={{
+                                  fontSize: '12.5px',
+                                  color: 'var(--asg-semantic-warning)',
+                                  backgroundColor: 'var(--asg-warning-tint)',
+                                  padding: '8px 12px',
+                                  borderRadius: '8px',
+                                }}
+                              >
+                                {variantError}
+                              </div>
+                            )}
+
+                            {/* Fixed Low-Distraction Quick Actions */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                alignItems: 'center',
+                                gap: '10px',
+                                paddingTop: '6px',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleWrongBook(currentQuestion.id)}
+                                style={{
+                                  ...secondaryToolbarBtnStyle,
+                                  borderColor: wrongBookIds[currentQuestion.id]
+                                    ? 'var(--asg-semantic-warning)'
+                                    : 'var(--asg-border-default)',
+                                  color: wrongBookIds[currentQuestion.id]
+                                    ? 'var(--asg-semantic-warning)'
+                                    : 'var(--asg-text-primary)',
+                                  backgroundColor: wrongBookIds[currentQuestion.id]
+                                    ? 'var(--asg-warning-tint)'
+                                    : 'var(--asg-bg-surface)',
+                                }}
+                              >
+                                {wrongBookIds[currentQuestion.id] ? (
+                                  <>
+                                    <BookmarkCheck className="w-3.5 h-3.5" />
+                                    <span>已在错题本（点击移出）</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <BookmarkPlus className="w-3.5 h-3.5" />
+                                    <span>+ 加入错题本</span>
+                                  </>
+                                )}
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={generatingVariantId === currentQuestion.id}
+                                onClick={() => handleGenerateVariant(currentQuestion)}
+                                style={{
+                                  ...secondaryToolbarBtnStyle,
+                                  borderColor: 'var(--asg-brand-primary)',
+                                  color: 'var(--asg-brand-primary)',
+                                  backgroundColor: 'var(--asg-brand-tint)',
+                                  cursor:
+                                    generatingVariantId === currentQuestion.id ? 'wait' : 'pointer',
+                                }}
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>
+                                  {generatingVariantId === currentQuestion.id
+                                    ? 'AI 正在命制同考点变式题...'
+                                    : '针对此知识点再出一题'}
+                                </span>
+                              </button>
                             </div>
                           </div>
                         )}
-                      </div>
 
-                      <div style={{ backgroundColor: 'rgba(60, 60, 67, 0.1)' }} />
+                        {/* Prev / Next Card Switcher Footer */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingTop: '8px',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            disabled={currentCardIdx <= 0}
+                            onClick={() => setCurrentCardIdx((i) => Math.max(0, i - 1))}
+                            style={{
+                              ...secondaryToolbarBtnStyle,
+                              opacity: currentCardIdx <= 0 ? 0.45 : 1,
+                              cursor: currentCardIdx <= 0 ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <ArrowLeft className="w-4 h-4" />
+                            <span>上一题 (←)</span>
+                          </button>
 
-                      {/* Right Margin Provenance Column */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px' }}>
-                        <div>
-                          <div style={{ fontSize: '10.5px', color: '#8E8E93', fontWeight: 600 }}>
-                            分层定位
-                          </div>
-                          <div style={{ fontWeight: 700, color: '#007AFF', marginTop: '2px' }}>
-                            {q.tier} · {q.difficulty}
-                          </div>
+                          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--asg-text-secondary)' }}>
+                            {currentCardIdx + 1} / {visibleQuestions.length}
+                          </span>
+
+                          <button
+                            type="button"
+                            disabled={currentCardIdx >= visibleQuestions.length - 1}
+                            onClick={() =>
+                              setCurrentCardIdx((i) =>
+                                Math.min(visibleQuestions.length - 1, i + 1)
+                              )
+                            }
+                            style={{
+                              ...primaryToolbarBtnStyle,
+                              opacity: currentCardIdx >= visibleQuestions.length - 1 ? 0.45 : 1,
+                              cursor:
+                                currentCardIdx >= visibleQuestions.length - 1
+                                  ? 'not-allowed'
+                                  : 'pointer',
+                            }}
+                          >
+                            <span>下一题 (→)</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </button>
                         </div>
-                        <div>
-                          <div style={{ fontSize: '10.5px', color: '#8E8E93', fontWeight: 600 }}>
-                            教材溯源锚点
-                          </div>
-                          <div style={{ color: '#1C1C1E', fontWeight: 600, marginTop: '2px', lineHeight: 1.4 }}>
-                            {q.source_chapter}
-                          </div>
-                          <div style={{ color: '#636366', marginTop: '1px' }}>{q.source_page}</div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {quizStudyMode === 'exam' && !submitted && quiz.questions.length > 0 && (
-                <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '6px' }}>
-                  <SpringButton
-                    springLabel="交卷判分"
-                    onClick={() => setSubmitted(true)}
-                    maxShift={6}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '7px',
-                      borderRadius: '999px',
-                      border: 'none',
-                      backgroundColor: '#007AFF',
-                      color: '#FFFFFF',
-                      padding: '10px 22px',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      boxShadow: '0 8px 20px -6px rgba(0, 122, 255, 0.45)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>交卷并自动判分</span>
-                  </SpringButton>
+                      </article>
+                    )
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </div>
-      )}
 
-      {activeTab === 'cheatsheet' && (
-        <div>
-          {!stage2HasCheatsheet ? (
-            <EmptyDeliverableBanner
-              title="本次方案未启用「考前速记表」"
-              hint="可在左侧 Stage 1 勾选「考前速记表」后重新生成。"
-              onSwitch={() => onChangeTab?.('notes')}
-              switchLabel="返回导学笔记"
-            />
-          ) : (
-            <div style={{ width: '100%', maxWidth: '100%' }}>
-              <div
-                className="no-print"
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '8px',
-                  marginBottom: '12px',
-                }}
-              >
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#636366' }}>
-                  <Zap className="w-3.5 h-3.5 inline mr-1.5 text-[#FF9500]" />
-                  高密度考前速记表 (Cheat Sheet)
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <SpringButton
-                    springLabel="导出速记PDF"
-                    disabled={Boolean(exportingPdfKey)}
-                    onClick={() => handleExportPdf('cheatsheet', 'a4', true)}
-                    maxShift={5}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '999px',
-                      border: '1px solid rgba(255, 149, 0, 0.35)',
-                      backgroundColor: 'rgba(255, 149, 0, 0.1)',
-                      padding: '5px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#995700',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>{exportingPdfKey === 'cheatsheet-a4' ? '生成中...' : '导出速记 PDF'}</span>
-                  </SpringButton>
-                  <SpringButton
-                    springLabel="导出速记表"
-                    onClick={() =>
-                      downloadText(
-                        `${studyPackage.blueprint_used.blueprint_title}_考前速记表.md`,
-                        studyPackage.cheatsheet_markdown
-                      )
-                    }
-                    maxShift={5}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '5px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1C1C1E',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>导出速记表 .md</span>
-                  </SpringButton>
-                </div>
-              </div>
-              <div
-                className="markdown-body"
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  overflowX: 'auto',
-                  borderRadius: '14px',
-                  backgroundColor: '#FFFDF5',
-                  border: '1px solid rgba(255, 149, 0, 0.25)',
-                  padding: '20px 22px',
-                  marginBottom: '28px',
-                }}
-              >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeKatex]}
+              {/* ---------- MODE B: KEYBOARD 3D FLASHCARDS + END-OF-ROUND PROMPT ---------- */}
+              {practiceMode === 'flashcards' && (
+                <div
+                  style={{
+                    maxWidth: '640px',
+                    width: '100%',
+                    margin: '6px auto 12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '16px',
+                  }}
                 >
-                  {normalizeMathMarkdown(studyPackage.cheatsheet_markdown)}
-                </ReactMarkdown>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'mindmap' && (
-        <div>
-          {!stage2HasMindmap ? (
-            <EmptyDeliverableBanner
-              title="本次方案未启用「可视化知识图谱」"
-              hint="可在左侧 Stage 1 勾选「知识图谱」后重新生成。"
-              onSwitch={() => onChangeTab?.('notes')}
-              switchLabel="返回导学笔记"
-            />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div
-                className="no-print"
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '10px',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <SpringButton
-                    springLabel="缩小图谱"
-                    onClick={() => setZoom((z) => Math.max(0.5, Number((z - 0.15).toFixed(2))))}
-                    maxShift={4}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '6px 10px',
-                      cursor: 'pointer',
-                    }}
-                    title="缩小"
-                  >
-                    <ZoomOut className="w-4 h-4" />
-                  </SpringButton>
-                  <span className="mac-sp-tabular" style={{ fontSize: '12px', fontWeight: 600, color: '#636366' }}>
-                    {Math.round(zoom * 100)}%
-                  </span>
-                  <SpringButton
-                    springLabel="放大图谱"
-                    onClick={() => setZoom((z) => Math.min(2.2, Number((z + 0.15).toFixed(2))))}
-                    maxShift={4}
-                    style={{
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '6px 10px',
-                      cursor: 'pointer',
-                    }}
-                    title="放大"
-                  >
-                    <ZoomIn className="w-4 h-4" />
-                  </SpringButton>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <SpringButton
-                    springLabel="复制Mermaid"
-                    onClick={() => navigator.clipboard.writeText(studyPackage.mindmap_mermaid)}
-                    maxShift={5}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      borderRadius: '999px',
-                      border: '1px solid rgba(60, 60, 67, 0.14)',
-                      backgroundColor: '#FFFFFF',
-                      padding: '6px 12px',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      color: '#1C1C1E',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>复制 Mermaid 源码</span>
-                  </SpringButton>
-                  {mermaidSvg && (
-                    <SpringButton
-                      springLabel="导出SVG"
-                      onClick={() =>
-                        downloadText(
-                          `${studyPackage.blueprint_used.blueprint_title}_知识图谱.svg`,
-                          mermaidSvg,
-                          'image/svg+xml;charset=utf-8'
-                        )
-                      }
-                      maxShift={5}
+                  {flashRoundFinished ? (
+                    /* End-of-Round Settlement Card */
+                    <div
+                      className="asg-card"
+                      data-glass-panel="true"
                       style={{
-                        display: 'inline-flex',
+                        padding: '32px 28px',
+                        textAlign: 'center',
+                        display: 'flex',
+                        flexDirection: 'column',
                         alignItems: 'center',
-                        gap: '5px',
-                        borderRadius: '999px',
-                        border: 'none',
-                        backgroundColor: '#007AFF',
-                        padding: '6px 12px',
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        color: '#FFFFFF',
-                        cursor: 'pointer',
+                        gap: '16px',
                       }}
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>导出 SVG</span>
-                    </SpringButton>
+                      <div
+                        style={{
+                          width: '56px',
+                          height: '56px',
+                          borderRadius: '9999px',
+                          backgroundColor: 'var(--asg-brand-tint)',
+                          color: 'var(--asg-brand-primary)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <CheckCircle2 className="w-7 h-7" />
+                      </div>
+
+                      <div>
+                        <h3
+                          style={{
+                            fontSize: '20px',
+                            fontWeight: 700,
+                            color: 'var(--asg-text-primary)',
+                            margin: 0,
+                          }}
+                        >
+                          本轮闪卡记忆已完成！
+                        </h3>
+                        <p
+                          style={{
+                            fontSize: '14px',
+                            color: 'var(--asg-text-secondary)',
+                            marginTop: '6px',
+                          }}
+                        >
+                          本轮共复习 {flashDeck.length} 张核心卡片：
+                          <strong style={{ color: 'var(--asg-semantic-success)' }}>
+                            已掌握 {masteredCount} 张
+                          </strong>
+                          ，
+                          <strong style={{ color: 'var(--asg-semantic-warning)' }}>
+                            待巩固复习 {reviewCount} 张
+                          </strong>
+                        </p>
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          justifyContent: 'center',
+                          gap: '12px',
+                          marginTop: '6px',
+                        }}
+                      >
+                        <SpringButton
+                          springLabel="复习需巩固闪卡"
+                          disabled={reviewCount === 0}
+                          onClick={handleReviewPendingFlashcards}
+                          className="asg-btn-spring"
+                          style={{
+                            ...primaryToolbarBtnStyle,
+                            padding: '10px 20px',
+                            fontSize: '14px',
+                            backgroundColor:
+                              reviewCount > 0
+                                ? 'var(--asg-semantic-warning)'
+                                : 'var(--asg-bg-subtle)',
+                            color: reviewCount > 0 ? '#FFFFFF' : 'var(--asg-text-muted)',
+                            cursor: reviewCount > 0 ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          <span>
+                            {reviewCount > 0
+                              ? `仅复习需巩固的闪卡 (${reviewCount} 张)`
+                              : '本轮已全部掌握（无需补习）'}
+                          </span>
+                        </SpringButton>
+
+                        <SpringButton
+                          springLabel="打乱从头开始"
+                          onClick={handleShuffleRestartFlashcards}
+                          className="asg-btn-spring"
+                          style={{
+                            ...secondaryToolbarBtnStyle,
+                            padding: '10px 20px',
+                            fontSize: '14px',
+                            borderColor: 'var(--asg-brand-primary)',
+                            color: 'var(--asg-brand-primary)',
+                          }}
+                        >
+                          <Shuffle className="w-4 h-4" />
+                          <span>打乱顺序从头开始 (全部 {baseFlashDeck.length} 张)</span>
+                        </SpringButton>
+                      </div>
+                    </div>
+                  ) : (
+                    flashDeck[flashIdx] && (
+                      <>
+                        {/* Deck Progress & Stats Header */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            fontSize: '13px',
+                            color: 'var(--asg-text-secondary)',
+                          }}
+                        >
+                          <span>
+                            卡片进度 <strong>{flashIdx + 1}</strong> / {flashDeck.length}
+                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                            <span style={{ color: 'var(--asg-semantic-warning)', fontWeight: 600 }}>
+                              需复习: {reviewCount}
+                            </span>
+                            <span style={{ color: 'var(--asg-semantic-success)', fontWeight: 600 }}>
+                              已掌握: {masteredCount}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Stacked 3D Single-Face Flip Container (Chromium safe) */}
+                        <div style={{ position: 'relative', paddingBottom: '10px' }}>
+                          {/* Bottom 8px card stack peek */}
+                          {flashIdx + 1 < flashDeck.length && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                left: '16px',
+                                right: '16px',
+                                bottom: '2px',
+                                height: '16px',
+                                borderRadius: '0 0 16px 16px',
+                                backgroundColor: 'var(--asg-bg-subtle)',
+                                border: '1px solid var(--asg-border-default)',
+                                zIndex: 0,
+                              }}
+                            />
+                          )}
+
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setIsFlashFlipped((f) => !f)}
+                            className="asg-card"
+                            data-glass-panel="true"
+                            style={{
+                              position: 'relative',
+                              zIndex: 1,
+                              minHeight: '360px',
+                              padding: '28px 30px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              justifyContent: 'space-between',
+                              transform: `perspective(1200px) rotateY(${uprightFlipAngle}deg)`,
+                              transformStyle: 'flat',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  color: showFrontSide
+                                    ? 'var(--asg-brand-primary)'
+                                    : 'var(--asg-semantic-success)',
+                                  backgroundColor: showFrontSide
+                                    ? 'var(--asg-brand-tint)'
+                                    : 'var(--asg-success-tint)',
+                                  padding: '3px 10px',
+                                  borderRadius: '9999px',
+                                }}
+                              >
+                                {showFrontSide
+                                  ? `正面题目 · ${flashDeck[flashIdx].badge}`
+                                  : '背面答案与解析'}
+                              </span>
+                              <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
+                                {flashDeck[flashIdx].source}
+                              </span>
+                            </div>
+
+                            <div
+                              className="asg-academic-prose"
+                              style={{
+                                flex: 1,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'center',
+                                padding: '20px 0',
+                              }}
+                            >
+                              {showFrontSide ? (
+                                <div style={{ fontSize: '17px', fontWeight: 600, lineHeight: 1.7 }}>
+                                  <MathMarkdown>{flashDeck[flashIdx].front}</MathMarkdown>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                  <div
+                                    style={{
+                                      padding: '12px 16px',
+                                      borderRadius: '10px',
+                                      backgroundColor: 'var(--asg-success-tint)',
+                                      color: 'var(--asg-semantic-success)',
+                                      fontWeight: 700,
+                                      fontSize: '15.5px',
+                                    }}
+                                  >
+                                    标准结论：<MathMarkdown inline>{flashDeck[flashIdx].answer}</MathMarkdown>
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: '14px',
+                                      color: 'var(--asg-text-secondary)',
+                                      lineHeight: 1.65,
+                                    }}
+                                  >
+                                    <MathMarkdown>{flashDeck[flashIdx].explanation}</MathMarkdown>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div
+                              style={{
+                                textAlign: 'center',
+                                fontSize: '12px',
+                                color: 'var(--asg-text-muted)',
+                              }}
+                            >
+                              点击卡片或按 Space 键翻转 · ← 需复习 · → 已掌握
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Keyboard / Mouse Controls Footer */}
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr auto 1fr',
+                            gap: '12px',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <SpringButton
+                            springLabel="需复习左键"
+                            onClick={() => advanceFlashcard('review')}
+                            className="asg-btn-spring"
+                            style={{
+                              justifyContent: 'center',
+                              padding: '11px 16px',
+                              borderRadius: '12px',
+                              border: '1px solid var(--asg-semantic-warning)',
+                              backgroundColor: 'var(--asg-warning-tint)',
+                              color: 'var(--asg-semantic-warning)',
+                              fontWeight: 700,
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <ArrowLeft className="w-4 h-4" />
+                            <span>需复习 (←)</span>
+                          </SpringButton>
+
+                          <button
+                            type="button"
+                            onClick={() => setIsFlashFlipped((f) => !f)}
+                            style={{
+                              ...secondaryToolbarBtnStyle,
+                              padding: '11px 18px',
+                              borderRadius: '12px',
+                            }}
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                            <span>翻转 (Space)</span>
+                          </button>
+
+                          <SpringButton
+                            springLabel="已掌握右键"
+                            onClick={() => advanceFlashcard('mastered')}
+                            className="asg-btn-spring"
+                            style={{
+                              justifyContent: 'center',
+                              padding: '11px 16px',
+                              borderRadius: '12px',
+                              border: '1px solid var(--asg-semantic-success)',
+                              backgroundColor: 'var(--asg-success-tint)',
+                              color: 'var(--asg-semantic-success)',
+                              fontWeight: 700,
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <span>已掌握 (→)</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </SpringButton>
+                        </div>
+                      </>
+                    )
                   )}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {/* ================= TAB 3: CHEATSHEET ================= */}
+      {activeTab === 'cheatsheet' && (
+        <section
+          className="asg-card"
+          data-glass-panel="true"
+          style={{ padding: '24px' }}
+        >
+          {!hasCheatsheet ? (
+            <EmptyDeliverableBanner
+              title="本次学习包未包含考前速记卡"
+              hint="可以在左侧步骤 3 中勾选「考前速记」重新生成。"
+              onSwitch={() => onChangeTab('notes')}
+              switchLabel="返回讲义笔记"
+            />
+          ) : (
+            <>
+              <div
+                className="no-print"
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  paddingBottom: '16px',
+                  borderBottom: '1px solid var(--asg-border-default)',
+                  marginBottom: '20px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Zap className="w-5 h-5" style={{ color: 'var(--asg-brand-primary)' }} />
+                  <h2
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: 700,
+                      color: 'var(--asg-text-primary)',
+                      margin: 0,
+                    }}
+                  >
+                    {scenarioMeta.cheatsheetTitle}
+                  </h2>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                  <SpringButton
+                    springLabel="打印预览速记"
+                    onClick={() =>
+                      setPreviewSpec({ docType: 'cheatsheet', paperSize: 'a4', includeAnswers: false })
+                    }
+                    className="asg-btn-spring"
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>打印预览</span>
+                  </SpringButton>
+                  <SpringButton
+                    springLabel="导出速记A4"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('cheatsheet', 'a4', false)}
+                    className="asg-btn-spring"
+                    style={primaryToolbarBtnStyle}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{exportingPdfKey?.startsWith('cheatsheet-a4') ? '生成中...' : '导出 A4 速记 PDF'}</span>
+                  </SpringButton>
+                  <SpringButton
+                    springLabel="导出速记A3"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('cheatsheet', 'a3', false)}
+                    className="asg-btn-spring"
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Columns2 className="w-3.5 h-3.5" />
+                    <span>A3 横版速记卡</span>
+                  </SpringButton>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadText('考前速记.md', studyPackage.cheatsheet_markdown)
+                    }
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>导出 MD</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="asg-academic-prose" style={{ maxWidth: '760px', margin: '0 auto' }}>
+                <MathMarkdown>{studyPackage.cheatsheet_markdown}</MathMarkdown>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {/* ================= TAB 4: MINDMAP ================= */}
+      {activeTab === 'mindmap' && (
+        <section
+          className="asg-card"
+          data-glass-panel="true"
+          style={{ padding: '24px' }}
+        >
+          {!hasMindmap ? (
+            <EmptyDeliverableBanner
+              title="本次学习包未生成 MindMap 思维导图"
+              hint="在入门学习（A）或巩固提高（B）场景中勾选 MindMap 即可自动生成知识图谱。"
+              onSwitch={() => onChangeTab('notes')}
+              switchLabel="查看知识讲义"
+            />
+          ) : (
+            <>
+              <div
+                className="no-print"
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  paddingBottom: '16px',
+                  borderBottom: '1px solid var(--asg-border-default)',
+                  marginBottom: '18px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Network className="w-5 h-5" style={{ color: 'var(--asg-brand-primary)' }} />
+                  <h2
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: 700,
+                      color: 'var(--asg-text-primary)',
+                      margin: 0,
+                    }}
+                  >
+                    课程知识体系 MindMap
+                  </h2>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.15).toFixed(2)))}
+                    style={secondaryToolbarBtnStyle}
+                    title="缩小"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--asg-text-secondary)' }}>
+                    {Math.round(zoom * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setZoom((z) => Math.min(2.0, +(z + 0.15).toFixed(2)))}
+                    style={secondaryToolbarBtnStyle}
+                    title="放大"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportMindmapSvg}
+                    style={primaryToolbarBtnStyle}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>导出矢量 SVG</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadText('mindmap.mmd', studyPackage.mindmap_mermaid, 'text/plain;charset=utf-8')
+                    }
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>下载 .mmd</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText('mermaid', studyPackage.mindmap_mermaid)}
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copiedKey === 'mermaid' ? '已复制' : '复制源码'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>打印导图</span>
+                  </button>
                 </div>
               </div>
 
               {mermaidError ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <FallbackMindmapSvg
-                    mermaidCode={studyPackage.mindmap_mermaid}
-                    darkMode={darkMode}
-                    zoom={zoom}
-                  />
                   <div
                     style={{
-                      borderRadius: '10px',
-                      backgroundColor: 'rgba(255, 149, 0, 0.08)',
-                      border: '1px solid rgba(255, 149, 0, 0.25)',
-                      padding: '10px 14px',
-                      fontSize: '11.5px',
-                      color: '#B45309',
+                      fontSize: '12.5px',
+                      color: 'var(--asg-semantic-warning)',
+                      backgroundColor: 'var(--asg-warning-tint)',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
                     }}
                   >
-                    <Network className="w-3.5 h-3.5 inline mr-1" />
-                    已启用内置矢量图谱兜底渲染（若需切换 Mermaid 原生引擎，请按 Ctrl+F5 刷新一次页面）：{mermaidError}
+                    已启用内置矢量图谱兼容渲染：{mermaidError}
+                  </div>
+                  <div ref={mermaidRef}>
+                    <FallbackMindmapSvg
+                      mermaidCode={studyPackage.mindmap_mermaid}
+                      darkMode={darkMode}
+                      zoom={zoom}
+                    />
                   </div>
                 </div>
               ) : (
@@ -1294,147 +2117,145 @@ export const StudyStudio: React.FC<Props> = ({
                   style={{
                     overflow: 'auto',
                     borderRadius: '14px',
-                    border: '1px solid rgba(60, 60, 67, 0.1)',
-                    backgroundColor: '#FAFAFC',
-                    padding: '24px',
-                    minHeight: '380px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    border: '1px solid var(--asg-border-default)',
+                    backgroundColor: 'var(--asg-bg-subtle)',
+                    padding: '20px',
+                    minHeight: '340px',
                   }}
                 >
                   <div
                     ref={mermaidRef}
-                    style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+                    style={{
+                      transform: `scale(${zoom})`,
+                      transformOrigin: 'top left',
+                      display: 'inline-block',
+                    }}
                     dangerouslySetInnerHTML={{ __html: mermaidSvg }}
                   />
                 </div>
               )}
-            </div>
+            </>
           )}
-        </div>
+        </section>
       )}
 
+      {/* ================= TAB 5: BLUEPRINT TRACE & AUDIT ================= */}
       {activeTab === 'blueprint_trace' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '820px' }}>
-          <div
-            style={{
-              borderRadius: '14px',
-              border: '1px solid rgba(60, 60, 67, 0.1)',
-              backgroundColor: '#FAFAFC',
-              padding: '16px',
-            }}
-          >
-            <div
+        <section
+          className="asg-card"
+          data-glass-panel="true"
+          style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ClipboardCheck className="w-5 h-5" style={{ color: 'var(--asg-brand-primary)' }} />
+              <h2 style={{ fontSize: '20px', fontWeight: 700, color: 'var(--asg-text-primary)', margin: 0 }}>
+                出题蓝图溯源与质量审计
+              </h2>
+            </div>
+            <span
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '13px',
+                fontSize: '12.5px',
                 fontWeight: 700,
-                color: '#1C1C1E',
-                marginBottom: '10px',
+                padding: '4px 12px',
+                borderRadius: '9999px',
+                backgroundColor: 'var(--asg-brand-tint)',
+                color: 'var(--asg-brand-primary)',
               }}
             >
-              <Layers className="w-4 h-4 text-[#007AFF]" />
-              <span>已执行教学契约与题型分布</span>
-            </div>
-            <div
-              className="mac-sp-tabular"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                gap: '10px',
-              }}
-            >
-              <MetricTile label="预设模板" value={studyPackage.blueprint_used.preset_name} />
-              <MetricTile label="目标难度" value={studyPackage.blueprint_used.target_difficulty} />
-              <MetricTile label="单选题" value={`${studyPackage.blueprint_used.deliverables.mcq_count} 题`} />
-              <MetricTile label="填空题" value={`${studyPackage.blueprint_used.deliverables.fill_blank_count} 题`} />
-              <MetricTile label="简答分析" value={`${studyPackage.blueprint_used.deliverables.short_answer_count} 题`} />
-              <MetricTile label="卷面总分" value={`${studyPackage.quiz_paper.total_score} 分`} />
-            </div>
+              {scenarioMeta.tag}
+            </span>
           </div>
 
+          {/* Metrics Overview */}
           <div
             style={{
-              borderRadius: '14px',
-              border: '1px solid rgba(60, 60, 67, 0.1)',
-              backgroundColor: '#FFFFFF',
-              overflow: 'hidden',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '12px',
             }}
           >
-            <div
-              style={{
-                padding: '12px 16px',
-                borderBottom: '1px solid rgba(60, 60, 67, 0.08)',
-                fontSize: '13px',
-                fontWeight: 700,
-                color: '#1C1C1E',
-              }}
-            >
-              三模路由与 CLI Harness 阶段执行轨迹
-            </div>
-            {Object.entries(studyPackage.routing_trace).map(([stage, label]) => (
-              <div
-                key={stage}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 16px',
-                  borderBottom: '1px solid rgba(60, 60, 67, 0.08)',
-                  fontSize: '12.5px',
-                }}
-              >
-                <span style={{ fontWeight: 600, color: '#636366' }}>{stage}</span>
-                <span
+            <MetricTile label="蓝图方案名称" value={studyPackage.blueprint_used.blueprint_title} />
+            <MetricTile
+              label="涵盖章节数"
+              value={`${studyPackage.blueprint_used.selected_chapter_ids.length} 个章节`}
+            />
+            <MetricTile
+              label="试卷产出数量"
+              value={`${allPapers.length} 份（共 ${allPapers.reduce((acc, p) => acc + p.questions.length, 0)} 题）`}
+            />
+            <MetricTile
+              label="目标难度定位"
+              value={
+                studyPackage.blueprint_used.target_difficulty === 'beginner'
+                  ? '零基础入门（Beginner）'
+                  : studyPackage.blueprint_used.target_difficulty === 'advanced'
+                  ? '拔高拓展（Advanced）'
+                  : studyPackage.blueprint_used.target_difficulty === 'exam_sprint'
+                  ? '考前冲刺（Sprint）'
+                  : '巩固进阶（Intermediate）'
+              }
+            />
+          </div>
+
+          {/* Routing Trace per Stage */}
+          <div>
+            <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--asg-text-primary)', marginBottom: '10px' }}>
+              各生成阶段模型调度轨迹
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {Object.entries(studyPackage.routing_trace || {}).map(([stage, trace]) => (
+                <div
+                  key={stage}
                   style={{
-                    borderRadius: '999px',
-                    backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                    color: '#007AFF',
-                    padding: '2px 10px',
-                    fontSize: '11.5px',
-                    fontWeight: 600,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    padding: '10px 14px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--asg-border-default)',
+                    backgroundColor: 'var(--asg-bg-subtle)',
+                    fontSize: '13px',
                   }}
                 >
-                  {label}
-                </span>
-              </div>
-            ))}
+                  <span style={{ fontWeight: 700, color: 'var(--asg-text-primary)' }}>{stage}</span>
+                  <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--asg-brand-primary)' }}>
+                    {trace}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
 
+          {/* Quality Audit Report */}
           {studyPackage.quality_audit_report && (
-            <div
-              style={{
-                borderRadius: '14px',
-                border: '1px solid rgba(52, 199, 89, 0.3)',
-                backgroundColor: 'rgba(52, 199, 89, 0.08)',
-                padding: '14px 16px',
-              }}
-            >
+            <div>
+              <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--asg-text-primary)', marginBottom: '10px' }}>
+                AI 教研审校报告
+              </h3>
               <div
+                className="asg-academic-prose"
                 style={{
-                  fontSize: '12.5px',
-                  fontWeight: 700,
-                  color: '#15803D',
-                  marginBottom: '4px',
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1px solid var(--asg-border-default)',
+                  backgroundColor: 'var(--asg-bg-subtle)',
                 }}
               >
-                全局质量验收报告 (global_quality_audit)
-              </div>
-              <div style={{ fontSize: '12px', color: '#334155', lineHeight: 1.6 }}>
-                {studyPackage.quality_audit_report}
+                <MathMarkdown>{studyPackage.quality_audit_report}</MathMarkdown>
               </div>
             </div>
           )}
-        </div>
+        </section>
       )}
 
+      {/* ================= PRINT PREVIEW MODAL ================= */}
       {previewSpec && (
         <PrintPreviewModal
-          projectId={studyPackage.project_id}
           studyPackage={studyPackage}
+          activeQuiz={activePaper}
           documentIr={documentIr}
           docType={previewSpec.docType}
           paperSize={previewSpec.paperSize}
@@ -1445,7 +2266,8 @@ export const StudyStudio: React.FC<Props> = ({
             handleExportPdf(
               previewSpec.docType,
               previewSpec.paperSize,
-              previewSpec.includeAnswers
+              previewSpec.includeAnswers,
+              activePaper.paper_id
             )
           }
           onClose={() => setPreviewSpec(null)}
@@ -1454,6 +2276,8 @@ export const StudyStudio: React.FC<Props> = ({
     </div>
   );
 };
+
+/* ---------------- Helper Components ---------------- */
 
 function FallbackMindmapSvg({
   mermaidCode,
@@ -1477,7 +2301,9 @@ function FallbackMindmapSvg({
       nodes.set(m[1], m[2].trim());
     }
 
-    const edgeMatch = line.match(/([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s*--+>?\s*([A-Za-z0-9_]+)(?:\[[^\]]*\])?/);
+    const edgeMatch = line.match(
+      /([A-Za-z0-9_]+)(?:\[[^\]]*\])?\s*--+>?\s*([A-Za-z0-9_]+)(?:\[[^\]]*\])?/
+    );
     if (edgeMatch) {
       const from = edgeMatch[1];
       const to = edgeMatch[2];
@@ -1497,7 +2323,6 @@ function FallbackMindmapSvg({
     );
   }
 
-  // BFS topological layering for horizontal LR layout
   const layerMap = new Map<string, number>();
   const queue: string[] = [];
   for (const [id] of nodes) {
@@ -1555,17 +2380,17 @@ function FallbackMindmapSvg({
   }
 
   const strokeColor = darkMode ? '#475569' : '#94A3B8';
-  const nodeFill = darkMode ? '#1E293B' : '#FFFFFF';
-  const nodeBorder = darkMode ? '#38BDF8' : '#007AFF';
-  const textFill = darkMode ? '#F1F5F9' : '#0F172A';
+  const nodeFill = darkMode ? '#1C1E22' : '#FFFFFF';
+  const nodeBorder = darkMode ? '#5C7CFA' : '#3B5BDB';
+  const textFill = darkMode ? '#E5E7EB' : '#111827';
 
   return (
     <div
       style={{
         overflow: 'auto',
         borderRadius: '14px',
-        border: '1px solid rgba(60, 60, 67, 0.14)',
-        backgroundColor: darkMode ? '#0F172A' : '#FAFAFC',
+        border: '1px solid var(--asg-border-default)',
+        backgroundColor: 'var(--asg-bg-subtle)',
         padding: '20px',
         minHeight: '340px',
       }}
@@ -1608,8 +2433,8 @@ function FallbackMindmapSvg({
                 width={nodeW}
                 height={nodeH}
                 rx={10}
-                fill={isRoot ? (darkMode ? '#1D4ED8' : '#007AFF') : nodeFill}
-                stroke={isRoot ? '#60A5FA' : nodeBorder}
+                fill={isRoot ? (darkMode ? '#3B5BDB' : '#3B5BDB') : nodeFill}
+                stroke={isRoot ? '#5C7CFA' : nodeBorder}
                 strokeWidth={1.5}
               />
               <text
@@ -1634,14 +2459,21 @@ function MetricTile({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
+        padding: '12px 14px',
         borderRadius: '10px',
-        backgroundColor: '#FFFFFF',
-        border: '1px solid rgba(60, 60, 67, 0.08)',
-        padding: '10px 12px',
+        border: '1px solid var(--asg-border-default)',
+        backgroundColor: 'var(--asg-bg-subtle)',
       }}
     >
-      <div style={{ fontSize: '10.5px', color: '#8E8E93', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: '13px', fontWeight: 700, color: '#1C1C1E', marginTop: '3px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>{label}</div>
+      <div
+        style={{
+          fontSize: '14px',
+          fontWeight: 700,
+          color: 'var(--asg-text-primary)',
+          marginTop: '4px',
+        }}
+      >
         {value}
       </div>
     </div>
@@ -1650,6 +2482,7 @@ function MetricTile({ label, value }: { label: string; value: string }) {
 
 function PrintPreviewModal({
   studyPackage,
+  activeQuiz,
   documentIr,
   docType,
   paperSize,
@@ -1659,8 +2492,8 @@ function PrintPreviewModal({
   onDownload,
   onClose,
 }: {
-  projectId: string;
   studyPackage: StudyPackage;
+  activeQuiz: QuizPaper;
   documentIr?: DocumentIR | null;
   docType: 'quiz' | 'study_guide' | 'cheatsheet';
   paperSize: 'a4' | 'a3';
@@ -1675,21 +2508,10 @@ function PrintPreviewModal({
   onClose: () => void;
 }) {
   const isA3 = paperSize === 'a3';
-  const quiz = studyPackage.quiz_paper;
+  const quiz = activeQuiz || studyPackage.quiz_paper;
   const mcqs = quiz.questions.filter((q) => q.type === 'mcq');
   const blanks = quiz.questions.filter((q) => q.type === 'fill_blank');
   const shorts = quiz.questions.filter((q) => q.type === 'short_answer');
-
-  const mdPlugins = [remarkGfm, remarkMath];
-  const rehypePlugins = [rehypeKatex];
-
-  const renderMarkdownBlock = (md: string) => (
-    <div className="prose prose-slate max-w-none prose-sm prose-headings:font-bold prose-headings:text-slate-900 prose-p:leading-relaxed prose-table:text-xs">
-      <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
-        {normalizeMathMarkdown(md)}
-      </ReactMarkdown>
-    </div>
-  );
 
   const renderQuestionList = (title: string, items: QuizQuestion[]) => {
     if (items.length === 0) return null;
@@ -1699,8 +2521,8 @@ function PrintPreviewModal({
           style={{
             fontSize: '13.5px',
             fontWeight: 800,
-            color: '#0F172A',
-            borderBottom: '1.5px solid #0F172A',
+            color: '#111827',
+            borderBottom: '1.5px solid #111827',
             paddingBottom: '4px',
             marginBottom: '10px',
           }}
@@ -1715,19 +2537,15 @@ function PrintPreviewModal({
                 breakInside: 'avoid',
                 fontSize: '12.5px',
                 lineHeight: 1.65,
-                color: '#1E293B',
+                color: '#1F2937',
               }}
             >
               <div style={{ fontWeight: 600 }}>
                 <span>{idx + 1}. </span>
-                <span style={{ color: '#475569', fontSize: '11px', marginRight: '4px' }}>
+                <span style={{ color: '#4B5563', fontSize: '11px', marginRight: '4px' }}>
                   [{q.score}分]
                 </span>
-                <span className="inline [&>p]:inline">
-                  <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
-                    {normalizeMathMarkdown(q.question)}
-                  </ReactMarkdown>
-                </span>
+                <MathMarkdown inline>{q.question}</MathMarkdown>
               </div>
               {q.options.length > 0 && (
                 <div
@@ -1738,14 +2556,12 @@ function PrintPreviewModal({
                     gridTemplateColumns: isA3 ? '1fr 1fr' : '1fr',
                     gap: '3px 12px',
                     fontSize: '12px',
-                    color: '#334155',
+                    color: '#374151',
                   }}
                 >
                   {q.options.map((opt, oi) => (
                     <div key={oi}>
-                      <ReactMarkdown remarkPlugins={mdPlugins} rehypePlugins={rehypePlugins}>
-                        {normalizeMathMarkdown(opt)}
-                      </ReactMarkdown>
+                      <MathMarkdown inline>{opt}</MathMarkdown>
                     </div>
                   ))}
                 </div>
@@ -1754,7 +2570,7 @@ function PrintPreviewModal({
                 <div
                   style={{
                     marginTop: '8px',
-                    height: '46px',
+                    height: '44px',
                     borderBottom: '1px dashed #CBD5E1',
                   }}
                 />
@@ -1787,7 +2603,7 @@ function PrintPreviewModal({
           height: '92vh',
           borderRadius: '18px',
           backgroundColor: '#FFFFFF',
-          border: '1px solid rgba(60, 60, 67, 0.16)',
+          border: '1px solid #E5E7EB',
           boxShadow: '0 30px 70px -15px rgba(0, 0, 0, 0.35)',
           display: 'flex',
           flexDirection: 'column',
@@ -1797,8 +2613,8 @@ function PrintPreviewModal({
         <div
           style={{
             padding: '12px 18px',
-            borderBottom: '1px solid rgba(60, 60, 67, 0.12)',
-            backgroundColor: '#F8FAFC',
+            borderBottom: '1px solid #E5E7EB',
+            backgroundColor: '#FAF9F6',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
@@ -1807,7 +2623,7 @@ function PrintPreviewModal({
           }}
         >
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>
+            <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#111827' }}>
               独立印刷排版预览（纯预览不自动下载）
             </span>
             <SpringSegmentedControl<'quiz' | 'study_guide' | 'cheatsheet'>
@@ -1843,12 +2659,12 @@ function PrintPreviewModal({
                   gap: '5px',
                   fontSize: '12px',
                   fontWeight: 600,
-                  color: '#334155',
+                  color: '#374151',
                   cursor: 'pointer',
-                  padding: '4px 8px',
-                  borderRadius: '999px',
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
                   backgroundColor: '#FFFFFF',
-                  border: '1px solid rgba(60, 60, 67, 0.14)',
+                  border: '1px solid #E5E7EB',
                 }}
               >
                 <input
@@ -1877,9 +2693,9 @@ function PrintPreviewModal({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '5px',
-                borderRadius: '999px',
+                borderRadius: '9999px',
                 border: 'none',
-                backgroundColor: '#007AFF',
+                backgroundColor: '#3B5BDB',
                 color: '#FFFFFF',
                 padding: '6px 14px',
                 fontSize: '12px',
@@ -1891,10 +2707,11 @@ function PrintPreviewModal({
               <span>{exporting ? '正在生成 PDF...' : `确认下载 ${paperSize.toUpperCase()} PDF`}</span>
             </SpringButton>
             <button
+              type="button"
               onClick={onClose}
               style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(60, 60, 67, 0.14)',
+                borderRadius: '9999px',
+                border: '1px solid #E5E7EB',
                 backgroundColor: '#FFFFFF',
                 padding: '6px',
                 cursor: 'pointer',
@@ -1904,12 +2721,11 @@ function PrintPreviewModal({
               }}
               title="关闭预览"
             >
-              <X className="w-4 h-4 text-[#636366]" />
+              <X className="w-4 h-4 text-[#4B5563]" />
             </button>
           </div>
         </div>
 
-        {/* Simulated Printed Paper Canvas (never triggers automatic PDF download) */}
         <div
           style={{
             flex: 1,
@@ -1933,7 +2749,6 @@ function PrintPreviewModal({
               minHeight: isA3 ? '740px' : '1040px',
             }}
           >
-            {/* Left Binding Sealed Column for A3 Exam Paper */}
             {isA3 && (
               <div
                 style={{
@@ -1945,7 +2760,7 @@ function PrintPreviewModal({
                   flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  backgroundColor: '#FAFAFC',
+                  backgroundColor: '#FAF9F6',
                   color: '#334155',
                   fontSize: '11px',
                   fontWeight: 600,
@@ -1958,7 +2773,7 @@ function PrintPreviewModal({
                   style={{
                     writingMode: 'vertical-rl',
                     letterSpacing: '0.35em',
-                    color: '#0F172A',
+                    color: '#111827',
                     fontWeight: 800,
                   }}
                 >
@@ -1967,18 +2782,16 @@ function PrintPreviewModal({
               </div>
             )}
 
-            {/* Main Sheet Body */}
             <div style={{ flex: 1, minWidth: 0, padding: isA3 ? '30px 36px' : '40px 44px' }}>
-              {/* Paper Masthead */}
               <div
                 style={{
                   textAlign: 'center',
-                  borderBottom: '2px solid #0F172A',
+                  borderBottom: '2px solid #111827',
                   paddingBottom: '12px',
                   marginBottom: '18px',
                 }}
               >
-                <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: '11px', color: '#4B5563', fontWeight: 600, letterSpacing: '0.06em' }}>
                   {isA3 ? 'A3 横向双栏独立印刷版式预览' : 'A4 竖版独立印刷版式预览'}
                   {documentIr ? ` · 来源：《${documentIr.filename}》` : ''}
                 </div>
@@ -1986,7 +2799,7 @@ function PrintPreviewModal({
                   style={{
                     fontSize: '19px',
                     fontWeight: 800,
-                    color: '#0F172A',
+                    color: '#111827',
                     marginTop: '4px',
                   }}
                 >
@@ -2001,7 +2814,7 @@ function PrintPreviewModal({
                     style={{
                       marginTop: '6px',
                       fontSize: '11.5px',
-                      color: '#334155',
+                      color: '#374151',
                       display: 'flex',
                       justifyContent: 'center',
                       gap: '18px',
@@ -2010,12 +2823,13 @@ function PrintPreviewModal({
                   >
                     <span>建议用时：{quiz.suggested_minutes} 分钟</span>
                     <span>卷面满分：{quiz.total_score} 分</span>
-                    <span>题量：单选 {mcqs.length} / 填空 {blanks.length} / 简答 {shorts.length}</span>
+                    <span>
+                      题量：单选 {mcqs.length} / 填空 {blanks.length} / 简答 {shorts.length}
+                    </span>
                   </div>
                 )}
               </div>
 
-              {/* Paper Content Columns */}
               <div
                 style={
                   isA3
@@ -2032,9 +2846,9 @@ function PrintPreviewModal({
                     <div
                       style={{
                         fontSize: '11.5px',
-                        color: '#475569',
-                        backgroundColor: '#F8FAFC',
-                        border: '1px solid #E2E8F0',
+                        color: '#4B5563',
+                        backgroundColor: '#FAF9F6',
+                        border: '1px solid #E5E7EB',
                         padding: '8px 10px',
                         borderRadius: '4px',
                         marginBottom: '14px',
@@ -2051,19 +2865,26 @@ function PrintPreviewModal({
                         style={{
                           marginTop: '22px',
                           paddingTop: '14px',
-                          borderTop: '2px solid #0F172A',
+                          borderTop: '2px solid #111827',
                         }}
                       >
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginBottom: '10px' }}>
+                        <div
+                          style={{
+                            fontSize: '14px',
+                            fontWeight: 800,
+                            color: '#111827',
+                            marginBottom: '10px',
+                          }}
+                        >
                           参考答案与详细解析
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: '#1E293B' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: '#1F2937' }}>
                           {quiz.questions.map((q, idx) => (
                             <div key={q.id} style={{ breakInside: 'avoid' }}>
                               <strong>第 {idx + 1} 题答案：</strong>
-                              <span>{q.answer}</span>
-                              <div style={{ color: '#475569', marginTop: '2px' }}>
-                                解析：{q.explanation}（{q.source_chapter} {q.source_page}）
+                              <MathMarkdown inline>{q.answer}</MathMarkdown>
+                              <div style={{ color: '#4B5563', marginTop: '2px' }}>
+                                解析：<MathMarkdown inline>{q.explanation}</MathMarkdown>（{q.source_chapter} {q.source_page}）
                               </div>
                             </div>
                           ))}
@@ -2074,40 +2895,43 @@ function PrintPreviewModal({
                 )}
 
                 {docType === 'study_guide' && (
-                  <>
-                    {renderMarkdownBlock(
-                      studyPackage.study_notes_markdown || '_本次方案未生成自学导学讲义正文_'
-                    )}
+                  <div className="asg-academic-prose" style={{ color: '#111827' }}>
+                    <MathMarkdown>
+                      {studyPackage.study_notes_markdown || '_本次方案未生成自学导学讲义正文_'}
+                    </MathMarkdown>
                     {includeAnswers && quiz.questions.length > 0 && (
                       <div
                         style={{
                           marginTop: '22px',
                           paddingTop: '14px',
-                          borderTop: '2px solid #0F172A',
+                          borderTop: '2px solid #111827',
                         }}
                       >
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginBottom: '10px' }}>
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#111827', marginBottom: '10px' }}>
                           随堂边学边练与参考解析
                         </div>
                         {quiz.questions.map((q, idx) => (
                           <div key={q.id} style={{ marginBottom: '10px', fontSize: '12px', breakInside: 'avoid' }}>
                             <div style={{ fontWeight: 600 }}>
-                              {idx + 1}. {q.question}
+                              {idx + 1}. <MathMarkdown inline>{q.question}</MathMarkdown>
                             </div>
-                            <div style={{ color: '#0369A1', marginTop: '2px' }}>
-                              答案：{q.answer} ｜ 解析：{q.explanation}
+                            <div style={{ color: '#3B5BDB', marginTop: '2px' }}>
+                              答案：<MathMarkdown inline>{q.answer}</MathMarkdown> ｜ 解析：<MathMarkdown inline>{q.explanation}</MathMarkdown>
                             </div>
                           </div>
                         ))}
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
 
-                {docType === 'cheatsheet' &&
-                  renderMarkdownBlock(
-                    studyPackage.cheatsheet_markdown || '_本次方案未生成考前速记表_'
-                  )}
+                {docType === 'cheatsheet' && (
+                  <div className="asg-academic-prose" style={{ color: '#111827' }}>
+                    <MathMarkdown>
+                      {studyPackage.cheatsheet_markdown || '_本次方案未生成考前速记表_'}
+                    </MathMarkdown>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -2129,39 +2953,54 @@ function EmptyDeliverableBanner({
   switchLabel: string;
 }) {
   return (
-    <div
-      style={{
-        borderRadius: '14px',
-        border: '1px dashed rgba(60, 60, 67, 0.2)',
-        backgroundColor: '#FAFAFC',
-        padding: '36px 24px',
-        textAlign: 'center',
-      }}
-    >
-      <ClipboardCheck className="w-8 h-8 text-[#8E8E93] mx-auto" />
-      <div style={{ fontSize: '14px', fontWeight: 700, color: '#1C1C1E', marginTop: '10px' }}>
+    <div style={{ textAlign: 'center', padding: '32px 16px' }}>
+      <Layers className="w-10 h-10 mx-auto mb-3" style={{ color: 'var(--asg-text-muted)' }} />
+      <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--asg-text-primary)' }}>
         {title}
       </div>
-      <p style={{ fontSize: '12px', color: '#636366', marginTop: '4px' }}>{hint}</p>
-      <div style={{ marginTop: '14px' }}>
-        <SpringButton
-          springLabel="切换产物标签"
-          onClick={onSwitch}
-          maxShift={5}
-          style={{
-            borderRadius: '999px',
-            border: '1px solid rgba(0, 122, 255, 0.28)',
-            backgroundColor: 'rgba(0, 122, 255, 0.08)',
-            color: '#007AFF',
-            padding: '7px 14px',
-            fontSize: '12px',
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          {switchLabel}
-        </SpringButton>
-      </div>
+      <p style={{ fontSize: '13.5px', color: 'var(--asg-text-secondary)', marginTop: '6px' }}>
+        {hint}
+      </p>
+      <button type="button" onClick={onSwitch} style={{ ...primaryToolbarBtnStyle, marginTop: '14px' }}>
+        {switchLabel}
+      </button>
     </div>
   );
 }
+
+const primaryToolbarBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  borderRadius: '10px',
+  border: 'none',
+  backgroundColor: 'var(--asg-brand-primary)',
+  color: '#FFFFFF',
+  padding: '7px 14px',
+  fontSize: '12.5px',
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const secondaryToolbarBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  borderRadius: '10px',
+  border: '1px solid var(--asg-border-default)',
+  backgroundColor: 'var(--asg-bg-surface)',
+  color: 'var(--asg-text-primary)',
+  padding: '7px 12px',
+  fontSize: '12.5px',
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const metaTagStyle: React.CSSProperties = {
+  fontSize: '12px',
+  fontWeight: 600,
+  padding: '2px 8px',
+  borderRadius: '6px',
+  backgroundColor: 'var(--asg-bg-subtle)',
+  color: 'var(--asg-text-secondary)',
+};

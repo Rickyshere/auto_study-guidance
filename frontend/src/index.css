@@ -244,3 +244,229 @@ body.dark-theme {
 .dark-theme .print-paper-sheet * {
   color-scheme: light;
 }
+
+/* ==================== Design Tokens & Spring Physics ==================== */
+:root {
+  --bg-canvas: #FAF9F6;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #F3F4F6;
+  --border-default: #E5E7EB;
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #9CA3AF;
+  --brand-primary: #3B5BDB;
+  --brand-tint: #EDF2FF;
+  --semantic-success: #2B8A3E;
+  --semantic-success-tint: #EBFBEE;
+  --semantic-warning: #D97706;
+  --semantic-warning-tint: #FEF3C7;
+  --semantic-highlight: rgba(250, 204, 21, 0.35);
+
+  /* Component-level semantic aliases */
+  --asg-bg-canvas: var(--bg-canvas);
+  --asg-bg-surface: var(--bg-surface);
+  --asg-bg-subtle: var(--bg-subtle);
+  --asg-border-default: var(--border-default);
+  --asg-text-primary: var(--text-primary);
+  --asg-text-secondary: var(--text-secondary);
+  --asg-text-muted: var(--text-muted);
+  --asg-brand-primary: var(--brand-primary);
+  --asg-brand-tint: var(--brand-tint);
+  --asg-semantic-success: var(--semantic-success);
+  --asg-success-tint: var(--semantic-success-tint);
+  --asg-semantic-warning: var(--semantic-warning);
+  --asg-warning-tint: var(--semantic-warning-tint);
+  --pill-text: #111827;
+  --pill-sub: #4B5563;
+
+  /* Spring Physics curves */
+  --spring-snappy: cubic-bezier(0.22, 1.25, 0.36, 1);
+  --spring-card: cubic-bezier(0.2, 1.12, 0.3, 1);
+  --spring-drawer: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring-tactile: cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+html.dark-theme,
+.dark-theme {
+  --bg-canvas: #121316;
+  --bg-surface: #1C1E22;
+  --bg-subtle: #262930;
+  --border-default: #2E323B;
+  --text-primary: #E5E7EB;
+  --text-secondary: #9CA3AF;
+  --text-muted: #6B7280;
+  --brand-primary: #5C7CFA;
+  --brand-tint: #1E293B;
+  --semantic-success: #40C057;
+  --semantic-success-tint: #1B3824;
+  --semantic-warning: #F59E0B;
+  --semantic-warning-tint: #3B2E17;
+  --semantic-highlight: rgba(234, 179, 8, 0.25);
+
+  --asg-bg-canvas: var(--bg-canvas);
+  --asg-bg-surface: var(--bg-surface);
+  --asg-bg-subtle: var(--bg-subtle);
+  --asg-border-default: var(--border-default);
+  --asg-text-primary: var(--text-primary);
+  --asg-text-secondary: var(--text-secondary);
+  --asg-text-muted: var(--text-muted);
+  --asg-brand-primary: var(--brand-primary);
+  --asg-brand-tint: var(--brand-tint);
+  --asg-semantic-success: var(--semantic-success);
+  --asg-success-tint: var(--semantic-success-tint);
+  --asg-semantic-warning: var(--semantic-warning);
+  --asg-warning-tint: var(--semantic-warning-tint);
+  --pill-text: #F9FAFB;
+  --pill-sub: #CBD5E1;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.asg-root {
+  min-height: 100vh;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  position: relative;
+}
+
+.asg-root.mode-liquid-glass {
+  background-color: transparent;
+  padding: 10px 14px 12px;
+  gap: 8px;
+}
+
+.asg-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+  transition: transform 0.28s var(--spring-snappy), box-shadow 0.28s var(--spring-drawer), border-color 0.2s ease;
+}
+
+/* Transparent DOM glass overlay letting underlying WebGL refracted mesh + bezel specular shine through */
+.mode-liquid-glass .asg-card[data-glass-panel],
+.mode-liquid-glass .asg-glass-surface[data-glass-panel] {
+  background-color: rgba(255, 255, 255, 0.72) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: rgba(229, 231, 235, 0.94) !important;
+  box-shadow: 0 4px 12px rgba(17, 24, 39, 0.04) !important;
+}
+
+.dark-theme.mode-liquid-glass .asg-card[data-glass-panel],
+.dark-theme.mode-liquid-glass .asg-glass-surface[data-glass-panel] {
+  background-color: rgba(28, 30, 34, 0.70) !important;
+  border-color: rgba(55, 61, 74, 0.88) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28) !important;
+}
+
+.mode-liquid-glass .asg-floating-header {
+  border-radius: 16px;
+  border: 1px solid rgba(229, 231, 235, 0.94);
+}
+.dark-theme.mode-liquid-glass .asg-floating-header {
+  border-color: rgba(55, 61, 74, 0.88);
+}
+
+.mode-liquid-glass .asg-floating-sidebar {
+  border-radius: 16px;
+  border: 1px solid rgba(229, 231, 235, 0.94);
+}
+.dark-theme.mode-liquid-glass .asg-floating-sidebar {
+  border-color: rgba(55, 61, 74, 0.88);
+}
+
+/* Draggable Liquid Glass Metaball Labels */
+.floating-pill-label {
+  position: fixed;
+  z-index: 30;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  user-select: none;
+  cursor: grab;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  color: var(--pill-text);
+  touch-action: none;
+  transition: opacity 0.2s ease;
+}
+.floating-pill-label:active {
+  cursor: grabbing;
+}
+.floating-pill-title {
+  font-size: 12px;
+  line-height: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.floating-pill-sub {
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 500;
+  color: var(--pill-sub);
+  white-space: nowrap;
+}
+
+.asg-btn-spring {
+  transition: transform 0.22s var(--spring-snappy), background-color 0.18s ease, box-shadow 0.2s ease;
+}
+.asg-btn-spring:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.asg-quiz-opt {
+  transition: transform 0.25s var(--spring-snappy), background-color 0.2s ease, border-color 0.2s ease;
+}
+.asg-quiz-opt:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--brand-primary);
+}
+.asg-quiz-opt.is-correct {
+  animation: springSnapCorrect 0.36s var(--spring-snappy) forwards;
+}
+.asg-quiz-opt.is-wrong {
+  animation: springTactileShake 0.38s var(--spring-tactile) forwards;
+}
+
+@keyframes springSnapCorrect {
+  0% { transform: scale(0.98); }
+  55% { transform: scale(1.015); }
+  100% { transform: scale(1); }
+}
+
+@keyframes springTactileShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-5px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+
+.asg-drawer-enter {
+  animation: springDrawerReveal 0.32s var(--spring-drawer) forwards;
+}
+
+@keyframes springDrawerReveal {
+  0% { opacity: 0; transform: translateY(10px) scale(0.99); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.markdown-body {
+  font-size: 15px;
+  line-height: 26px;
+  letter-spacing: 0.01em;
+}
+.asg-math-inline .katex {
+  font-size: 1.02em;
+}
+

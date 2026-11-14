@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import fitz  # PyMuPDF
 
 from app.parsers.ocr_engine import extract_text_from_image_vision
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
+
+OcrProgressCallback = Optional[Callable[[int, str, str], Awaitable[None]]]
 
 
 _HEADING_PATTERN = re.compile(
@@ -34,6 +36,7 @@ async def parse_pdf(
     project_id: str,
     assets_dir: Path,
     settings: RouterSettings,
+    progress_cb: OcrProgressCallback = None,
 ) -> DocumentIR:
     doc = fitz.open(str(file_path))
     total_pages = len(doc)
@@ -42,10 +45,16 @@ async def parse_pdf(
     all_assets: List[AssetItem] = []
     ocr_applied = False
 
+    if progress_cb:
+        await progress_cb(8, "ocr_init", f"已读取 PDF 共 {total_pages} 页，正在启动版面分析与 OCR 识别...")
+
     for page_idx in range(total_pages):
         page_num = page_idx + 1
         page = doc[page_idx]
         text = page.get_text("text").strip()
+        pct = 10 + int(78 * page_num / max(1, total_pages))
+        if progress_cb:
+            await progress_cb(pct, "ocr_scanning", f"正在解析第 {page_num}/{total_pages} 页文本与插图...")
 
         # Extract embedded images
         assets_here: List[AssetItem] = []
@@ -74,6 +83,13 @@ async def parse_pdf(
 
         # Scanned page detection: very little text -> render page and run OCR/VLM
         if len(text) < 35:
+            if progress_cb:
+                pct = 10 + int(78 * page_num / max(1, total_pages))
+                await progress_cb(
+                    pct,
+                    "ocr_vision",
+                    f"第 {page_num}/{total_pages} 页为扫描图像页，正在执行 OCR 识别（{settings.ocr_config.active_engine}）...",
+                )
             scan_filename = f"pdf_scan_p{page_num}.png"
             scan_path = assets_dir / scan_filename
             pix = page.get_pixmap(dpi=160)
@@ -212,6 +228,8 @@ async def parse_pdf(
 
     total_chars = sum(c.char_count for c in chapters)
     doc.close()
+    if progress_cb:
+        await progress_cb(100, "done", f"OCR 与章节切片完成！共识别 {len(chapters)} 个章节、{total_chars:,} 字。")
     return DocumentIR(
         project_id=project_id,
         filename=file_path.name,

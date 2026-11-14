@@ -1,0 +1,3363 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto Study Guidance · SkSL Liquid Glass × 现代学术风 v1.1（桌面端纯界面原型）</title>
+  <style>
+    /* =========================================================================
+       一、现代学术风 v1.1 色彩系统（叠加 SkSL 通透玻璃材质层）
+       ========================================================================= */
+    :root {
+      --bg-canvas: #FAF9F6;
+      --bg-surface: rgba(255, 255, 255, 0.74);
+      --bg-surface-solid: #FFFFFF;
+      --bg-subtle: rgba(243, 244, 246, 0.78);
+      --border-default: rgba(229, 231, 235, 0.95);
+
+      --text-primary: #111827;
+      --text-secondary: #4B5563;
+      --text-muted: #9CA3AF;
+
+      --brand-primary: #3B5BDB;
+      --brand-tint: rgba(237, 242, 255, 0.90);
+      --brand-alpha-10: rgba(59, 91, 219, 0.10);
+      --brand-alpha-22: rgba(59, 91, 219, 0.24);
+
+      --semantic-success: #2B8A3E;
+      --semantic-success-tint: rgba(235, 251, 238, 0.94);
+      --semantic-warning: #D97706;
+      --semantic-warning-tint: rgba(254, 243, 199, 0.94);
+      --semantic-highlight: rgba(250, 204, 21, 0.35);
+
+      --card-shadow: 0 4px 12px rgba(17, 24, 39, 0.04);
+      --modal-shadow: 0 24px 64px rgba(17, 24, 39, 0.16);
+      --code-bg: rgba(243, 244, 246, 0.88);
+      --pill-text: #111827;
+      --pill-sub: #4B5563;
+
+      /* 二、字体家族 */
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+      --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+
+      /* 三、4pt 基准间距与圆角 */
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 20px;
+      --sp-6: 24px;
+
+      --r-sm: 6px;
+      --r-md: 10px;
+      --r-lg: 16px;
+      --r-pill: 9999px;
+    }
+
+    html[data-theme="dark"] {
+      --bg-canvas: #121316;
+      --bg-surface: rgba(28, 30, 34, 0.72);
+      --bg-surface-solid: #1C1E22;
+      --bg-subtle: rgba(38, 41, 48, 0.78);
+      --border-default: rgba(55, 61, 74, 0.88);
+
+      --text-primary: #E5E7EB;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+
+      --brand-primary: #5C7CFA;
+      --brand-tint: rgba(30, 41, 59, 0.90);
+      --brand-alpha-10: rgba(92, 124, 250, 0.16);
+      --brand-alpha-22: rgba(92, 124, 250, 0.34);
+
+      --semantic-success: #40C057;
+      --semantic-success-tint: rgba(27, 56, 36, 0.92);
+      --semantic-warning: #F59E0B;
+      --semantic-warning-tint: rgba(59, 46, 23, 0.92);
+      --semantic-highlight: rgba(234, 179, 8, 0.25);
+
+      --card-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+      --modal-shadow: 0 28px 72px rgba(0, 0, 0, 0.56);
+      --code-bg: rgba(38, 41, 48, 0.90);
+      --pill-text: #F9FAFB;
+      --pill-sub: #CBD5E1;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      overflow: hidden;
+    }
+
+    button {
+      font-family: inherit;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    /* Typography Type Scale (Section II) */
+    .t-h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 32px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+    .t-h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 26px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+    .t-h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 24px;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--text-primary);
+    }
+    .t-body {
+      margin: 0;
+      font-size: 15px;
+      line-height: 26px; /* 1.73x line-height */
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      color: var(--text-primary);
+    }
+    .t-small {
+      margin: 0;
+      font-size: 14px;
+      line-height: 22px;
+      font-weight: 400;
+      letter-spacing: 0;
+      color: var(--text-secondary);
+    }
+    .t-caption {
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      color: var(--text-muted);
+    }
+    .mono {
+      font-family: var(--font-mono);
+    }
+
+    /* Fullscreen Two-Pass SkSL Shader / CPU Software Rasterizer Canvases */
+    #glCanvas, #fallbackCanvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      z-index: 0;
+      pointer-events: none;
+    }
+    #fallbackCanvas { display: none; }
+    body.cpu-fallback #glCanvas { display: none; }
+    body.cpu-fallback #fallbackCanvas { display: block; }
+
+    /* Draggable Liquid Glass Metaball Labels (Pass 2B layer) */
+    .floating-pill-label {
+      position: fixed;
+      z-index: 30;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      user-select: none;
+      cursor: grab;
+      padding: 6px 14px;
+      border-radius: var(--r-pill);
+      color: var(--pill-text);
+      touch-action: none;
+    }
+    .floating-pill-label:active { cursor: grabbing; }
+    .floating-pill-title {
+      font-size: 12px;
+      line-height: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+    .floating-pill-sub {
+      font-size: 10px;
+      line-height: 13px;
+      font-weight: 500;
+      color: var(--pill-sub);
+      white-space: nowrap;
+    }
+
+    /* Desktop App Shell & Export Modal Depth Recession Wrapper */
+    .workbench-stage {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      max-width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 10px 14px 12px;
+      gap: 8px;
+      overflow: hidden;
+      transform-origin: center center;
+      will-change: transform, border-radius, filter;
+    }
+
+    /* Glass Surfaces (DOM complements underlying SkSL Pass 2A refraction with v1.1 borders) */
+    .glass-bar, .glass-sidebar, .glass-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      box-shadow: var(--card-shadow);
+    }
+
+    /* Top Header Bar (54px) */
+    .top-header {
+      flex-shrink: 0;
+      height: 54px;
+      padding: 0 12px;
+      border-radius: var(--r-lg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--r-sm);
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      font-weight: 700;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .notebook-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .notebook-name {
+      font-size: 13.5px;
+      line-height: 17px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .icon-btn {
+      height: 30px;
+      padding: 0 9px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+    .icon-btn:hover {
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+    }
+    .icon-btn.active {
+      background: var(--brand-tint);
+      border-color: var(--brand-alpha-22);
+      color: var(--brand-primary);
+    }
+
+    /* Segmented Control (spring-snappy indicator) */
+    .segmented {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      padding: 3px;
+      border-radius: var(--r-md);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .seg-indicator {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      height: calc(100% - 6px);
+      border-radius: 7px;
+      background: var(--bg-surface-solid);
+      border: 1px solid var(--border-default);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+      pointer-events: none;
+      will-change: transform;
+      z-index: 0;
+    }
+    .seg-btn {
+      position: relative;
+      z-index: 1;
+      height: 26px;
+      padding: 0 11px;
+      border: none;
+      background: transparent;
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .seg-btn.active {
+      color: var(--brand-primary);
+      font-weight: 600;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .preview-switch-badge {
+      height: 30px;
+      padding: 0 9px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--brand-alpha-22);
+      background: var(--brand-alpha-10);
+      color: var(--brand-primary);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .preview-switch-badge:hover {
+      background: var(--brand-alpha-22);
+    }
+    .btn-export {
+      height: 32px;
+      padding: 0 13px;
+      border-radius: var(--r-md);
+      border: none;
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      font-size: 12.5px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(59, 91, 219, 0.24);
+    }
+    .btn-export:hover { filter: brightness(1.06); }
+
+    /* Optical Control & Spring Telemetry Strip (44px) */
+    .optics-bar {
+      flex-shrink: 0;
+      height: 44px;
+      padding: 0 12px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .optics-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      flex-shrink: 0;
+    }
+    .sksl-tag {
+      padding: 2px 8px;
+      border-radius: var(--r-sm);
+      background: var(--brand-alpha-10);
+      color: var(--brand-primary);
+      border: 1px solid var(--brand-alpha-22);
+      font-size: 11.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .sliders-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .slider-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .slider-item input[type="range"] {
+      width: 64px;
+      accent-color: var(--brand-primary);
+      cursor: pointer;
+    }
+    .slider-val {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--brand-primary);
+      min-width: 28px;
+    }
+    .optics-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .status-chip {
+      padding: 3px 9px;
+      border-radius: var(--r-pill);
+      font-size: 11.5px;
+      font-weight: 600;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+    .status-chip.gpu {
+      background: var(--semantic-success-tint);
+      color: var(--semantic-success);
+      border-color: rgba(43, 138, 62, 0.25);
+    }
+    .telemetry-chip {
+      padding: 3px 9px;
+      border-radius: var(--r-pill);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      max-width: 310px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Offline Notice Banner */
+    .offline-banner {
+      display: none;
+      flex-shrink: 0;
+      padding: 6px 14px;
+      border-radius: var(--r-md);
+      background: var(--semantic-warning-tint);
+      border: 1px solid rgba(217, 119, 6, 0.28);
+      color: var(--semantic-warning);
+      font-size: 12px;
+      font-weight: 500;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .offline-banner.visible { display: flex; }
+
+    /* =========================================================================
+       四、桌面端三栏工作台布局（260px + max-width: 760px + 320px）
+       ========================================================================= */
+    .workbench-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      gap: 12px;
+      width: 100%;
+      overflow: hidden;
+    }
+
+    .left-sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      border-radius: var(--r-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.26s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, margin 0.26s ease;
+    }
+    .left-sidebar.collapsed {
+      width: 0;
+      border-width: 0;
+      opacity: 0;
+      margin-right: -12px;
+      pointer-events: none;
+    }
+
+    .right-sidebar {
+      width: 320px;
+      flex-shrink: 0;
+      border-radius: var(--r-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin-bottom: 64px; /* exposes 320x64 warm-paper dock below sidebar for Pass 2B metaball pills */
+      transition: width 0.26s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, margin 0.26s ease;
+    }
+    .right-sidebar.closed {
+      width: 0;
+      border-width: 0;
+      opacity: 0;
+      margin-left: -12px;
+      pointer-events: none;
+    }
+
+    .sidebar-head {
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .sidebar-footer {
+      padding: 12px 14px;
+      border-top: 1px solid var(--border-default);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .source-item {
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      background: var(--bg-surface);
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .source-item:hover { background: var(--bg-subtle); }
+    .source-item.checked {
+      background: var(--brand-tint);
+      border-color: var(--brand-alpha-22);
+    }
+    .source-checkbox {
+      width: 16px;
+      height: 16px;
+      border-radius: var(--r-sm);
+      border: 1.5px solid var(--border-default);
+      background: var(--bg-surface-solid);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #FFFFFF;
+    }
+    .source-item.checked .source-checkbox {
+      background: var(--brand-primary);
+      border-color: var(--brand-primary);
+    }
+
+    /* Center Main Workbench */
+    .center-main {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 4px 6px 40px;
+    }
+    .center-inner {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .glass-card {
+      border-radius: var(--r-lg);
+      padding: 24px;
+    }
+
+    .tab-pane {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .tab-pane.active {
+      display: flex;
+    }
+
+    /* =========================================================================
+       五、核心业务组件：角标、笔记、练习状态机、键盘闪卡、生成骨架屏
+       ========================================================================= */
+    .cite-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      border-radius: var(--r-sm);
+      background: var(--brand-alpha-10);
+      color: var(--brand-primary);
+      border: 1px solid transparent;
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      vertical-align: baseline;
+      margin: 0 2px;
+      will-change: transform;
+    }
+    .cite-badge:hover {
+      background: var(--brand-alpha-22);
+      border-color: var(--brand-alpha-22);
+    }
+
+    mark.hl {
+      background: var(--semantic-highlight);
+      color: inherit;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .scroll-block {
+      width: 100%;
+      overflow-x: auto;
+      padding: 12px 16px;
+      border-radius: var(--r-md);
+      background: var(--code-bg);
+      border: 1px solid var(--border-default);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 22px;
+      white-space: pre;
+      color: var(--text-primary);
+    }
+
+    .btn-primary {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: var(--r-md);
+      border: none;
+      background: var(--brand-primary);
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-secondary {
+      height: 32px;
+      padding: 0 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-secondary:hover { background: var(--bg-subtle); color: var(--text-primary); }
+
+    /* Prompt Preset Pills */
+    .pill-group-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .pill-group-row::-webkit-scrollbar { display: none; }
+    .pill-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .prompt-pill {
+      padding: 5px 12px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .prompt-pill:hover { background: var(--bg-subtle); color: var(--text-primary); }
+    .prompt-pill.selected {
+      background: var(--brand-tint);
+      border-color: var(--brand-primary);
+      color: var(--brand-primary);
+      font-weight: 600;
+    }
+
+    @keyframes shimmerMove {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .shimmer-card { display: none; flex-direction: column; gap: 12px; }
+    .shimmer-card.active { display: flex; }
+    .shimmer-line {
+      height: 14px;
+      border-radius: var(--r-sm);
+      background: linear-gradient(90deg, var(--bg-subtle) 25%, var(--border-default) 50%, var(--bg-subtle) 75%);
+      background-size: 200% 100%;
+      animation: shimmerMove 1.4s infinite linear;
+    }
+
+    /* Interactive Quiz State Machine */
+    .quiz-progress-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px;
+    }
+    .quiz-track {
+      flex: 1;
+      height: 6px;
+      border-radius: var(--r-pill);
+      background: var(--bg-subtle);
+      overflow: hidden;
+    }
+    .quiz-fill {
+      height: 100%;
+      border-radius: var(--r-pill);
+      background: var(--brand-primary);
+      transition: width 0.25s ease;
+    }
+    .quiz-card {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      will-change: transform, opacity;
+    }
+    .options-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .option-btn {
+      width: 100%;
+      text-align: left;
+      padding: 12px 16px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      will-change: transform;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .option-btn:hover:not(:disabled) {
+      background: var(--bg-subtle);
+      border-color: var(--brand-alpha-22);
+    }
+    .option-btn.state-correct {
+      background: var(--semantic-success-tint);
+      border-color: var(--semantic-success);
+    }
+    .option-btn.state-wrong {
+      background: var(--semantic-warning-tint);
+      border-color: var(--semantic-warning);
+    }
+    .opt-letter {
+      width: 24px;
+      height: 24px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .option-btn.state-correct .opt-letter {
+      background: var(--semantic-success);
+      border-color: var(--semantic-success);
+      color: #FFFFFF;
+    }
+    .option-btn.state-wrong .opt-letter {
+      background: var(--semantic-warning);
+      border-color: var(--semantic-warning);
+      color: #FFFFFF;
+    }
+    .ai-drawer {
+      display: none;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      padding: 16px;
+      flex-direction: column;
+      gap: 12px;
+      transform-origin: top center;
+      will-change: transform, opacity;
+    }
+    .ai-drawer.open { display: flex; }
+
+    /* =========================================================================
+       桌面端键盘控制 3D 抽认卡（← 需复习 · Space 翻转 · → 已掌握，移除拖拽划卡）
+       ========================================================================= */
+    .flashcard-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      padding: 4px 0 20px;
+    }
+    .card-stack-wrap {
+      position: relative;
+      width: 315px;
+      height: 420px; /* strict 3:4 stack */
+      perspective: 1200px;
+      user-select: none;
+    }
+    .card-peek-under {
+      position: absolute;
+      inset: 8px 10px -8px 10px;
+      border-radius: var(--r-lg);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      box-shadow: var(--card-shadow);
+      z-index: 0;
+    }
+    .flashcard-carrier {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      will-change: transform, opacity;
+      cursor: pointer;
+    }
+    .flashcard-flipper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      will-change: transform, opacity;
+    }
+    .flashcard-face {
+      position: absolute;
+      inset: 0;
+      background: var(--bg-surface-solid);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-lg);
+      box-shadow: var(--card-shadow);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+    .flashcard-front {
+      transform: none;
+    }
+    .flashcard-back {
+      transform: none;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .stamp {
+      position: absolute;
+      top: 18px;
+      padding: 4px 10px;
+      border-radius: var(--r-sm);
+      font-size: 13px;
+      font-weight: 700;
+      border: 2px solid;
+      opacity: 0;
+      pointer-events: none;
+      letter-spacing: 0.04em;
+      z-index: 5;
+    }
+    .stamp-review {
+      left: 18px;
+      color: var(--semantic-warning);
+      border-color: var(--semantic-warning);
+      background: var(--semantic-warning-tint);
+      transform: rotate(-8deg);
+    }
+    .stamp-mastered {
+      right: 18px;
+      color: var(--semantic-success);
+      border-color: var(--semantic-success);
+      background: var(--semantic-success-tint);
+      transform: rotate(8deg);
+    }
+
+    .kbd-control-dock {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .kbd-btn {
+      height: 38px;
+      padding: 0 14px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      will-change: transform;
+      transition: background-color 0.14s ease, border-color 0.14s ease;
+    }
+    .kbd-btn:hover { background: var(--bg-subtle); }
+    .keycap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 24px;
+      height: 22px;
+      padding: 0 6px;
+      border-radius: var(--r-sm);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      box-shadow: 0 1px 0 var(--border-default);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    /* Empty State & Sample Packs */
+    .empty-dropzone {
+      border: 2px dashed var(--border-default);
+      border-radius: var(--r-lg);
+      padding: 36px 24px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .sample-packs-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .sample-pack-card {
+      text-align: left;
+      padding: 16px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sample-pack-card:hover {
+      border-color: var(--brand-primary);
+      background: var(--brand-tint);
+    }
+
+    /* Right Copilot & Source Viewer */
+    .source-excerpt-card {
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      background: var(--bg-subtle);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      will-change: transform;
+    }
+    .copilot-bubble {
+      border-radius: var(--r-md);
+      padding: 10px 12px;
+      background: var(--bg-surface-solid);
+      border: 1px solid var(--border-default);
+      font-size: 13px;
+      line-height: 20px;
+      color: var(--text-primary);
+    }
+
+    /* Export Modal & Mini A4 Preview */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.42);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 80;
+    }
+    .modal-backdrop.open { display: flex; }
+    .export-modal {
+      width: 100%;
+      max-width: 840px;
+      max-height: 90vh;
+      background: var(--bg-surface-solid);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-lg);
+      box-shadow: var(--modal-shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      will-change: transform, opacity;
+    }
+    .export-body {
+      padding: 20px 24px 24px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
+    }
+    .format-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .format-card {
+      text-align: left;
+      padding: 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .format-card.active {
+      background: var(--brand-tint);
+      border-color: var(--brand-primary);
+    }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-canvas);
+    }
+    .toggle-switch {
+      width: 38px;
+      height: 22px;
+      border-radius: var(--r-pill);
+      background: var(--border-default);
+      border: none;
+      position: relative;
+      padding: 2px;
+      flex-shrink: 0;
+    }
+    .toggle-switch[aria-checked="true"] { background: var(--brand-primary); }
+    .toggle-knob {
+      display: block;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      transition: transform 0.16s ease;
+    }
+    .toggle-switch[aria-checked="true"] .toggle-knob { transform: translateX(16px); }
+
+    .a4-preview-well {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-default);
+      border-radius: var(--r-md);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .a4-sheet {
+      width: 100%;
+      max-width: 248px;
+      min-height: 332px;
+      background: #FFFFFF;
+      color: #111827;
+      border: 1px solid #D1D5DB;
+      border-radius: 4px;
+      padding: 14px 16px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+      font-size: 10px;
+      line-height: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .a4-q-item { border-top: 1px dashed #E5E7EB; padding-top: 6px; }
+    .a4-answer-box {
+      margin-top: 4px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      background: #EBFBEE;
+      color: #2B8A3E;
+      font-size: 9px;
+      line-height: 13px;
+    }
+    .a4-blank-lines {
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding-top: 3px;
+    }
+    .a4-blank-line { height: 1px; background: #CBD5E1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .shimmer-line { animation: none; }
+      * { transition-duration: 0.08s !important; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Pass 2 GPU WebGL / CPU Fallback Fullscreen Canvases (Zero cursor glass droplet) -->
+  <canvas id="glCanvas"></canvas>
+  <canvas id="fallbackCanvas"></canvas>
+
+  <!-- Two Draggable Bottom-Right Liquid Glass Metaball Pills (Pass 2B layer) -->
+  <div id="pillLabel0" class="floating-pill-label" title="按住拖拽液态玻璃主胶囊体验 smin 融球融合">
+    <span class="floating-pill-title">Liquid Glass</span>
+    <span class="floating-pill-sub">按住拖拽 · SkSL 融球</span>
+  </div>
+  <div id="pillLabel1" class="floating-pill-label" title="拖拽靠近主胶囊即可融合出张力液桥">
+    <span class="floating-pill-title">◎ 键盘闪卡</span>
+  </div>
+
+  <!-- Desktop Workbench Stage (supports spring-drawer scale: 0.96 recession on modal open) -->
+  <div id="workbenchStage" class="workbench-stage">
+
+    <!-- TOPBAR -->
+    <header class="top-header glass-bar" data-glass-panel="topbar" data-radius="16" data-bezel="22" data-darkmix="0.32">
+      <div class="header-left">
+        <button id="toggleLeftBtn" class="icon-btn" title="折叠/展开左侧资料源栏">☰ 资料源</button>
+        <span class="brand-mark">A</span>
+        <div class="notebook-meta">
+          <span id="notebookTitle" class="notebook-name">深度学习核心架构 · 专题笔记本</span>
+          <span class="t-caption">Modern Academic v1.1 × SkSL Liquid Glass</span>
+        </div>
+      </div>
+
+      <div id="desktopSegmented" class="segmented" role="tablist" aria-label="核心工作台视图">
+        <div id="desktopSegIndicator" class="seg-indicator"></div>
+        <button class="seg-btn active" data-tab="notes">结构化笔记</button>
+        <button class="seg-btn" data-tab="quiz">在线练习</button>
+        <button class="seg-btn" data-tab="flashcards">抽认卡 (键盘)</button>
+        <button class="seg-btn" data-tab="empty">空白态引导</button>
+      </div>
+
+      <div class="header-right">
+        <button id="themeBtn" class="icon-btn" title="切换暖米白纸张 / 深炭夜读画布">☀ 浅色</button>
+        <button id="reducedMotionBtn" class="icon-btn" title="减弱动态效果 prefers-reduced-motion">◌ 动效</button>
+        <button id="offlineBtn" class="icon-btn" title="模拟离线容错缓存">✈ 在线</button>
+        <button id="toggleRightBtn" class="icon-btn active" title="展开/收起右侧 AI 追问与溯源栏">✦ 溯源栏</button>
+        <a class="preview-switch-badge" href="./academic_v1_1_preview.html" title="切换到纯学术风 v1.1 规范原稿">📘 规范纯享版</a>
+        <button id="openExportBtn" class="btn-export">导出 ↗</button>
+      </div>
+    </header>
+
+    <!-- SkSL OPTICAL CONTROL & SPRING TELEMETRY STRIP -->
+    <section class="optics-bar glass-bar" data-glass-panel="optics" data-radius="14" data-bezel="18" data-darkmix="0.34">
+      <div class="optics-left">
+        <span class="sksl-tag">SkSL 光学</span>
+        <div class="sliders-row">
+          <div class="slider-item">
+            <label for="iorRange">IOR</label>
+            <input id="iorRange" type="range" min="1.00" max="2.50" step="0.01" value="1.46" />
+            <span id="iorVal" class="slider-val">1.46</span>
+          </div>
+          <div class="slider-item">
+            <label for="dispRange">色散</label>
+            <input id="dispRange" type="range" min="0.00" max="1.00" step="0.01" value="0.35" />
+            <span id="dispVal" class="slider-val">0.35</span>
+          </div>
+          <div class="slider-item">
+            <label for="smoothKRange">融球 K</label>
+            <input id="smoothKRange" type="range" min="0" max="90" step="1" value="30" />
+            <span id="smoothKVal" class="slider-val">30</span>
+          </div>
+          <div class="slider-item">
+            <label for="blurRange">磨砂</label>
+            <input id="blurRange" type="range" min="0.00" max="1.00" step="0.01" value="0.35" />
+            <span id="blurVal" class="slider-val">0.35</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="optics-right">
+        <span id="backendStatus" class="status-chip gpu">SkSL · WebGL GPU 硬件加速</span>
+        <button id="toggleEngineBtn" class="icon-btn" style="height:26px;padding:0 8px;">⚡ GPU/CPU</button>
+        <button id="resetPillsBtn" class="icon-btn" style="height:26px;padding:0 8px;">↺ 复位胶囊</button>
+        <span id="telemetryText" class="telemetry-chip">Spring Ready · 无光标跟随玻璃</span>
+      </div>
+    </section>
+
+    <!-- OFFLINE NOTICE BANNER -->
+    <div id="offlineBanner" class="offline-banner">
+      <span>⚠ 已进入离线容错模式：已加载题目支持继续作答，错题记录与闪卡进度已缓存在本地（恢复网络后自动同步）。</span>
+      <button id="restoreOnlineBtn" class="btn-secondary">恢复在线同步</button>
+    </div>
+
+    <!-- DESKTOP THREE-COLUMN WORKBENCH BODY -->
+    <div class="workbench-body">
+
+      <!-- LEFT COLUMN (260px): Sources Management -->
+      <aside id="leftSidebar" class="left-sidebar glass-sidebar" data-glass-panel="sidebar-left" data-radius="16" data-bezel="22" data-darkmix="0.38" aria-label="资料源管理">
+        <div class="sidebar-head">
+          <div>
+            <div class="t-h3" style="font-size:14px;">资料源管理 (Sources)</div>
+            <div id="sourceScopeCount" class="t-caption">已勾选 3 / 3 份范围</div>
+          </div>
+          <button id="sidebarEmptyBtn" class="btn-secondary" style="height:26px;padding:0 8px;">清空</button>
+        </div>
+        <div id="sourcesList" class="sidebar-scroll"></div>
+        <div class="sidebar-footer">
+          <div class="t-caption">复选框实时控制当前笔记溯源与出题范围</div>
+          <button id="selectAllSourcesBtn" class="btn-secondary" style="width:100%;justify-content:center;">全选当前笔记本资料源</button>
+        </div>
+      </aside>
+
+      <!-- CENTER MAIN WORKBENCH (max-width: 760px centered reading line) -->
+      <main id="centerMain" class="center-main">
+        <div class="center-inner">
+
+          <!-- VIEW 1: STRUCTURED NOTES -->
+          <section id="pane-notes" class="tab-pane active">
+            <div class="glass-card" data-glass-panel="note-hero" data-radius="16" data-bezel="24" data-darkmix="0.40" style="display:flex;flex-direction:column;gap:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <span class="t-caption" style="color:var(--brand-primary);background:var(--brand-tint);padding:3px 10px;border-radius:var(--r-pill);">阶段 2 · 现代学术导学精读</span>
+                <span class="t-caption mono">Body 15px / 26px (1.73×) · SkSL Refracted Glass</span>
+              </div>
+              <h1 class="t-h1">深度学习核心架构：梯度传播、自注意力与训练稳定性</h1>
+              <p class="t-body">
+                在深层前馈网络与序列建模过程中，非线性激活函数与归一化路径直接决定反向传播是否会陷入数值退化。
+                <mark class="hl">ReLU 在正半轴导数恒为 1，能够显著缓解深层网络的梯度消失现象</mark>
+                <button class="cite-badge" data-cite="c1">[来源1 p.4]</button>，
+                而 Sigmoid 在两端饱和区的导数接近于零，经链式法则连乘后易导致浅层参数更新停滞
+                <button class="cite-badge" data-cite="c2">[PDF p.12]</button>。
+              </p>
+            </div>
+
+            <div class="glass-card" data-glass-panel="note-attn" data-radius="16" data-bezel="24" data-darkmix="0.40" style="display:flex;flex-direction:column;gap:14px;">
+              <h2 class="t-h2">一、Scaled Dot-Product Attention 缩放与归一化</h2>
+              <p class="t-body">
+                在多头自注意力计算中，点积 <span class="mono">QKᵀ</span> 的方差随向量维度 <span class="mono">d_k</span> 线性放大。
+                通过除以缩放因子 <span class="mono">√d_k</span>，logits 分布方差归一化为 1，从而保护 Softmax 处于梯度灵敏区间
+                <button class="cite-badge" data-cite="c3">[来源2 p.19]</button>。
+              </p>
+              <div class="scroll-block" aria-label="数学公式与代码防溢出容器">Attention(Q, K, V) = softmax( (Q · Kᵀ) / √d_k + Mask_causal ) · V
+
+scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)   # Var(q·k / √d_k) == 1.0</div>
+              <p class="t-small">
+                公式与代码块已配置 <span class="mono">overflow-x: auto</span> 保护；右下角可拖拽 <span class="mono">Liquid Glass</span> 融球胶囊可移到左侧纸张网格上方观察折射色散。
+              </p>
+            </div>
+
+            <div class="glass-card" data-glass-panel="note-resnet" data-radius="16" data-bezel="24" data-darkmix="0.40" style="display:flex;flex-direction:column;gap:14px;">
+              <h2 class="t-h2">二、残差恒等通路与 Pre-LayerNorm 结构</h2>
+              <p class="t-body">
+                残差连接构造 <span class="mono">y = F(x) + x</span> 为梯度回传建立低阻高速通道
+                <button class="cite-badge" data-cite="c2">[PDF p.12]</button>；
+                结合 <mark class="hl">Pre-LayerNorm</mark> 将归一化移入子层分支，能明显提升深层 Transformer 收敛稳定性
+                <button class="cite-badge" data-cite="c3">[来源2 p.19]</button>。
+              </p>
+              <div style="display:flex;gap:10px;padding-top:4px;flex-wrap:wrap;">
+                <button id="jumpToQuizBtn" class="btn-primary">进入互动练习状态机 →</button>
+                <button id="jumpToFlashBtn" class="btn-secondary">⌨ 打开键盘控制 3D 闪卡</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- VIEW 2: INTERACTIVE QUIZ STATE MACHINE -->
+          <section id="pane-quiz" class="tab-pane">
+            <div class="glass-card" data-glass-panel="quiz-gen" data-radius="16" data-bezel="22" data-darkmix="0.38" style="display:flex;flex-direction:column;gap:12px;">
+              <div class="pill-group-row">
+                <span class="pill-label">题型预设</span>
+                <button class="prompt-pill selected" data-pill-group="qtype">混合题型</button>
+                <button class="prompt-pill" data-pill-group="qtype">仅单选</button>
+                <button class="prompt-pill" data-pill-group="qtype">抽认卡</button>
+                <button class="prompt-pill" data-pill-group="qtype">简答题</button>
+              </div>
+              <div class="pill-group-row">
+                <span class="pill-label">难度分层</span>
+                <button class="prompt-pill selected" data-pill-group="diff">基础巩固</button>
+                <button class="prompt-pill" data-pill-group="diff">高频易错</button>
+                <button class="prompt-pill" data-pill-group="diff">深度推理</button>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <span id="genStatusText" class="t-small">点击选项即时判分：答对绿框缩放回弹；答错微抖变琥珀橙并展开 AI 解析抽屉</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <button id="resetQuizBtn" class="btn-secondary">重置作答</button>
+                  <button id="aiGenBtn" class="btn-primary">✨ 生成练习</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="shimmerCard" class="glass-card shimmer-card">
+              <span id="shimmerMicroCopy" class="t-caption" style="color:var(--brand-primary);">1. 正在分析 3 份文档结构...</span>
+              <div class="shimmer-line" style="width:70%;"></div>
+              <div class="shimmer-line" style="width:94%;"></div>
+              <div class="shimmer-line" style="width:82%;"></div>
+            </div>
+
+            <div class="glass-card quiz-progress-card" data-glass-panel="quiz-prog" data-radius="16" data-bezel="18" data-darkmix="0.36">
+              <div>
+                <div class="t-h3" style="font-size:14px;">在线同步练习 · 实时状态机</div>
+                <div id="quizProgressLabel" class="t-caption mono">已作答 0 / 3 题 · 错题本 0 题</div>
+              </div>
+              <div class="quiz-track"><div id="quizProgressFill" class="quiz-fill" style="width:0%;"></div></div>
+            </div>
+
+            <div id="quizContainer" style="display:flex;flex-direction:column;gap:20px;"></div>
+          </section>
+
+          <!-- VIEW 3: DESKTOP KEYBOARD-CONTROLLED 3D FLASHCARD -->
+          <section id="pane-flashcards" class="tab-pane">
+            <div class="glass-card" data-glass-panel="flash-head" data-radius="16" data-bezel="20" data-darkmix="0.38" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+              <div>
+                <h2 class="t-h2">记忆抽认卡 · 桌面端键盘高效操作（无滑动划卡）</h2>
+                <p class="t-small">按 <span class="mono">←</span> 标记「需复习」、按 <span class="mono">→</span> 标记「已掌握」、按 <span class="mono">Space</span>（或点击卡片）执行 <span class="mono">spring-card</span> 180° 翻转</p>
+              </div>
+              <span id="flashStats" class="t-caption mono" style="color:var(--brand-primary);background:var(--brand-tint);padding:4px 10px;border-radius:var(--r-pill);">第 1 / 4 张 · 已掌握 0 · 需复习 0</span>
+            </div>
+
+            <div class="flashcard-stage">
+              <div class="card-stack-wrap" id="flashStackWrap">
+                <div class="card-peek-under" aria-hidden="true"></div>
+                <div id="flashCarrier" class="flashcard-carrier" tabindex="0" role="button" aria-label="抽认卡，按空格或点击翻转，按左右方向键判定">
+                  <div id="flashFlipper" class="flashcard-flipper">
+                    <div class="flashcard-face flashcard-front">
+                      <span id="stampReview" class="stamp stamp-review">需复习 (←)</span>
+                      <span id="stampMastered" class="stamp stamp-mastered">已掌握 (→)</span>
+                      <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span class="t-caption" style="color:var(--brand-primary);">正面 · 核心概念提问</span>
+                        <span class="t-caption mono" id="flashCardIndexBadge">1 / 4</span>
+                      </div>
+                      <div style="margin:auto 0;display:flex;flex-direction:column;gap:12px;">
+                        <h3 id="flashFrontTitle" class="t-h2" style="font-size:20px;line-height:28px;">为什么 Transformer 自注意力需要除以 √d_k？</h3>
+                        <p id="flashFrontHint" class="t-small">提示：从向量内积的方差缩放与 Softmax 梯度区分析</p>
+                      </div>
+                      <div class="t-caption" style="text-align:center;">键盘 <span class="mono">[Space]</span> 翻转 · <span class="mono">[←]</span> 需复习 · <span class="mono">[→]</span> 已掌握</div>
+                    </div>
+                    <div class="flashcard-face flashcard-back">
+                      <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span class="t-caption" style="color:var(--semantic-success);">背面 · 核心定义与溯源</span>
+                        <button id="flashBackCiteBtn" class="cite-badge" data-cite="c3">[来源2 p.19]</button>
+                      </div>
+                      <div style="margin:auto 0;display:flex;flex-direction:column;gap:12px;">
+                        <p id="flashBackBody" class="t-body">假设 Q、K 各分量为零均值、单位方差独立随机变量，点积方差会放大至 d_k。除以 √d_k 后方差恢复为 1，防止 Softmax 梯度消失。</p>
+                        <div id="flashBackFormula" class="scroll-block">Var(∑ qᵢ·kᵢ) = d_k  ⇒  Var(q·k / √d_k) = 1</div>
+                      </div>
+                      <div class="t-caption" style="text-align:center;">按 <span class="mono">[←]</span> / <span class="mono">[→]</span> 直接切至下一张</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="kbd-control-dock">
+                <button id="markReviewBtn" class="kbd-btn" style="color:var(--semantic-warning);border-color:rgba(217,119,6,0.35);">
+                  <span class="keycap">←</span> 需复习
+                </button>
+                <button id="flipCardBtn" class="kbd-btn">
+                  <span class="keycap">Space</span> 180° 翻转卡片
+                </button>
+                <button id="markMasteredBtn" class="kbd-btn" style="color:var(--semantic-success);border-color:rgba(43,138,62,0.35);">
+                  已掌握 <span class="keycap">→</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- VIEW 4: EMPTY STATE -->
+          <section id="pane-empty" class="tab-pane">
+            <div class="glass-card empty-dropzone" data-glass-panel="empty-drop" data-radius="16" data-bezel="22" data-darkmix="0.38">
+              <div style="width:48px;height:48px;border-radius:var(--r-pill);background:var(--brand-tint);color:var(--brand-primary);display:flex;align-items:center;justify-content:center;font-size:20px;">📄</div>
+              <h2 class="t-h2">新建学术笔记本 · 尚未导入资料源</h2>
+              <p class="t-small" style="max-width:460px;">将课本 PDF、PPTX 讲义或研究笔记拖拽到此处，AI 将自动生成结构化精读笔记、原文溯源角标与互动分层练习题。</p>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
+                <button id="mockUploadBtn" class="btn-primary">+ 导入本地课件</button>
+                <button id="restoreDefaultPackBtn" class="btn-secondary">还原默认深度学习笔记本</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="t-h3" style="margin-bottom:12px;">一键体验示例学习包（5 秒体验完整闭环）</div>
+              <div class="sample-packs-grid">
+                <button class="sample-pack-card glass-card" data-sample="macro" style="padding:16px;">
+                  <span class="t-caption" style="color:var(--brand-primary);">经济学 · 2 份讲义</span>
+                  <span class="t-h3">《宏观经济学核心概念》</span>
+                  <span class="t-small">IS-LM 模型、菲利普斯曲线与货币传导</span>
+                </button>
+                <button class="sample-pack-card glass-card" data-sample="anatomy" style="padding:16px;">
+                  <span class="t-caption" style="color:var(--semantic-success);">医学 · 2 份图谱</span>
+                  <span class="t-h3">《人体解剖学基础》</span>
+                  <span class="t-small">心血管循环通路与颅神经分支记忆</span>
+                </button>
+                <button class="sample-pack-card glass-card" data-sample="dl" style="padding:16px;">
+                  <span class="t-caption" style="color:var(--semantic-warning);">计算机 · 3 份论文</span>
+                  <span class="t-h3">《深度学习核心架构》</span>
+                  <span class="t-small">ReLU 梯度、Scaled Attention 与 ResNet</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+
+      <!-- RIGHT COLUMN (320px): Copilot & Source Viewer -->
+      <aside id="rightSidebar" class="right-sidebar glass-sidebar" data-glass-panel="sidebar-right" data-radius="16" data-bezel="22" data-darkmix="0.38" aria-label="AI 追问与溯源预览">
+        <div class="sidebar-head">
+          <div>
+            <div class="t-h3" style="font-size:14px;">AI 追问与溯源预览</div>
+            <div class="t-caption">点击任意角标自动荧光高亮原文</div>
+          </div>
+          <button id="closeRightBtn" class="icon-btn" style="height:26px;padding:0 8px;">✕</button>
+        </div>
+        <div class="sidebar-scroll" style="padding:14px;">
+          <div id="sourceViewerCard" class="source-excerpt-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+              <span id="citeSourceName" class="t-caption" style="color:var(--brand-primary);font-weight:600;">[来源1 p.4] 深度学习核心架构讲义</span>
+              <span class="t-caption mono">匹配 98%</span>
+            </div>
+            <p id="citeSourceBody" class="t-small" style="color:var(--text-primary);line-height:22px;">
+              节选原文：在深层前馈网络反向传播阶段，<mark class="hl">ReLU(x) = max(0, x) 在 x &gt; 0 区域导数恒等于 1</mark>，避免了连乘效应导致的指数级梯度衰减；Sigmoid 函数最大导数仅为 0.25，层数较深时极易触发梯度消失。
+            </p>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+            <div class="t-h3" style="font-size:13px;">Copilot 随堂追问</div>
+            <div id="copilotThread" style="display:flex;flex-direction:column;gap:8px;">
+              <div class="copilot-bubble">
+                已就当前勾选资料源建立局部索引。点击正文中 <span class="mono">[来源]</span> 角标可即刻定位页码与原文荧光切片。
+              </div>
+            </div>
+            <button class="btn-secondary copilot-prompt-btn" data-q="为什么 Sigmoid 导数最大只有 0.25？" style="justify-content:flex-start;">↳ 为什么 Sigmoid 导数最大只有 0.25？</button>
+            <button class="btn-secondary copilot-prompt-btn" data-q="对比 Pre-LN 和 Post-LN 的收敛差异" style="justify-content:flex-start;">↳ 对比 Pre-LN 和 Post-LN 的收敛差异</button>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+
+  <!-- AGGREGATE EXPORT MODAL + LIVE MINI A4 PREVIEW -->
+  <div id="exportModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="聚合导出工作台">
+    <div id="exportModal" class="export-modal">
+      <div class="sidebar-head" style="padding:16px 24px;">
+        <div>
+          <h2 class="t-h2">聚合导出工作台（Export Hub）</h2>
+          <p class="t-small">底层工作台依据 <span class="mono">spring-drawer</span> 产生景深退让（scale: 0.96, brightness: 92%）</p>
+        </div>
+        <button id="closeExportBtn" class="icon-btn">✕ 关闭</button>
+      </div>
+      <div class="export-body">
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div>
+            <div class="t-h3" style="font-size:14px;margin-bottom:8px;">1. 选择导出格式（4 选 1 矩阵）</div>
+            <div class="format-grid">
+              <button class="format-card active" data-fmt="pdf">
+                <span class="t-h3" style="font-size:14px;">🖨 打印刷题卷 (PDF)</span>
+                <span class="t-caption">适合 iPad 手写或纸质印刷</span>
+              </button>
+              <button class="format-card" data-fmt="docx">
+                <span class="t-h3" style="font-size:14px;">📝 结构化讲义 (Word)</span>
+                <span class="t-caption">.docx 格式，方便二次编辑</span>
+              </button>
+              <button class="format-card" data-fmt="anki">
+                <span class="t-h3" style="font-size:14px;">🗂 记忆卡包 (Anki)</span>
+                <span class="t-caption">.apkg / .csv 间隔重复导入</span>
+              </button>
+              <button class="format-card" data-fmt="md">
+                <span class="t-h3" style="font-size:14px;">📋 纯文本笔记 (Markdown)</span>
+                <span class="t-caption">适配 Notion / Obsidian</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="pdfWordSwitches" style="display:flex;flex-direction:column;gap:8px;">
+            <div class="t-h3" style="font-size:14px;">2. 动态排版开关</div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">包含答案与 AI 解析</div>
+                <div class="t-caption">关闭后在题干下方自动生成空白作答横线</div>
+              </div>
+              <button class="toggle-switch" id="swAnswers" aria-checked="true"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">仅导出本次做错的题目</div>
+                <div class="t-caption" id="wrongCountHint">当前错题本包含 0 题</div>
+              </div>
+              <button class="toggle-switch" id="swWrongOnly" aria-checked="false"><span class="toggle-knob"></span></button>
+            </div>
+            <div class="switch-row">
+              <div>
+                <div style="font-size:13px;font-weight:600;">保留原文出处角标</div>
+                <div class="t-caption">在导出题目旁保留 [来源 p.X] 索引</div>
+              </div>
+              <button class="toggle-switch" id="swCitations" aria-checked="true"><span class="toggle-knob"></span></button>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span id="exportFeedbackMsg" class="t-small">右侧实时同步迷你 A4 纸张排版预览</span>
+            <button id="confirmExportBtn" class="btn-primary">生成并模拟导出</button>
+          </div>
+        </div>
+
+        <div class="a4-preview-well">
+          <div class="t-caption" style="font-weight:600;">迷你实时预览窗（A4 纸张效果）</div>
+          <div id="a4Sheet" class="a4-sheet"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      // =========================================================================
+      //  PART A: Real Mass-Stiffness-Damping Spring Physics Solver (Section VI)
+      // =========================================================================
+      const SPRING_TOKENS = {
+        snappy:  { name: 'spring-snappy',  mass: 1.0, stiffness: 500, damping: 32, haptic: 'Light Impact' },
+        drawer:  { name: 'spring-drawer',  mass: 1.0, stiffness: 380, damping: 30, haptic: 'Selection Changed' },
+        card:    { name: 'spring-card',    mass: 0.8, stiffness: 280, damping: 22, haptic: 'Selection Changed' },
+        tactile: { name: 'spring-tactile', mass: 0.8, stiffness: 450, damping: 16, haptic: 'Notification Warning' },
+      };
+
+      const activeSprings = new Map();
+      let reducedMotionManual = false;
+      const telemetryTextEl = document.getElementById('telemetryText');
+
+      function isReducedMotion() {
+        return reducedMotionManual || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      }
+
+      function reportTelemetry(presetKey, hapticOverride) {
+        const p = SPRING_TOKENS[presetKey] || SPRING_TOKENS.snappy;
+        const haptic = hapticOverride || p.haptic;
+        const zeta = (p.damping / (2 * Math.sqrt(p.stiffness * p.mass))).toFixed(2);
+        telemetryTextEl.textContent = `${p.name} (${p.mass}/${p.stiffness}/${p.damping}, ζ≈${zeta}) · ${haptic}`;
+      }
+
+      function animateSpring(key, { from, to, velocity = 0, preset = 'snappy', onUpdate, onComplete }) {
+        if (isReducedMotion()) {
+          onUpdate(to);
+          if (onComplete) onComplete();
+          return;
+        }
+        const cfg = SPRING_TOKENS[preset] || SPRING_TOKENS.snappy;
+        activeSprings.set(key, {
+          pos: from,
+          vel: velocity,
+          target: to,
+          mass: cfg.mass,
+          k: cfg.stiffness,
+          c: cfg.damping,
+          onUpdate,
+          onComplete,
+          lastTime: performance.now(),
+        });
+      }
+
+      function stepActiveSprings(now) {
+        for (const [key, s] of Array.from(activeSprings.entries())) {
+          const dt = Math.min(0.032, Math.max(0.001, (now - s.lastTime) / 1000));
+          s.lastTime = now;
+          const steps = 2;
+          const h = dt / steps;
+          for (let i = 0; i < steps; i++) {
+            const force = -s.k * (s.pos - s.target) - s.c * s.vel;
+            const acc = force / s.mass;
+            s.vel += acc * h;
+            s.pos += s.vel * h;
+          }
+          s.onUpdate(s.pos);
+          if (Math.abs(s.pos - s.target) < 0.002 && Math.abs(s.vel) < 0.01) {
+            s.pos = s.target;
+            s.onUpdate(s.target);
+            activeSprings.delete(key);
+            if (s.onComplete) s.onComplete();
+          }
+        }
+      }
+
+      // =========================================================================
+      //  PART B: Avalonia-Skia Liquid Glass SkSL WebGL / CPU Optical Pipeline
+      //  (Strictly NO cursor-following glass droplet)
+      // =========================================================================
+      const glCanvas = document.getElementById('glCanvas');
+      const fbCanvas = document.getElementById('fallbackCanvas');
+      const pillLabel0 = document.getElementById('pillLabel0');
+      const pillLabel1 = document.getElementById('pillLabel1');
+      const backendStatus = document.getElementById('backendStatus');
+
+      const iorRange = document.getElementById('iorRange');
+      const dispRange = document.getElementById('dispRange');
+      const smoothKRange = document.getElementById('smoothKRange');
+      const blurRange = document.getElementById('blurRange');
+      const iorVal = document.getElementById('iorVal');
+      const dispVal = document.getElementById('dispVal');
+      const smoothKVal = document.getElementById('smoothKVal');
+      const blurVal = document.getElementById('blurVal');
+
+      const optics = {
+        ior: 1.46,
+        dispersion: 0.35,
+        smoothK: 30,
+        blur: 0.35,
+        lightMode: true,
+        forceFallback: false,
+      };
+
+      let lastAnchoredW = 0;
+      let lastAnchoredH = 0;
+      let pillsManuallyMoved = false;
+      let pillDraggedThisPress = false;
+      let dragStartPtrX = 0;
+      let dragStartPtrY = 0;
+
+      const pills = [
+        { x: 0, y: 0, tx: 0, ty: 0, halfLen: 64, radius: 22, el: pillLabel0 },
+        { x: 0, y: 0, tx: 0, ty: 0, halfLen: 34, radius: 20, el: pillLabel1 },
+      ];
+
+      let dragIndex = -1;
+      let dragGrabX = 0, dragGrabY = 0;
+      let initialised = false;
+      const startTime = performance.now();
+      let lastFrame = startTime;
+
+      const bgCanvas = document.createElement('canvas');
+      const blurCanvas = document.createElement('canvas');
+      const bgCtx = bgCanvas.getContext('2d');
+      const blurCtx = blurCanvas.getContext('2d');
+
+      const BLOBS = [
+        { color: [0x3B, 0x5B, 0xDB], radius: 0.44, speedA: 0.24, speedB: 0.19, phase: 0.0 },
+        { color: [0x0A, 0x84, 0xFF], radius: 0.48, speedA: 0.18, speedB: 0.25, phase: 1.7 },
+        { color: [0x5E, 0x5C, 0xE6], radius: 0.36, speedA: 0.22, speedB: 0.16, phase: 3.1 },
+        { color: [0x2B, 0x8A, 0x3E], radius: 0.28, speedA: 0.16, speedB: 0.22, phase: 4.4 },
+      ];
+
+      function getDefaultPillAnchors(w, h) {
+        const dockY = Math.max(220, h - 44);
+        const x0 = Math.max(220, w - 220);
+        const x1 = Math.max(x0 + 150, w - 70);
+        return { x0, x1, dockY };
+      }
+
+      function initPositions(w, h) {
+        if (!initialised || (!pillsManuallyMoved && (w !== lastAnchoredW || h !== lastAnchoredH))) {
+          initialised = true;
+          lastAnchoredW = w;
+          lastAnchoredH = h;
+          // Parked cleanly in open bottom-right dock under Copilot sidebar so reading workspace stays unobstructed
+          const { x0, x1, dockY } = getDefaultPillAnchors(w, h);
+          pills[0].x = pills[0].tx = x0;
+          pills[0].y = pills[0].ty = dockY;
+          pills[1].x = pills[1].tx = x1;
+          pills[1].y = pills[1].ty = dockY;
+        }
+      }
+
+      function resetPillPositions() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        pillsManuallyMoved = false;
+        lastAnchoredW = w;
+        lastAnchoredH = h;
+        const { x0, x1, dockY } = getDefaultPillAnchors(w, h);
+        pills[0].tx = x0;
+        pills[0].ty = dockY;
+        pills[1].tx = x1;
+        pills[1].ty = dockY;
+      }
+
+      // Pass 1 Backdrop Renderer (Warm academic #FAF9F6 canvas in Light; #121316 in Dark)
+      function renderBackdrop(w, h, t, dpr) {
+        const pw = Math.max(1, Math.ceil(w * dpr));
+        const ph = Math.max(1, Math.ceil(h * dpr));
+        const bw = Math.max(1, Math.floor(pw / 3));
+        const bh = Math.max(1, Math.floor(ph / 3));
+
+        if (bgCanvas.width !== pw || bgCanvas.height !== ph) {
+          bgCanvas.width = pw;
+          bgCanvas.height = ph;
+        }
+        if (blurCanvas.width !== bw || blurCanvas.height !== bh) {
+          blurCanvas.width = bw;
+          blurCanvas.height = bh;
+        }
+
+        const c = bgCtx;
+        c.save();
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const baseGrad = c.createLinearGradient(0, 0, w, h);
+        if (optics.lightMode) {
+          baseGrad.addColorStop(0, '#FAF9F6');
+          baseGrad.addColorStop(0.55, '#F6F5F0');
+          baseGrad.addColorStop(1, '#FAF9F6');
+        } else {
+          baseGrad.addColorStop(0, '#121316');
+          baseGrad.addColorStop(0.55, '#17191E');
+          baseGrad.addColorStop(1, '#121316');
+        }
+        c.fillStyle = baseGrad;
+        c.fillRect(0, 0, w, h);
+
+        // Soft ambient blooms (subtle indigo/sky paper depth on light; moody glow on dark)
+        c.save();
+        c.globalCompositeOperation = optics.lightMode ? 'source-over' : 'screen';
+        const minSide = Math.min(w, h);
+        const lightPastels = [
+          [59, 91, 219],   // Academic Indigo #3B5BDB
+          [56, 189, 248],  // Sky
+          [129, 140, 248], // Soft Indigo
+          [43, 138, 62],   // Academic Emerald
+        ];
+        BLOBS.forEach((b, idx) => {
+          const bx = w * (0.5 + 0.36 * Math.sin(t * b.speedA * 1.4 + b.phase));
+          const by = h * (0.5 + 0.34 * Math.cos(t * b.speedB * 1.4 + b.phase * 1.3));
+          const r = minSide * (b.radius * 1.05);
+          const rg = c.createRadialGradient(bx, by, 0, bx, by, r);
+          const [cr, cg, cb] = optics.lightMode ? lightPastels[idx] : b.color;
+          const a0 = optics.lightMode ? 0.14 : 0.42;
+          const a1 = optics.lightMode ? 0.05 : 0.16;
+          rg.addColorStop(0, `rgba(${cr},${cg},${cb},${a0})`);
+          rg.addColorStop(0.5, `rgba(${cr},${cg},${cb},${a1})`);
+          rg.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+          c.fillStyle = rg;
+          c.beginPath();
+          c.arc(bx, by, r, 0, Math.PI * 2);
+          c.fill();
+        });
+        c.restore();
+
+        // Architectural 46px coordinate grid for visible lens refraction
+        const step = 46;
+        c.lineWidth = 1;
+        for (let x = 0, i = 0; x <= w; x += step, i++) {
+          const major = i % 5 === 0;
+          c.strokeStyle = optics.lightMode
+            ? `rgba(59, 91, 219, ${major ? 0.075 : 0.032})`
+            : `rgba(255, 255, 255, ${major ? 0.09 : 0.035})`;
+          c.beginPath();
+          c.moveTo(x, 0);
+          c.lineTo(x, h);
+          c.stroke();
+        }
+        for (let y = 0, i = 0; y <= h; y += step, i++) {
+          const major = i % 5 === 0;
+          c.strokeStyle = optics.lightMode
+            ? `rgba(59, 91, 219, ${major ? 0.075 : 0.032})`
+            : `rgba(255, 255, 255, ${major ? 0.09 : 0.035})`;
+          c.beginPath();
+          c.moveTo(0, y);
+          c.lineTo(w, y);
+          c.stroke();
+        }
+
+        // Crisp concentric refraction calibration rings behind bottom-right metaball dock
+        const mbCx = w - 150;
+        const mbCy = h - 46;
+        for (let i = 0; i < 6; i++) {
+          c.strokeStyle = optics.lightMode
+            ? `rgba(59, 91, 219, ${(0.085 + i * 0.015).toFixed(3)})`
+            : `rgba(92, 124, 250, ${(0.14 + i * 0.025).toFixed(3)})`;
+          c.lineWidth = 1.25;
+          c.beginPath();
+          c.arc(mbCx, mbCy, 30 + i * 24, 0, Math.PI * 2);
+          c.stroke();
+        }
+        c.restore();
+
+        // Generate 1/3 downsampled blurred uBackdrop
+        const sigma = (1.0 + 2.6 * Math.max(0, Math.min(1, optics.blur))).toFixed(2);
+        blurCtx.clearRect(0, 0, bw, bh);
+        blurCtx.save();
+        blurCtx.filter = `blur(${sigma}px)`;
+        blurCtx.drawImage(bgCanvas, 0, 0, bw, bh);
+        blurCtx.restore();
+      }
+
+      // =========================================================================
+      //  WebGL Pass 2: Direct GLSL ES Port of liquid_glass.sksl (uLayer=0/1)
+      // =========================================================================
+      const VERT_SRC = `
+        attribute vec2 aPos;
+        uniform vec4 uView;
+        varying vec2 vDip;
+        void main() {
+          vec2 zeroToOne = (aPos + 1.0) * 0.5;
+          vDip = vec2(zeroToOne.x * uView.x, (1.0 - zeroToOne.y) * uView.y);
+          gl_Position = vec4(aPos, 0.0, 1.0);
+        }
+      `;
+
+      const BG_FRAG_SRC = `
+        precision highp float;
+        uniform sampler2D uBackground;
+        uniform vec4 uView;
+        varying vec2 vDip;
+        void main() {
+          vec2 uv = clamp(vDip / uView.xy, vec2(0.0), vec2(1.0));
+          gl_FragColor = texture2D(uBackground, uv);
+        }
+      `;
+
+      const GLASS_FRAG_SRC = `
+        precision highp float;
+        uniform sampler2D uBackground;
+        uniform sampler2D uBackdrop;
+
+        uniform vec4 uView;
+        uniform vec4 uGlassA;
+        uniform vec4 uGlassB;
+        uniform vec4 uDroplet;   // Unused / 0.0 (no cursor glass)
+        uniform vec4 uOptics;    // x=ior, y=disp, z=smoothK, w=blur
+        uniform vec4 uSurface;   // x=bezel, y=depth, z=specIntensity, w=tintStrength
+        uniform float uLightMode;
+        uniform float uLayer;    // 0.0=panels, 1.0=metaballs
+
+        uniform vec4 uPanelRects[16];
+        uniform vec4 uPanelMeta[16];
+
+        varying vec2 vDip;
+        const float EPS = 0.001;
+
+        float sstep(float e0, float e1, float x) {
+          float den = e1 - e0;
+          if (abs(den) < EPS) den = den < 0.0 ? -EPS : EPS;
+          float t = clamp((x - e0) / den, 0.0, 1.0);
+          return t * t * (3.0 - 2.0 * t);
+        }
+
+        float sdCapsule(vec2 p, vec4 cap) {
+          vec2 q = p - cap.xy;
+          float hl = max(cap.z, EPS);
+          vec2 pa = vec2(q.x + hl, q.y);
+          vec2 ba = vec2(2.0 * hl, 0.0);
+          float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+          return length(pa - ba * h) - cap.w;
+        }
+
+        float sdRoundBox(vec2 p, vec2 c, vec2 b, float r) {
+          float rr = min(r, min(b.x, b.y));
+          vec2 q = abs(p - c) - b + vec2(rr);
+          return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
+        }
+
+        float smin(float a, float b, float k) {
+          if (k < 0.0005) return min(a, b);
+          float kk = max(k, EPS);
+          float h = clamp(0.5 + 0.5 * (b - a) / kk, 0.0, 1.0);
+          return mix(b, a, h) - kk * h * (1.0 - h);
+        }
+
+        float blobsSdf(vec2 p) {
+          return smin(sdCapsule(p, uGlassA), sdCapsule(p, uGlassB), uOptics.z);
+        }
+
+        float hardSdf(vec2 p) {
+          return min(sdCapsule(p, uGlassA), sdCapsule(p, uGlassB));
+        }
+
+        float uiPanelsSdf(vec2 p, out float outBezel, out float outBodyMix) {
+          float d = 10000.0;
+          outBezel = uSurface.x;
+          outBodyMix = 0.0;
+          for (int i = 0; i < 16; i++) {
+            if (uPanelMeta[i].w > 0.5) {
+              float pd = sdRoundBox(p, uPanelRects[i].xy, uPanelRects[i].zw, uPanelMeta[i].x);
+              if (pd < d) {
+                d = pd;
+                outBezel = uPanelMeta[i].y;
+                outBodyMix = uPanelMeta[i].z;
+              }
+            }
+          }
+          return d;
+        }
+
+        float sceneSdf(vec2 p, out float outBezel, out float outBodyMix, out float isBlob) {
+          if (uLayer > 0.5) {
+            outBezel = uSurface.x;
+            outBodyMix = 0.0;
+            isBlob = 1.0;
+            return blobsSdf(p);
+          }
+          float bBezel, bMix;
+          float dp = uiPanelsSdf(p, bBezel, bMix);
+          outBezel = bBezel;
+          outBodyMix = bMix;
+          isBlob = 0.0;
+          return dp;
+        }
+
+        float sceneOnlyDist(vec2 p) {
+          float dummy1, dummy2, dummy3;
+          return sceneSdf(p, dummy1, dummy2, dummy3);
+        }
+
+        vec2 gradAt(vec2 p) {
+          float e = 1.0;
+          float dx = sceneOnlyDist(p + vec2(e, 0.0)) - sceneOnlyDist(p - vec2(e, 0.0));
+          float dy = sceneOnlyDist(p + vec2(0.0, e)) - sceneOnlyDist(p - vec2(0.0, e));
+          vec2 g = vec2(dx, dy);
+          float m = length(g);
+          if (m < EPS) return vec2(0.0, -1.0);
+          return g / m;
+        }
+
+        void main() {
+          vec2 p = vDip;
+          float bezel, bodyMix, isBlob;
+          float d = sceneSdf(p, bezel, bodyMix, isBlob);
+
+          float aa = 1.15;
+          float cover = 1.0 - sstep(-aa, aa, d);
+          float shadowOpacity = uLightMode > 0.5 ? (isBlob > 0.5 ? 0.22 : 0.10) : 0.45;
+          float shadow = (1.0 - sstep(0.0, 38.0, d)) * (1.0 - cover) * shadowOpacity;
+
+          if (cover <= 0.0008 && shadow <= 0.0008) {
+            discard;
+          }
+
+          vec3 shadowTint = uLightMode > 0.5 ? vec3(0.07, 0.09, 0.16) : vec3(0.0);
+          if (cover <= 0.0008) {
+            gl_FragColor = vec4(shadowTint * shadow, shadow);
+            return;
+          }
+
+          float bz = max(bezel, 2.0);
+          float inner = clamp(-d / bz, 0.0, 1.0);
+          float slope = pow(max(0.0, 1.0 - inner * inner), 0.78);
+
+          vec2 n = gradAt(p);
+          vec2 ripple = vec2(sin(p.y * 0.047 + uView.z * 1.9),
+                             cos(p.x * 0.041 - uView.z * 1.6)) * 0.05 * slope * (0.45 + 0.55 * isBlob);
+          vec2 nn = normalize(n + ripple);
+
+          float ior = clamp(uOptics.x, 1.0, 2.5);
+          float depth = max(uSurface.y, 0.0);
+          float flow = 0.72 + 0.28 * sin(uView.z * 1.15 + (p.x + p.y) * 0.010);
+          float amp = slope * depth * ((ior - 1.0) / 0.5) * flow * (isBlob > 0.5 ? 1.0 : 0.75);
+          float disp = clamp(uOptics.y, 0.0, 1.0) * 0.30;
+          float blurMix = clamp(uOptics.w, 0.0, 1.0) * (0.28 + 0.72 * pow(1.0 - inner, 1.4));
+
+          vec2 offR = nn * amp * (1.0 - disp);
+          vec2 offG = nn * amp;
+          vec2 offB = nn * amp * (1.0 + disp);
+
+          vec2 invView = 1.0 / max(uView.xy, vec2(1.0));
+          float sR = texture2D(uBackground, clamp((p + offR) * invView, vec2(0.0), vec2(1.0))).r;
+          float sG = texture2D(uBackground, clamp((p + offG) * invView, vec2(0.0), vec2(1.0))).g;
+          float sB = texture2D(uBackground, clamp((p + offB) * invView, vec2(0.0), vec2(1.0))).b;
+          vec3 refr = vec3(sR, sG, sB);
+
+          if (blurMix > 0.01) {
+            vec3 soft = texture2D(uBackdrop, clamp((p + offG) * invView, vec2(0.0), vec2(1.0))).rgb;
+            refr = mix(refr, soft, clamp(blurMix, 0.0, 1.0));
+          }
+
+          float rim = pow(1.0 - inner, 2.1);
+          vec2 ld = normalize(vec2(-0.52, -0.86));
+          float ndl = clamp(dot(nn, ld), 0.0, 1.0);
+          float specular = (pow(ndl, 18.0) * 0.45 + pow(ndl, 220.0) * 1.35) * max(uSurface.z, 0.0);
+
+          vec3 tintCol = uLightMode > 0.5 ? vec3(0.99, 0.99, 0.98) : vec3(0.11, 0.12, 0.15);
+          vec3 col = refr;
+
+          if (bodyMix > 0.001) {
+            vec3 readTint = uLightMode > 0.5 ? vec3(1.0, 1.0, 1.0) : vec3(0.09, 0.10, 0.13);
+            col = mix(col, readTint, bodyMix * (uLightMode > 0.5 ? 0.55 : 0.55 + 0.35 * inner));
+          }
+
+          vec3 iceRim = uLightMode > 0.5 ? vec3(0.90, 0.94, 1.0) : vec3(0.36, 0.48, 0.85);
+          col = mix(col, mix(tintCol, iceRim, 0.45), clamp(uSurface.w, 0.0, 1.0) * (0.06 + 0.32 * rim));
+          col *= 1.0 - (uLightMode > 0.5 ? 0.10 : 0.18) * (1.0 - sstep(0.0, 2.6, -d));
+
+          float edgeLine = pow(clamp(1.0 - abs(d + 0.9) / 2.4, 0.0, 1.0), 2.2);
+          col += edgeLine * (uLightMode > 0.5 ? 0.38 : 0.16) * iceRim;
+          if (uLightMode > 0.5) {
+            col = mix(col, vec3(0.74, 0.82, 0.94), edgeLine * (isBlob > 0.5 ? 0.44 : 0.24));
+            col.r -= disp * rim * 0.20 * (0.35 + 0.65 * max(nn.x, 0.0));
+            col.g -= disp * rim * 0.07;
+            col.b -= disp * rim * 0.13 * (0.35 + 0.65 * max(-nn.x, 0.0));
+          } else {
+            col.r += disp * rim * 0.34;
+            col.b += disp * rim * 0.24;
+          }
+          col += specular * (uLightMode > 0.5 ? vec3(1.0) * 0.72 : vec3(0.92, 0.95, 1.0) * 0.85);
+
+          if (isBlob > 0.5) {
+            float glue = hardSdf(p) - blobsSdf(p);
+            float bridge = clamp(glue * 0.42, 0.0, 1.0) * clamp(uOptics.z / 24.0, 0.0, 1.0);
+            col += bridge * (uLightMode > 0.5 ? -0.05 * vec3(0.45, 0.18, 0.0) : 0.22 * vec3(0.72, 0.84, 1.0));
+          }
+
+          float aOut = cover + (1.0 - cover) * shadow;
+          vec3 pm = clamp(col, 0.0, 1.0) * cover + shadowTint * (1.0 - cover) * shadow;
+          gl_FragColor = vec4(pm, aOut);
+        }
+      `;
+
+      let gl = null;
+      let bgProg = null, glassProg = null;
+      let quadBuf = null;
+      let texBg = null, texBlur = null;
+      let glassLocs = null, bgLocs = null;
+      let webglReady = false;
+
+      function compileShader(type, src) {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+          const err = gl.getShaderInfoLog(sh);
+          gl.deleteShader(sh);
+          throw new Error(err || 'Shader compile error');
+        }
+        return sh;
+      }
+
+      function createProgram(vsSrc, fsSrc) {
+        const vs = compileShader(gl.VERTEX_SHADER, vsSrc);
+        const fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+        const prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+          throw new Error(gl.getProgramInfoLog(prog) || 'Program link error');
+        }
+        return prog;
+      }
+
+      function createClampTexture() {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        return tex;
+      }
+
+      function updateBackendStatusText(errMsg) {
+        if (errMsg) {
+          backendStatus.textContent = 'SkSL · 软件光栅管线 (CPU)';
+          backendStatus.title = errMsg;
+          return;
+        }
+        backendStatus.title = '';
+        backendStatus.textContent = optics.forceFallback
+          ? 'SkSL · 软件光栅管线 (CPU)'
+          : 'SkSL · WebGL GPU 硬件加速';
+      }
+
+      function initWebGL() {
+        try {
+          gl = glCanvas.getContext('webgl2')
+            || glCanvas.getContext('webgl')
+            || glCanvas.getContext('experimental-webgl');
+          if (!gl) throw new Error('WebGL context unavailable');
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+          bgProg = createProgram(VERT_SRC, BG_FRAG_SRC);
+          glassProg = createProgram(VERT_SRC, GLASS_FRAG_SRC);
+
+          quadBuf = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+          texBg = createClampTexture();
+          texBlur = createClampTexture();
+
+          bgLocs = {
+            aPos: gl.getAttribLocation(bgProg, 'aPos'),
+            uView: gl.getUniformLocation(bgProg, 'uView'),
+            uBackground: gl.getUniformLocation(bgProg, 'uBackground'),
+          };
+
+          glassLocs = {
+            aPos: gl.getAttribLocation(glassProg, 'aPos'),
+            uBackground: gl.getUniformLocation(glassProg, 'uBackground'),
+            uBackdrop: gl.getUniformLocation(glassProg, 'uBackdrop'),
+            uView: gl.getUniformLocation(glassProg, 'uView'),
+            uGlassA: gl.getUniformLocation(glassProg, 'uGlassA'),
+            uGlassB: gl.getUniformLocation(glassProg, 'uGlassB'),
+            uDroplet: gl.getUniformLocation(glassProg, 'uDroplet'),
+            uOptics: gl.getUniformLocation(glassProg, 'uOptics'),
+            uSurface: gl.getUniformLocation(glassProg, 'uSurface'),
+            uLightMode: gl.getUniformLocation(glassProg, 'uLightMode'),
+            uLayer: gl.getUniformLocation(glassProg, 'uLayer'),
+            uPanelRects: [],
+            uPanelMeta: [],
+          };
+          for (let i = 0; i < 16; i++) {
+            glassLocs.uPanelRects.push(gl.getUniformLocation(glassProg, `uPanelRects[${i}]`));
+            glassLocs.uPanelMeta.push(gl.getUniformLocation(glassProg, `uPanelMeta[${i}]`));
+          }
+          webglReady = true;
+          updateBackendStatusText();
+        } catch (err) {
+          console.error('WebGL init failed, switching to CPU SkSL software rasterizer:', err);
+          webglReady = false;
+          optics.forceFallback = true;
+          document.body.classList.add('cpu-fallback');
+          updateBackendStatusText(err && err.message ? err.message : String(err));
+        }
+      }
+
+      // Collect currently visible UI panels -> uniform uPanelRects[16]
+      function gatherDomPanels() {
+        const els = document.querySelectorAll('[data-glass-panel]');
+        const centerRect = document.getElementById('centerMain')?.getBoundingClientRect();
+        const leftRect = document.getElementById('leftSidebar')?.getBoundingClientRect();
+        const rightRect = document.getElementById('rightSidebar')?.getBoundingClientRect();
+        const rects = [];
+
+        for (const el of els) {
+          if (rects.length >= 16) break;
+          if (el.closest('.tab-pane:not(.active)') || el.classList.contains('collapsed') || el.classList.contains('closed')) {
+            continue;
+          }
+          const r = el.getBoundingClientRect();
+          if (r.width < 12 || r.height < 12) continue;
+
+          let top = r.top;
+          let bottom = r.bottom;
+          if (el.closest('#centerMain') && centerRect) {
+            top = Math.max(top, centerRect.top);
+            bottom = Math.min(bottom, centerRect.bottom);
+          } else if (el.closest('#leftSidebar') && leftRect) {
+            top = Math.max(top, leftRect.top);
+            bottom = Math.min(bottom, leftRect.bottom);
+          } else if (el.closest('#rightSidebar') && rightRect) {
+            top = Math.max(top, rightRect.top);
+            bottom = Math.min(bottom, rightRect.bottom);
+          }
+          const h = bottom - top;
+          if (h < 12) continue;
+
+          rects.push({
+            cx: r.left + r.width * 0.5,
+            cy: top + h * 0.5,
+            hx: r.width * 0.5,
+            hy: h * 0.5,
+            radius: parseFloat(el.dataset.radius || '16'),
+            bezel: parseFloat(el.dataset.bezel || '22'),
+            darkmix: parseFloat(el.dataset.darkmix || '0.38'),
+          });
+        }
+        return rects;
+      }
+
+      // CPU Software Rasterizer Fallback
+      function renderCpuFallback(w, h, dpr, panels) {
+        if (w <= 0 || h <= 0) return;
+        const pw = Math.max(1, Math.ceil(w * dpr));
+        const ph = Math.max(1, Math.ceil(h * dpr));
+        if (fbCanvas.width !== pw || fbCanvas.height !== ph) {
+          fbCanvas.width = pw;
+          fbCanvas.height = ph;
+        }
+        const c = fbCanvas.getContext('2d');
+        c.save();
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+        c.drawImage(bgCanvas, 0, 0, w, h);
+
+        for (const p of panels) {
+          const x = p.cx - p.hx;
+          const y = p.cy - p.hy;
+          const bw = p.hx * 2;
+          const bh = p.hy * 2;
+          c.save();
+          c.shadowColor = optics.lightMode ? 'rgba(17, 24, 39, 0.08)' : 'rgba(0, 0, 0, 0.42)';
+          c.shadowBlur = 18;
+          c.shadowOffsetY = 4;
+          c.fillStyle = optics.lightMode ? '#FFFFFF' : '#1C1E22';
+          c.beginPath();
+          c.roundRect(x + 0.5, y + 0.5, Math.max(1, bw - 1), Math.max(1, bh - 1), p.radius);
+          c.fill();
+          c.restore();
+
+          c.save();
+          c.beginPath();
+          c.roundRect(x, y, bw, bh, p.radius);
+          c.clip();
+          c.filter = `blur(${(2 + optics.blur * 10).toFixed(1)}px)`;
+          c.drawImage(bgCanvas, 0, 0, w, h);
+          c.filter = 'none';
+          c.fillStyle = optics.lightMode ? 'rgba(255,255,255,0.68)' : 'rgba(28,30,34,0.72)';
+          c.fillRect(x, y, bw, bh);
+          c.restore();
+        }
+
+        // Metaball pills in CPU fallback
+        const p0 = pills[0], p1 = pills[1];
+        const minX = Math.min(p0.x - p0.halfLen - p0.radius, p1.x - p1.halfLen - p1.radius);
+        const maxX = Math.max(p0.x + p0.halfLen + p0.radius, p1.x + p1.halfLen + p1.radius);
+        const minY = Math.min(p0.y - p0.radius, p1.y - p1.radius);
+        const maxY = Math.max(p0.y + p0.radius, p1.y + p1.radius);
+        const iw = Math.max(2, Math.ceil(w));
+        const ih = Math.max(2, Math.ceil(h));
+        const bx0 = Math.max(0, Math.floor(minX - 42));
+        const by0 = Math.max(0, Math.floor(minY - 42));
+        const bx1 = Math.min(iw, Math.ceil(maxX + 42));
+        const by1 = Math.min(ih, Math.ceil(maxY + 42));
+        const boxW = bx1 - bx0;
+        const boxH = by1 - by0;
+
+        if (boxW > 2 && boxH > 2) {
+          const cache = renderCpuFallback._cache || (renderCpuFallback._cache = {
+            sharp: document.createElement('canvas'),
+            out: document.createElement('canvas'),
+          });
+          if (cache.sharp.width !== iw || cache.sharp.height !== ih) {
+            cache.sharp.width = iw;
+            cache.sharp.height = ih;
+          }
+          if (cache.out.width !== boxW || cache.out.height !== boxH) {
+            cache.out.width = boxW;
+            cache.out.height = boxH;
+          }
+          const sx0 = Math.max(0, bx0 - 50), sy0 = Math.max(0, by0 - 50);
+          const sx1 = Math.min(iw, bx1 + 50), sy1 = Math.min(ih, by1 + 50);
+          const sBoxW = Math.max(2, sx1 - sx0), sBoxH = Math.max(2, sy1 - sy0);
+          const sc = cache.sharp.getContext('2d', { willReadFrequently: true });
+          sc.setTransform(1, 0, 0, 1, 0, 0);
+          sc.drawImage(bgCanvas, 0, 0, iw, ih);
+          const sharpData = sc.getImageData(sx0, sy0, sBoxW, sBoxH).data;
+          const outCtx = cache.out.getContext('2d', { willReadFrequently: true });
+          const outImg = outCtx.createImageData(boxW, boxH);
+          const outPx = outImg.data;
+
+          const sstep = (a, b, x) => {
+            const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+            return t * t * (3 - 2 * t);
+          };
+          const smin = (a, b, k) => {
+            if (k <= 0.001) return Math.min(a, b);
+            const h = Math.max(0, Math.min(1, 0.5 + 0.5 * (b - a) / k));
+            return b * (1 - h) + a * h - k * h * (1 - h);
+          };
+          const sdCapsule = (px, py, cx, cy, hl, r) => {
+            const ax = Math.max(0, Math.abs(px - cx) - hl);
+            return Math.hypot(ax, py - cy) - r;
+          };
+
+          for (let ly = 0; ly < boxH; ly++) {
+            const py = by0 + ly + 0.5;
+            for (let lx = 0; lx < boxW; lx++) {
+              const px = bx0 + lx + 0.5;
+              const oIdx = (ly * boxW + lx) << 2;
+              const d = smin(
+                sdCapsule(px, py, p0.x, p0.y, p0.halfLen, p0.radius),
+                sdCapsule(px, py, p1.x, p1.y, p1.halfLen, p1.radius),
+                optics.smoothK
+              );
+              if (d > 36) {
+                outPx[oIdx + 3] = 0;
+                continue;
+              }
+              const cover = 1.0 - sstep(-1.15, 1.15, d);
+              const shadow = (1.0 - sstep(0.0, 36.0, d)) * (1.0 - cover) * (optics.lightMode ? 0.20 : 0.50);
+              if (cover <= 0.001) {
+                outPx[oIdx] = optics.lightMode ? 18 : 0;
+                outPx[oIdx + 1] = optics.lightMode ? 24 : 0;
+                outPx[oIdx + 2] = optics.lightMode ? 42 : 0;
+                outPx[oIdx + 3] = Math.round(shadow * 255);
+                continue;
+              }
+              const inner = Math.max(-d, 0);
+              const rim = 1.0 - sstep(0, 14, inner);
+              const pxClamped = Math.max(sx0, Math.min(sx1 - 1, px | 0)) - sx0;
+              const pyClamped = Math.max(sy0, Math.min(sy1 - 1, py | 0)) - sy0;
+              const bi = (pyClamped * sBoxW + pxClamped) << 2;
+              let rCol = sharpData[bi], gCol = sharpData[bi + 1], bCol = sharpData[bi + 2];
+              if (optics.lightMode) {
+                rCol = rCol * (1 - 0.3 * rim) + 236 * (0.3 * rim);
+                gCol = gCol * (1 - 0.3 * rim) + 242 * (0.3 * rim);
+                bCol = bCol * (1 - 0.3 * rim) + 255 * (0.3 * rim);
+              } else {
+                rCol = rCol * 0.65 + 48 * rim;
+                gCol = gCol * 0.65 + 64 * rim;
+                bCol = bCol * 0.65 + 110 * rim;
+              }
+              outPx[oIdx] = rCol;
+              outPx[oIdx + 1] = gCol;
+              outPx[oIdx + 2] = bCol;
+              outPx[oIdx + 3] = Math.round(Math.min(1, cover + shadow) * 255);
+            }
+          }
+          outCtx.putImageData(outImg, 0, 0);
+          c.drawImage(cache.out, bx0, by0, boxW, boxH);
+        }
+        c.restore();
+      }
+
+      function renderWebGL(w, h, t, dpr, panels) {
+        const pw = Math.max(1, Math.ceil(w * dpr));
+        const ph = Math.max(1, Math.ceil(h * dpr));
+        if (glCanvas.width !== pw || glCanvas.height !== ph) {
+          glCanvas.width = pw;
+          glCanvas.height = ph;
+        }
+        gl.viewport(0, 0, pw, ph);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texBg);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bgCanvas);
+
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, texBlur);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, blurCanvas);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+
+        gl.disable(gl.BLEND);
+        gl.useProgram(bgProg);
+        gl.enableVertexAttribArray(bgLocs.aPos);
+        gl.vertexAttribPointer(bgLocs.aPos, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform1i(bgLocs.uBackground, 0);
+        gl.uniform4f(bgLocs.uView, w, h, t, dpr);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.useProgram(glassProg);
+        gl.enableVertexAttribArray(glassLocs.aPos);
+        gl.vertexAttribPointer(glassLocs.aPos, 2, gl.FLOAT, false, 0, 0);
+
+        gl.uniform1i(glassLocs.uBackground, 0);
+        gl.uniform1i(glassLocs.uBackdrop, 1);
+        gl.uniform4f(glassLocs.uView, w, h, t, dpr);
+        gl.uniform4f(glassLocs.uGlassA, pills[0].x, pills[0].y, pills[0].halfLen, pills[0].radius);
+        gl.uniform4f(glassLocs.uGlassB, pills[1].x, pills[1].y, pills[1].halfLen, pills[1].radius);
+        gl.uniform4f(glassLocs.uDroplet, 0, 0, 0, 0.0);
+        gl.uniform4f(glassLocs.uOptics, optics.ior, optics.dispersion, optics.smoothK, optics.blur);
+        gl.uniform4f(glassLocs.uSurface, 28.0, 42.0, 1.15, 0.85);
+        gl.uniform1f(glassLocs.uLightMode, optics.lightMode ? 1.0 : 0.0);
+
+        for (let i = 0; i < 16; i++) {
+          if (i < panels.length) {
+            const p = panels[i];
+            gl.uniform4f(glassLocs.uPanelRects[i], p.cx, p.cy, p.hx, p.hy);
+            gl.uniform4f(glassLocs.uPanelMeta[i], p.radius, p.bezel, p.darkmix, 1.0);
+          } else {
+            gl.uniform4f(glassLocs.uPanelRects[i], 0, 0, 0, 0);
+            gl.uniform4f(glassLocs.uPanelMeta[i], 0, 0, 0, 0.0);
+          }
+        }
+        gl.uniform1f(glassLocs.uLayer, 0.0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.uniform1f(glassLocs.uLayer, 1.0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+
+      // =========================================================================
+      //  PART C: v1.1 Desktop Academic Business Components & Keyboard Flashcards
+      // =========================================================================
+      const workbenchStage = document.getElementById('workbenchStage');
+      const leftSidebar = document.getElementById('leftSidebar');
+      const rightSidebar = document.getElementById('rightSidebar');
+      const notebookTitleEl = document.getElementById('notebookTitle');
+
+      const tabPanes = {
+        notes: document.getElementById('pane-notes'),
+        quiz: document.getElementById('pane-quiz'),
+        flashcards: document.getElementById('pane-flashcards'),
+        empty: document.getElementById('pane-empty'),
+      };
+
+      const sourcesData = [
+        { id: 's1', name: '深度学习核心架构讲义.pptx', meta: '36 页 · 1,193 字', checked: true },
+        { id: 's2', name: 'Attention Is All You Need 精读.pdf', meta: '15 页 · 原文对照', checked: true },
+        { id: 's3', name: '反向传播与残差优化笔记.md', meta: '2,480 字 · 公式推导', checked: true },
+      ];
+
+      const citationsMap = {
+        c1: {
+          title: '[来源1 p.4] 深度学习核心架构讲义.pptx',
+          body: '节选原文：在深层前馈网络反向传播阶段，<mark class="hl">ReLU(x) = max(0, x) 在正区间导数恒等于 1</mark>，避免了连乘效应导致的指数级梯度衰减；Sigmoid 函数最大导数仅为 0.25，层数较深时极易触发梯度消失。',
+        },
+        c2: {
+          title: '[PDF p.12] 反向传播与残差网络讲义',
+          body: '节选原文：ResNet 残差单元构造 y = F(x) + x，对输入 x 求偏导时恒含“1”这一恒等分量。<mark class="hl">即使 F(x) 支路权重梯度极小，梯度仍能无损直达浅层参数</mark>。',
+        },
+        c3: {
+          title: '[来源2 p.19] Transformer 原论文第 3.2 节',
+          body: '节选原文：当向量维度 d_k 较大时，点积 q·k 的标准差达到 √d_k，易将 Softmax 推入极小梯度区域。<mark class="hl">引入 1/√d_k 缩放因子可使 logits 保持单位方差</mark>，确保多头注意力平滑反传。',
+        },
+      };
+
+      const quizBank = [
+        {
+          id: 'q1',
+          tag: '高频易错 · 单选题',
+          citeKey: 'c1',
+          citeLabel: '[来源1 p.4]',
+          stem: '在深层前馈神经网络（MLP）中，相比 Sigmoid 激活函数，采用 ReLU 缓解梯度消失的核心数学原因是（ ）',
+          options: [
+            { label: 'A', text: 'ReLU 具有全局二阶光滑可微性，且输出均值严格为零，无需归一化。' },
+            { label: 'B', text: 'ReLU 在正半轴导数恒为 1，避免了反向传播连乘 0.25 以下小梯度的指数衰减。' },
+            { label: 'C', text: 'ReLU 在负半轴导数非零，使得所有神经元都能持续保持高活跃更新状态。' },
+            { label: 'D', text: 'Sigmoid 的值域为 (-∞, +∞)，反向传播时容易出现数值上溢与权重爆炸。' },
+          ],
+          correctIdx: 1,
+          explanation: 'Sigmoid 导数在原点仅取最大值 0.25，在饱和区接近 0，经 L 层链式连乘后梯度衰减至 0.25^L；ReLU 在 x > 0 时 f\'(x) = 1，使有效正激活通路保持无衰减回传。',
+        },
+        {
+          id: 'q2',
+          tag: '核心概念 · 单选题',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          stem: 'Transformer 的 Scaled Dot-Product Attention 对 QKᵀ 除以 √d_k 的直接目的是（ ）',
+          options: [
+            { label: 'A', text: '将矩阵乘法时间复杂度由 O(n²d) 降至线性复杂度 O(nd)。' },
+            { label: 'B', text: '当 d_k 较大时抑制点积方差增长，防止 Softmax 进入极小梯度饱和区。' },
+            { label: 'C', text: '替代位置编码（Positional Encoding），自动为序列注入严格先后顺序。' },
+          ],
+          correctIdx: 1,
+          explanation: '若 Q、K 元素均值为 0 方差为 1，则点积方差为 d_k。除以 √d_k 使点积方差回到 1，避免 Softmax 概率极端尖锐而使梯度几乎为零。',
+        },
+        {
+          id: 'q3',
+          tag: '深度推理 · 单选题',
+          citeKey: 'c2',
+          citeLabel: '[PDF p.12]',
+          stem: '关于 ResNet 残差连接（y = F(x) + x）对深层网络优化的贡献，下列判断准确的是（ ）',
+          options: [
+            { label: 'A', text: '它完全消除了权重初始化要求，即使权重全设为 0 也可突破对称性正常收敛。' },
+            { label: 'B', text: '反向求导时存在恒等项 +1，构成了梯度回传直达浅层参数的低阻高速通道。' },
+            { label: 'C', text: '它使模型参数总量翻倍，从而用更高容量强行记住所有训练样本。' },
+          ],
+          correctIdx: 1,
+          explanation: '由链式法则 ∂L/∂x = (∂L/∂y) · (1 + ∂F/∂x)，恒等分支项 1 保证即使 ∂F/∂x 很小，梯度信号依然能有效传播至前层。',
+        },
+      ];
+
+      const flashcardsData = [
+        {
+          front: '为什么 Transformer 自注意力需要除以 √d_k？',
+          hint: '提示：从向量内积的方差缩放与 Softmax 梯度区分析',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          back: '假设 Q、K 各分量为零均值、单位方差独立随机变量，点积方差会放大至 d_k。除以 √d_k 后方差恢复为 1，防止 Softmax 在极端大值区梯度消失。',
+          formula: 'Var(∑ qᵢ·kᵢ) = d_k  ⇒  Var(q·k / √d_k) = 1',
+        },
+        {
+          front: 'ReLU 缓解梯度消失的代价是什么？',
+          hint: '提示：思考 x < 0 区间对神经元参数更新的影响',
+          citeKey: 'c1',
+          citeLabel: '[来源1 p.4]',
+          back: '神经元死亡现象（Dying ReLU）：若学习率过大导致某神经元输入长期落入 x ≤ 0 区间，导数恒为 0，参数将永远停止更新。',
+          formula: 'f(x) = max(0, x),   f\'(x) = 0  (for x < 0)',
+        },
+        {
+          front: 'Pre-LayerNorm 与 Post-LayerNorm 谁更稳定？',
+          hint: '提示：观察梯度是否跨越 LayerNorm 参数回传',
+          citeKey: 'c3',
+          citeLabel: '[来源2 p.19]',
+          back: 'Pre-LN 将归一化置于残差分支内部，主干恒等通道不受 LN 缩放干扰，早期训练更稳且可省去复杂学习率 Warmup。',
+          formula: 'Pre-LN: x + SubLayer(LN(x))',
+        },
+        {
+          front: 'ResNet 跳跃连接的核心梯度公式是什么？',
+          hint: '提示：对 y = F(x) + x 应用链式求导',
+          citeKey: 'c2',
+          citeLabel: '[PDF p.12]',
+          back: '偏导公式中保留常数项 1，使梯度无需逐层经受矩阵权重衰减就能沿主干无损传递回浅层。',
+          formula: '∂L/∂x = (∂L/∂y) · (1 + ∂F/∂x)',
+        },
+      ];
+
+      const samplePackPresets = {
+        macro: {
+          title: '宏观经济学核心概念 · 专题笔记本',
+          sources: [
+            { id: 'm1', name: '高鸿业《宏观经济学》IS-LM.pdf', meta: '24 页 · 核心模型', checked: true },
+            { id: 'm2', name: '货币政策与通胀传导专题.pptx', meta: '18 页 · 案例拆解', checked: true },
+          ],
+        },
+        anatomy: {
+          title: '人体解剖学基础 · 专题笔记本',
+          sources: [
+            { id: 'a1', name: '系统解剖学 · 心血管循环通路.pdf', meta: '31 页 · 彩图切片', checked: true },
+            { id: 'a2', name: '12 对颅神经走形对比表.md', meta: '1,620 字 · 记忆口诀', checked: true },
+          ],
+        },
+        dl: {
+          title: '深度学习核心架构 · 专题笔记本',
+          sources: [
+            { id: 's1', name: '深度学习核心架构讲义.pptx', meta: '36 页 · 1,193 字', checked: true },
+            { id: 's2', name: 'Attention Is All You Need 精读.pdf', meta: '15 页 · 原文对照', checked: true },
+            { id: 's3', name: '反向传播与残差优化笔记.md', meta: '2,480 字 · 公式推导', checked: true },
+          ],
+        },
+      };
+
+      // Segmented Tabs
+      let activeTab = 'notes';
+      let isLeftCollapsed = false;
+      let isRightOpen = true;
+
+      function positionDesktopIndicator() {
+        const container = document.getElementById('desktopSegmented');
+        const indicator = document.getElementById('desktopSegIndicator');
+        const activeBtn = container?.querySelector('.seg-btn.active');
+        if (!container || !indicator || !activeBtn) return;
+        const targetX = activeBtn.offsetLeft - 3;
+        indicator.style.width = `${activeBtn.offsetWidth}px`;
+        const currentX = parseFloat(indicator.dataset.x || String(targetX));
+        animateSpring('seg-desktop', {
+          from: currentX,
+          to: targetX,
+          preset: 'snappy',
+          onUpdate: (v) => {
+            indicator.dataset.x = String(v);
+            indicator.style.transform = `translate3d(${v.toFixed(2)}px, 0, 0)`;
+          },
+        });
+      }
+
+      function switchTab(nextTab) {
+        activeTab = nextTab;
+        Object.keys(tabPanes).forEach((k) => tabPanes[k].classList.toggle('active', k === nextTab));
+        document.querySelectorAll('#desktopSegmented .seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.dataset.tab === nextTab);
+        });
+        positionDesktopIndicator();
+        reportTelemetry('snappy');
+      }
+
+      document.querySelectorAll('#desktopSegmented .seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+      });
+      document.getElementById('jumpToQuizBtn').addEventListener('click', () => switchTab('quiz'));
+      document.getElementById('jumpToFlashBtn').addEventListener('click', () => switchTab('flashcards'));
+      pillLabel1.addEventListener('click', () => {
+        if (!pillDraggedThisPress) switchTab('flashcards');
+      });
+
+      // Sidebars
+      document.getElementById('toggleLeftBtn').addEventListener('click', (e) => {
+        isLeftCollapsed = !isLeftCollapsed;
+        leftSidebar.classList.toggle('collapsed', isLeftCollapsed);
+        e.currentTarget.classList.toggle('active', !isLeftCollapsed);
+        reportTelemetry('drawer');
+      });
+      function setRightOpen(open) {
+        isRightOpen = open;
+        rightSidebar.classList.toggle('closed', !open);
+        document.getElementById('toggleRightBtn').classList.toggle('active', open);
+      }
+      document.getElementById('toggleRightBtn').addEventListener('click', () => {
+        setRightOpen(!isRightOpen);
+        reportTelemetry('drawer');
+      });
+      document.getElementById('closeRightBtn').addEventListener('click', () => {
+        setRightOpen(false);
+        reportTelemetry('drawer');
+      });
+
+      // Theme, Motion, Offline, Engine & Reset
+      document.getElementById('themeBtn').addEventListener('click', (e) => {
+        const isLight = document.documentElement.getAttribute('data-theme') !== 'dark';
+        const nextTheme = isLight ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', nextTheme);
+        optics.lightMode = nextTheme === 'light';
+        e.currentTarget.textContent = optics.lightMode ? '☀ 浅色' : '☾ 深色';
+        e.currentTarget.classList.toggle('active', !optics.lightMode);
+      });
+
+      document.getElementById('reducedMotionBtn').addEventListener('click', (e) => {
+        reducedMotionManual = !reducedMotionManual;
+        e.currentTarget.classList.toggle('active', reducedMotionManual);
+        telemetryTextEl.textContent = reducedMotionManual
+          ? 'prefers-reduced-motion 已开启'
+          : 'Spring Engine Ready · 弹簧动效已启用';
+      });
+
+      const offlineBanner = document.getElementById('offlineBanner');
+      const offlineBtn = document.getElementById('offlineBtn');
+      function setOffline(state) {
+        offlineBanner.classList.toggle('visible', state);
+        offlineBtn.classList.toggle('active', state);
+        offlineBtn.textContent = state ? '✈ 离线' : '✈ 在线';
+      }
+      offlineBtn.addEventListener('click', () => setOffline(!offlineBanner.classList.contains('visible')));
+      document.getElementById('restoreOnlineBtn').addEventListener('click', () => setOffline(false));
+
+      document.getElementById('toggleEngineBtn').addEventListener('click', () => {
+        if (!webglReady) return;
+        optics.forceFallback = !optics.forceFallback;
+        document.body.classList.toggle('cpu-fallback', optics.forceFallback);
+        updateBackendStatusText();
+      });
+
+      document.getElementById('resetPillsBtn').addEventListener('click', () => {
+        resetPillPositions();
+        reportTelemetry('snappy');
+      });
+
+      // Sliders -> SkSL Optics
+      iorRange.addEventListener('input', () => {
+        optics.ior = parseFloat(iorRange.value);
+        iorVal.textContent = optics.ior.toFixed(2);
+      });
+      dispRange.addEventListener('input', () => {
+        optics.dispersion = parseFloat(dispRange.value);
+        dispVal.textContent = optics.dispersion.toFixed(2);
+      });
+      smoothKRange.addEventListener('input', () => {
+        optics.smoothK = parseFloat(smoothKRange.value);
+        smoothKVal.textContent = String(Math.round(optics.smoothK));
+      });
+      blurRange.addEventListener('input', () => {
+        optics.blur = parseFloat(blurRange.value);
+        blurVal.textContent = optics.blur.toFixed(2);
+      });
+
+      // Sources list
+      const sourcesListEl = document.getElementById('sourcesList');
+      const sourceScopeCountEl = document.getElementById('sourceScopeCount');
+      function renderSources() {
+        const checked = sourcesData.filter((s) => s.checked).length;
+        sourceScopeCountEl.textContent = `已勾选 ${checked} / ${sourcesData.length} 份范围`;
+        sourcesListEl.innerHTML = '';
+        sourcesData.forEach((s) => {
+          const item = document.createElement('div');
+          item.className = `source-item${s.checked ? ' checked' : ''}`;
+          item.innerHTML = `
+            <span class="source-checkbox">${s.checked ? '✓' : ''}</span>
+            <div style="min-width:0;flex:1;">
+              <div style="font-size:13px;line-height:18px;font-weight:600;color:var(--text-primary);word-break:break-word;">${s.name}</div>
+              <div class="t-caption" style="margin-top:2px;">${s.meta}</div>
+            </div>
+          `;
+          item.addEventListener('click', () => {
+            s.checked = !s.checked;
+            renderSources();
+            animateSpring(`src-${s.id}`, {
+              from: 0.96,
+              to: 1.0,
+              preset: 'snappy',
+              onUpdate: (v) => { item.style.transform = `scale(${v.toFixed(4)})`; },
+            });
+            reportTelemetry('snappy');
+          });
+          sourcesListEl.appendChild(item);
+        });
+      }
+      renderSources();
+
+      document.getElementById('selectAllSourcesBtn').addEventListener('click', () => {
+        sourcesData.forEach((s) => { s.checked = true; });
+        renderSources();
+      });
+      document.getElementById('sidebarEmptyBtn').addEventListener('click', () => switchTab('empty'));
+
+      // Sample Packs
+      document.querySelectorAll('.sample-pack-card').forEach((card) => {
+        card.addEventListener('click', () => {
+          const preset = samplePackPresets[card.dataset.sample];
+          if (!preset) return;
+          notebookTitleEl.textContent = preset.title;
+          sourcesData.splice(0, sourcesData.length, ...preset.sources.map((s) => ({ ...s })));
+          renderSources();
+          switchTab('notes');
+          reportTelemetry('drawer', 'Notification Success');
+        });
+      });
+      document.getElementById('restoreDefaultPackBtn').addEventListener('click', () => {
+        const preset = samplePackPresets.dl;
+        notebookTitleEl.textContent = preset.title;
+        sourcesData.splice(0, sourcesData.length, ...preset.sources.map((s) => ({ ...s })));
+        renderSources();
+        switchTab('notes');
+      });
+      document.getElementById('mockUploadBtn').addEventListener('click', () => {
+        document.getElementById('restoreDefaultPackBtn').click();
+      });
+
+      // Citations -> Right Source Viewer
+      const sourceViewerCard = document.getElementById('sourceViewerCard');
+      const citeSourceNameEl = document.getElementById('citeSourceName');
+      const citeSourceBodyEl = document.getElementById('citeSourceBody');
+
+      document.addEventListener('click', (e) => {
+        const badge = e.target.closest('.cite-badge');
+        if (!badge) return;
+        const entry = citationsMap[badge.dataset.cite] || citationsMap.c1;
+        animateSpring('cite-press', {
+          from: 0.90,
+          to: 1.0,
+          preset: 'snappy',
+          onUpdate: (v) => { badge.style.transform = `scale(${v.toFixed(3)})`; },
+        });
+        setRightOpen(true);
+        citeSourceNameEl.textContent = entry.title;
+        citeSourceBodyEl.innerHTML = entry.body;
+        animateSpring('source-viewer', {
+          from: 34,
+          to: 0,
+          preset: 'drawer',
+          onUpdate: (x) => { sourceViewerCard.style.transform = `translate3d(${x.toFixed(1)}px, 0, 0)`; },
+        });
+        reportTelemetry('drawer', 'Selection Changed');
+      });
+
+      // Copilot Prompts
+      const copilotThreadEl = document.getElementById('copilotThread');
+      const copilotReplies = {
+        '为什么 Sigmoid 导数最大只有 0.25？': '由 σ\'(x) = σ(x)(1 - σ(x))，最大值在 σ(x) = 0.5 处取得 0.25；每反向跨过一层梯度至少衰减 4 倍以上。',
+        '对比 Pre-LN 和 Post-LN 的收敛差异': 'Pre-LN 将归一化放置在残差分支内部，主干恒等连接不被缩放破坏，初始阶段显著更稳定。',
+      };
+      document.querySelectorAll('.copilot-prompt-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const q = btn.dataset.q;
+          const u = document.createElement('div');
+          u.className = 'copilot-bubble';
+          u.style.background = 'var(--brand-tint)';
+          u.textContent = `我：${q}`;
+          const a = document.createElement('div');
+          a.className = 'copilot-bubble';
+          a.textContent = `AI 助教：${copilotReplies[q] || '已结合当前讲义生成回答。'}`;
+          copilotThreadEl.appendChild(u);
+          copilotThreadEl.appendChild(a);
+          animateSpring('copilot-pop', {
+            from: 16,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (y) => { a.style.transform = `translate3d(0, ${y.toFixed(1)}px, 0)`; },
+          });
+          reportTelemetry('drawer');
+        });
+      });
+
+      // Interactive Quiz State Machine
+      const quizContainer = document.getElementById('quizContainer');
+      const quizProgressLabel = document.getElementById('quizProgressLabel');
+      const quizProgressFill = document.getElementById('quizProgressFill');
+      const wrongCountHint = document.getElementById('wrongCountHint');
+      const quizAnswers = new Map();
+
+      function updateQuizMetrics() {
+        const total = quizBank.length;
+        const answered = quizAnswers.size;
+        let wrongCount = 0;
+        quizAnswers.forEach((v) => { if (!v.isCorrect) wrongCount += 1; });
+        const pct = total > 0 ? Math.round((answered / total) * 100) : 0;
+        quizProgressLabel.textContent = `已作答 ${answered} / ${total} 题 · 错题本 ${wrongCount} 题`;
+        quizProgressFill.style.width = `${pct}%`;
+        wrongCountHint.textContent = `当前错题本包含 ${wrongCount} 题`;
+      }
+
+      function renderQuizCards() {
+        quizContainer.innerHTML = '';
+        quizBank.forEach((q, qIdx) => {
+          const state = quizAnswers.get(q.id);
+          const card = document.createElement('article');
+          card.className = 'glass-card quiz-card';
+          card.setAttribute('data-glass-panel', `quiz-${q.id}`);
+          card.setAttribute('data-radius', '16');
+          card.setAttribute('data-bezel', '22');
+          card.setAttribute('data-darkmix', '0.40');
+
+          card.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="t-caption mono" style="background:var(--brand-tint);color:var(--brand-primary);padding:2px 8px;border-radius:var(--r-sm);">Q${qIdx + 1}</span>
+                <span class="t-caption">${q.tag}</span>
+              </div>
+              <button class="cite-badge" data-cite="${q.citeKey}">${q.citeLabel}</button>
+            </div>
+            <h3 class="t-h3">${q.stem}</h3>
+          `;
+
+          const optList = document.createElement('div');
+          optList.className = 'options-list';
+
+          const drawer = document.createElement('div');
+          drawer.className = `ai-drawer${state && !state.isCorrect ? ' open' : ''}`;
+          drawer.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="t-h3" style="font-size:14px;color:var(--semantic-warning);">💡 AI 错题解析抽屉</span>
+              <button class="cite-badge" data-cite="${q.citeKey}">${q.citeLabel}</button>
+            </div>
+            <p class="t-small" style="color:var(--text-primary);">${q.explanation}</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn-secondary add-notebook-btn">${state && state.inNotebook ? '✓ 已自动收录错题本' : '+ 加入错题本'}</button>
+              <button class="btn-secondary regen-topic-btn">✨ 针对此知识点再出一题</button>
+            </div>
+          `;
+
+          q.options.forEach((opt, optIdx) => {
+            const btn = document.createElement('button');
+            btn.className = 'option-btn';
+            let badgeText = opt.label;
+            if (state) {
+              btn.disabled = true;
+              if (optIdx === q.correctIdx) {
+                btn.classList.add('state-correct');
+                badgeText = '✓';
+              } else if (optIdx === state.selectedIdx && !state.isCorrect) {
+                btn.classList.add('state-wrong');
+              }
+            }
+            btn.innerHTML = `
+              <span class="opt-letter">${badgeText}</span>
+              <span class="t-small" style="color:var(--text-primary);">${opt.text}</span>
+            `;
+
+            btn.addEventListener('click', () => {
+              if (quizAnswers.has(q.id)) return;
+              const isCorrect = optIdx === q.correctIdx;
+              quizAnswers.set(q.id, { selectedIdx: optIdx, isCorrect, inNotebook: !isCorrect });
+              updateQuizMetrics();
+
+              const allBtns = optList.querySelectorAll('.option-btn');
+              allBtns.forEach((ob, i) => {
+                ob.disabled = true;
+                if (i === q.correctIdx) {
+                  ob.classList.add('state-correct');
+                  ob.querySelector('.opt-letter').textContent = '✓';
+                }
+              });
+
+              if (isCorrect) {
+                animateSpring(`opt-ok-${q.id}`, {
+                  from: 0.98,
+                  to: 1.0,
+                  preset: 'snappy',
+                  onUpdate: (s) => { btn.style.transform = `scale(${s.toFixed(4)})`; },
+                });
+                reportTelemetry('snappy', 'Light Impact');
+              } else {
+                btn.classList.add('state-wrong');
+                animateSpring(`opt-err-${q.id}`, {
+                  from: 5.5,
+                  to: 0,
+                  velocity: -190,
+                  preset: 'tactile',
+                  onUpdate: (dx) => { btn.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`; },
+                });
+                drawer.classList.add('open');
+                animateSpring(`drawer-${q.id}`, {
+                  from: 0,
+                  to: 1,
+                  preset: 'drawer',
+                  onUpdate: (p) => {
+                    drawer.style.opacity = p.toFixed(3);
+                    drawer.style.transform = `translate3d(0, ${((1 - p) * -10).toFixed(2)}px, 0) scaleY(${(0.94 + 0.06 * p).toFixed(4)})`;
+                  },
+                });
+                const nbBtn = drawer.querySelector('.add-notebook-btn');
+                if (nbBtn) nbBtn.textContent = '✓ 已自动收录错题本';
+                reportTelemetry('tactile', 'Notification Warning');
+              }
+            });
+
+            optList.appendChild(btn);
+          });
+
+          card.appendChild(optList);
+          card.appendChild(drawer);
+          const nbBtn = drawer.querySelector('.add-notebook-btn');
+          if (nbBtn) {
+            nbBtn.addEventListener('click', () => {
+              const st = quizAnswers.get(q.id);
+              if (st) st.inNotebook = true;
+              nbBtn.textContent = '✓ 已加入错题本';
+              reportTelemetry('snappy', 'Light Impact');
+            });
+          }
+          const regenBtn = drawer.querySelector('.regen-topic-btn');
+          if (regenBtn) {
+            regenBtn.addEventListener('click', () => triggerAiQuizGeneration(`针对「${q.citeLabel}」变式加练`));
+          }
+          quizContainer.appendChild(card);
+        });
+        updateQuizMetrics();
+      }
+      renderQuizCards();
+
+      document.getElementById('resetQuizBtn').addEventListener('click', () => {
+        quizAnswers.clear();
+        renderQuizCards();
+        reportTelemetry('snappy');
+      });
+      document.querySelectorAll('.prompt-pill').forEach((pill) => {
+        pill.addEventListener('click', () => {
+          const grp = pill.dataset.pillGroup;
+          document.querySelectorAll(`.prompt-pill[data-pill-group="${grp}"]`).forEach((p) => p.classList.remove('selected'));
+          pill.classList.add('selected');
+          reportTelemetry('snappy');
+        });
+      });
+
+      const aiGenBtn = document.getElementById('aiGenBtn');
+      const shimmerCard = document.getElementById('shimmerCard');
+      const shimmerMicroCopy = document.getElementById('shimmerMicroCopy');
+      const genStatusText = document.getElementById('genStatusText');
+      let genInFlight = false;
+
+      function triggerAiQuizGeneration(customTopic) {
+        if (genInFlight) return;
+        genInFlight = true;
+        aiGenBtn.disabled = true;
+        shimmerCard.classList.add('active');
+        const activeChecked = sourcesData.filter((s) => s.checked).length;
+        const steps = [
+          `1. 正在分析 ${activeChecked} 份文档结构...`,
+          '2. 正在提炼核心考点...',
+          '3. 正在生成交互题目...',
+        ];
+        shimmerMicroCopy.textContent = steps[0];
+        genStatusText.textContent = customTopic ? `正在${customTopic}...` : steps[0];
+        setTimeout(() => { shimmerMicroCopy.textContent = steps[1]; }, 420);
+        setTimeout(() => { shimmerMicroCopy.textContent = steps[2]; }, 840);
+        setTimeout(() => {
+          shimmerCard.classList.remove('active');
+          quizBank.unshift({
+            id: `q_${Date.now()}`,
+            tag: customTopic || 'AI 流式新出变式 · 高频易错',
+            citeKey: 'c3',
+            citeLabel: '[来源2 p.19]',
+            stem: '若多头注意力中 Q、K 向量维度 d_k 从 64 增至 256，在未进行 1/√d_k 缩放前，点积标准差将（ ）',
+            options: [
+              { label: 'A', text: '增大为原来的 2 倍，极易把 Softmax 推入梯度饱和边缘。' },
+              { label: 'B', text: '保持不变，因为矩阵乘法维度会自动互相抵消方差。' },
+              { label: 'C', text: '缩小为原来的 1/2，使得注意力分布趋向于均匀。' },
+            ],
+            correctIdx: 0,
+            explanation: '点积方差与维度 d_k 成正比，因此 d_k 扩大为 4 倍（64 -> 256）时标准差扩大为 √4 = 2 倍。',
+          });
+          renderQuizCards();
+          const firstCard = quizContainer.firstElementChild;
+          if (firstCard) {
+            animateSpring('stream-card', {
+              from: 0,
+              to: 1,
+              preset: 'drawer',
+              onUpdate: (p) => {
+                firstCard.style.opacity = p.toFixed(3);
+                firstCard.style.transform = `translate3d(0, ${((1 - p) * 20).toFixed(1)}px, 0)`;
+              },
+            });
+          }
+          genStatusText.textContent = '已流式追加 1 道高匹配度变式题（点击选项立即判分）';
+          aiGenBtn.disabled = false;
+          genInFlight = false;
+          reportTelemetry('drawer', 'Notification Success');
+        }, 1280);
+      }
+      aiGenBtn.addEventListener('click', () => triggerAiQuizGeneration());
+
+      // =========================================================================
+      //  Desktop Keyboard-Controlled 3D Flashcards (ArrowLeft / ArrowRight / Space)
+      // =========================================================================
+      const flashCarrier = document.getElementById('flashCarrier');
+      const flashFlipper = document.getElementById('flashFlipper');
+      const stampReview = document.getElementById('stampReview');
+      const stampMastered = document.getElementById('stampMastered');
+      const flashStatsEl = document.getElementById('flashStats');
+      const markReviewBtn = document.getElementById('markReviewBtn');
+      const flipCardBtn = document.getElementById('flipCardBtn');
+      const markMasteredBtn = document.getElementById('markMasteredBtn');
+
+      let flashIndex = 0;
+      let flashFlipped = false;
+      let masteredCount = 0;
+      let reviewCount = 0;
+      let flashBusy = false;
+
+      function renderFlashcard() {
+        const card = flashcardsData[flashIndex];
+        document.getElementById('flashCardIndexBadge').textContent = `${flashIndex + 1} / ${flashcardsData.length}`;
+        document.getElementById('flashFrontTitle').textContent = card.front;
+        document.getElementById('flashFrontHint').textContent = card.hint;
+        document.getElementById('flashBackBody').textContent = card.back;
+        document.getElementById('flashBackFormula').textContent = card.formula;
+        const citeBtn = document.getElementById('flashBackCiteBtn');
+        citeBtn.dataset.cite = card.citeKey;
+        citeBtn.textContent = card.citeLabel;
+        flashStatsEl.textContent = `第 ${flashIndex + 1} / ${flashcardsData.length} 张 · 已掌握 ${masteredCount} · 需复习 ${reviewCount}`;
+      }
+      renderFlashcard();
+
+      function pulseKeyBtn(btnEl, keyId) {
+        animateSpring(`kbd-${keyId}`, {
+          from: 0.93,
+          to: 1.0,
+          preset: 'snappy',
+          onUpdate: (s) => { btnEl.style.transform = `scale(${s.toFixed(4)})`; },
+        });
+      }
+
+      const flashFrontFace = flashFlipper.querySelector('.flashcard-front');
+      const flashBackFace = flashFlipper.querySelector('.flashcard-back');
+
+      function applyFlashFlipAngle(deg) {
+        const showBack = Math.abs(deg) > 90;
+        const renderDeg = showBack ? (deg - 180) : deg;
+        flashFlipper.style.transform = `perspective(1200px) rotateY(${renderDeg.toFixed(2)}deg)`;
+        if (flashFrontFace && flashBackFace) {
+          flashFrontFace.style.visibility = showBack ? 'hidden' : 'visible';
+          flashFrontFace.style.opacity = showBack ? '0' : '1';
+          flashFrontFace.style.pointerEvents = showBack ? 'none' : 'auto';
+          flashBackFace.style.visibility = showBack ? 'visible' : 'hidden';
+          flashBackFace.style.opacity = showBack ? '1' : '0';
+          flashBackFace.style.pointerEvents = showBack ? 'auto' : 'none';
+        }
+      }
+      applyFlashFlipAngle(0);
+
+      function flipFlashcard() {
+        pulseKeyBtn(flipCardBtn, 'space');
+        const fromDeg = flashFlipped ? 180 : 0;
+        const toDeg = flashFlipped ? 0 : 180;
+        flashFlipped = !flashFlipped;
+        if (isReducedMotion()) {
+          applyFlashFlipAngle(toDeg);
+        } else {
+          animateSpring('flash-flip', {
+            from: fromDeg,
+            to: toDeg,
+            preset: 'card',
+            onUpdate: (deg) => { applyFlashFlipAngle(deg); },
+          });
+        }
+        reportTelemetry('card');
+      }
+
+      function advanceFlashcardByKey(direction) {
+        if (flashBusy) return;
+        flashBusy = true;
+        if (direction > 0) {
+          masteredCount += 1;
+          pulseKeyBtn(markMasteredBtn, 'right');
+          stampMastered.style.opacity = '1';
+          stampReview.style.opacity = '0';
+          reportTelemetry('card', 'Light Impact');
+        } else {
+          reviewCount += 1;
+          pulseKeyBtn(markReviewBtn, 'left');
+          stampReview.style.opacity = '1';
+          stampMastered.style.opacity = '0';
+          reportTelemetry('card', 'Selection Changed');
+        }
+
+        const exitX = direction * 240;
+        animateSpring('flash-key-step', {
+          from: 0,
+          to: exitX,
+          velocity: direction * 900,
+          preset: 'card',
+          onUpdate: (dx) => {
+            const tilt = Math.max(-8, Math.min(8, dx / 36));
+            flashCarrier.style.transform = `translate3d(${dx.toFixed(1)}px, 0, 0) rotate(${tilt.toFixed(2)}deg)`;
+            flashCarrier.style.opacity = Math.max(0, 1 - Math.abs(dx) / 220).toFixed(3);
+          },
+          onComplete: () => {
+            flashIndex = (flashIndex + 1) % flashcardsData.length;
+            flashFlipped = false;
+            applyFlashFlipAngle(0);
+            stampReview.style.opacity = '0';
+            stampMastered.style.opacity = '0';
+            renderFlashcard();
+            flashCarrier.style.opacity = '1';
+            animateSpring('flash-key-enter', {
+              from: 0.94,
+              to: 1.0,
+              preset: 'card',
+              onUpdate: (s) => { flashCarrier.style.transform = `scale(${s.toFixed(4)})`; },
+              onComplete: () => { flashBusy = false; },
+            });
+          },
+        });
+      }
+
+      flashCarrier.addEventListener('click', (e) => {
+        if (e.target.closest('.cite-badge')) return;
+        flipFlashcard();
+      });
+      flipCardBtn.addEventListener('click', flipFlashcard);
+      markReviewBtn.addEventListener('click', () => advanceFlashcardByKey(-1));
+      markMasteredBtn.addEventListener('click', () => advanceFlashcardByKey(1));
+
+      window.addEventListener('keydown', (e) => {
+        if (e.target.closest('input, textarea, select')) return;
+        if (exportBackdrop.classList.contains('open')) {
+          if (e.key === 'Escape') setExportModalOpen(false);
+          return;
+        }
+        if (activeTab !== 'flashcards') return;
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          advanceFlashcardByKey(-1);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          advanceFlashcardByKey(1);
+        } else if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          flipFlashcard();
+        }
+      });
+
+      // =========================================================================
+      //  Aggregate Export Modal + Workbench scale(0.96) Recession + Live A4
+      // =========================================================================
+      const exportBackdrop = document.getElementById('exportModalBackdrop');
+      const exportModal = document.getElementById('exportModal');
+      const pdfWordSwitches = document.getElementById('pdfWordSwitches');
+      const a4Sheet = document.getElementById('a4Sheet');
+      const exportFeedbackMsg = document.getElementById('exportFeedbackMsg');
+
+      const exportState = {
+        format: 'pdf',
+        includeAnswers: true,
+        wrongOnly: false,
+        includeCitations: true,
+      };
+
+      function renderA4Preview() {
+        const formatLabels = {
+          pdf: '打印刷题卷 (PDF)',
+          docx: '结构化讲义 (Word)',
+          anki: '记忆卡包 (Anki)',
+          md: '纯文本笔记 (Markdown)',
+        };
+        const showSwitches = exportState.format === 'pdf' || exportState.format === 'docx';
+        pdfWordSwitches.style.display = showSwitches ? 'flex' : 'none';
+
+        const filteredQs = exportState.wrongOnly
+          ? quizBank.filter((q) => {
+              const st = quizAnswers.get(q.id);
+              return st && !st.isCorrect;
+            })
+          : quizBank.slice(0, 2);
+
+        let bodyHtml = `
+          <div style="border-bottom:1.5px solid #111827;padding-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
+            <strong>Auto Study · 同步练习卷</strong>
+            <span style="color:#6B7280;font-size:8px;">${formatLabels[exportState.format]}</span>
+          </div>
+        `;
+        if (filteredQs.length === 0) {
+          bodyHtml += `<div style="margin:auto 0;text-align:center;color:#9CA3AF;padding:24px 0;">当前错题本暂无错题记录</div>`;
+        } else {
+          filteredQs.forEach((q, idx) => {
+            const citeTag = exportState.includeCitations ? `<span style="color:#3B5BDB;background:#EDF2FF;padding:0 3px;border-radius:3px;">${q.citeLabel}</span>` : '';
+            const ansBlock = exportState.includeAnswers
+              ? `<div class="a4-answer-box">✓ 答案：${q.options[q.correctIdx].label} · ${q.explanation.slice(0, 38)}…</div>`
+              : `<div class="a4-blank-lines"><div class="a4-blank-line"></div><div class="a4-blank-line"></div><div class="a4-blank-line"></div></div>`;
+            bodyHtml += `<div class="a4-q-item"><div><strong>${idx + 1}.</strong> ${q.stem.slice(0, 34)}… ${citeTag}</div>${ansBlock}</div>`;
+          });
+        }
+        a4Sheet.innerHTML = bodyHtml;
+      }
+
+      function setExportModalOpen(open) {
+        if (open) {
+          renderA4Preview();
+          exportBackdrop.classList.add('open');
+          animateSpring('export-recede', {
+            from: 0,
+            to: 1,
+            preset: 'drawer',
+            onUpdate: (p) => {
+              workbenchStage.style.transform = `scale(${(1 - 0.04 * p).toFixed(4)})`;
+              workbenchStage.style.borderRadius = `${(16 * p).toFixed(1)}px`;
+              workbenchStage.style.filter = `brightness(${(1 - 0.08 * p).toFixed(3)})`;
+              exportModal.style.opacity = p.toFixed(3);
+              exportModal.style.transform = `translate3d(0, ${((1 - p) * 24).toFixed(1)}px, 0) scale(${(0.96 + 0.04 * p).toFixed(4)})`;
+            },
+          });
+          reportTelemetry('drawer');
+        } else {
+          animateSpring('export-recede', {
+            from: 1,
+            to: 0,
+            preset: 'drawer',
+            onUpdate: (p) => {
+              workbenchStage.style.transform = p < 0.01 ? '' : `scale(${(1 - 0.04 * p).toFixed(4)})`;
+              workbenchStage.style.borderRadius = p < 0.01 ? '' : `${(16 * p).toFixed(1)}px`;
+              workbenchStage.style.filter = p < 0.01 ? '' : `brightness(${(1 - 0.08 * p).toFixed(3)})`;
+              exportModal.style.opacity = p.toFixed(3);
+            },
+            onComplete: () => {
+              exportBackdrop.classList.remove('open');
+              workbenchStage.style.transform = '';
+              workbenchStage.style.borderRadius = '';
+              workbenchStage.style.filter = '';
+            },
+          });
+        }
+      }
+
+      document.getElementById('openExportBtn').addEventListener('click', () => setExportModalOpen(true));
+      document.getElementById('closeExportBtn').addEventListener('click', () => setExportModalOpen(false));
+      exportBackdrop.addEventListener('click', (e) => {
+        if (e.target === exportBackdrop) setExportModalOpen(false);
+      });
+
+      document.querySelectorAll('.format-card').forEach((fc) => {
+        fc.addEventListener('click', () => {
+          document.querySelectorAll('.format-card').forEach((c) => c.classList.remove('active'));
+          fc.classList.add('active');
+          exportState.format = fc.dataset.fmt;
+          renderA4Preview();
+          reportTelemetry('snappy');
+        });
+      });
+
+      function bindSwitch(id, key) {
+        const el = document.getElementById(id);
+        el.addEventListener('click', () => {
+          exportState[key] = !exportState[key];
+          el.setAttribute('aria-checked', String(exportState[key]));
+          renderA4Preview();
+          reportTelemetry('snappy');
+        });
+      }
+      bindSwitch('swAnswers', 'includeAnswers');
+      bindSwitch('swWrongOnly', 'wrongOnly');
+      bindSwitch('swCitations', 'includeCitations');
+
+      document.getElementById('confirmExportBtn').addEventListener('click', () => {
+        exportFeedbackMsg.textContent = `✓ 已模拟生成 ${exportState.format.toUpperCase()} 导出包（纯界面展示）`;
+        reportTelemetry('snappy', 'Notification Success');
+      });
+
+      // Draggable Metaball Pills Pointer Tracking (ONLY updates when dragging a pill!)
+      window.addEventListener('pointermove', (e) => {
+        if (dragIndex >= 0) {
+          if (Math.hypot(e.clientX - dragStartPtrX, e.clientY - dragStartPtrY) > 4) {
+            pillDraggedThisPress = true;
+            pillsManuallyMoved = true;
+          }
+          pills[dragIndex].tx = e.clientX - dragGrabX;
+          pills[dragIndex].ty = e.clientY - dragGrabY;
+        }
+      });
+      pills.forEach((pill, idx) => {
+        pill.el.addEventListener('pointerdown', (e) => {
+          dragIndex = idx;
+          dragStartPtrX = e.clientX;
+          dragStartPtrY = e.clientY;
+          pillDraggedThisPress = false;
+          dragGrabX = e.clientX - pill.x;
+          dragGrabY = e.clientY - pill.y;
+          pill.el.setPointerCapture(e.pointerId);
+          e.preventDefault();
+        });
+      });
+      window.addEventListener('pointerup', () => { dragIndex = -1; });
+      window.addEventListener('pointercancel', () => { dragIndex = -1; });
+
+      // Main Unified Animation Frame Loop (Springs + SkSL Liquid Glass)
+      function tick(now) {
+        const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000));
+        lastFrame = now;
+        const t = (now - startTime) / 1000;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+
+        stepActiveSprings(now);
+        initPositions(w, h);
+
+        const pillEase = 1 - Math.exp(-20.0 * dt);
+        for (const p of pills) {
+          p.tx = Math.max(p.halfLen + p.radius + 8, Math.min(w - p.halfLen - p.radius - 8, p.tx));
+          p.ty = Math.max(p.radius + 114, Math.min(h - p.radius - 8, p.ty));
+          p.x += (p.tx - p.x) * pillEase;
+          p.y += (p.ty - p.y) * pillEase;
+          p.el.style.left = `${p.x.toFixed(1)}px`;
+          p.el.style.top = `${p.y.toFixed(1)}px`;
+        }
+
+        renderBackdrop(w, h, t, dpr);
+        const panels = gatherDomPanels();
+        if (webglReady && !optics.forceFallback) {
+          renderWebGL(w, h, t, dpr, panels);
+        } else {
+          renderCpuFallback(w, h, dpr, panels);
+        }
+
+        requestAnimationFrame(tick);
+      }
+
+      window.addEventListener('resize', positionDesktopIndicator);
+      initWebGL();
+      requestAnimationFrame(() => {
+        positionDesktopIndicator();
+        requestAnimationFrame(tick);
+      });
+    })();
+  </script>
+</body>
+</html>

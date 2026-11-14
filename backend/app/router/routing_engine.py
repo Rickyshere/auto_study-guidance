@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.router.cloud_provider import call_cloud_llm
 from app.router.harness_provider import HarnessCancelToken, run_cli_harness
-from app.router.local_provider import call_local_llm
 from app.schemas import ProviderSelection, ProviderType, RouterSettings, StageName
 
 
@@ -108,31 +107,17 @@ class ModelRouter:
             await res
 
     def is_non_heuristic_active(self) -> bool:
-        """Return True only when a non-heuristic engine (cloud / local / harness) is active."""
-        if self.settings.routing_mode == "single":
-            return self.settings.active_provider != "heuristic"
-        for st in (
-            "requirement_negotiation",
-            "notes_and_cheatsheet",
-            "quiz_generation",
-            "mindmap_generation",
-            "global_quality_audit",
-        ):
-            sel = self.settings.stage_mapping.get(st)
-            if sel and sel.provider != "heuristic":
-                return True
-        return False
+        """Both allowed engines (Magpie+DSH harness and Cloud API) are AI-backed."""
+        return True
 
     def resolve_quality_audit_provider(self) -> Optional[ProviderSelection]:
-        """Resolve provider for global quality audit. Active ONLY when non-heuristic engine is used."""
+        """Resolve provider for global quality audit across harness / cloud engines."""
         if not getattr(self.settings, "enable_quality_audit", True):
-            return None
-        if not self.is_non_heuristic_active():
             return None
         if self.settings.routing_mode == "single":
             return ProviderSelection(provider=self.settings.active_provider)
         sel = self.settings.stage_mapping.get("global_quality_audit")
-        if sel and sel.provider != "heuristic":
+        if sel and sel.provider in ("harness", "cloud"):
             return sel
         for st in (
             "notes_and_cheatsheet",
@@ -141,17 +126,17 @@ class ModelRouter:
             "mindmap_generation",
         ):
             cand = self.settings.stage_mapping.get(st)
-            if cand and cand.provider != "heuristic":
+            if cand and cand.provider in ("harness", "cloud"):
                 return cand
-        return None
+        return ProviderSelection(provider=self.settings.active_provider)
 
     def resolve_stage(self, stage: StageName) -> ProviderSelection:
         if stage == "global_quality_audit":
-            return self.resolve_quality_audit_provider() or ProviderSelection(provider="heuristic")
+            return self.resolve_quality_audit_provider() or ProviderSelection(provider=self.settings.active_provider)
         if self.settings.routing_mode == "smart_stage":
-            return self.settings.stage_mapping.get(
-                stage, ProviderSelection(provider=self.settings.active_provider)
-            )
+            sel = self.settings.stage_mapping.get(stage)
+            if sel and sel.provider in ("harness", "cloud"):
+                return sel
         return ProviderSelection(provider=self.settings.active_provider)
 
     async def execute_text(
@@ -167,15 +152,16 @@ class ModelRouter:
         self.check_cancelled()
         sel = self.resolve_stage(stage)
         provider: ProviderType = sel.provider
-
-        if provider == "heuristic":
-            label = "heuristic (内置智能规则引擎)"
-            self.routing_trace[stage] = label
-            return None, label
+        if provider not in ("harness", "cloud"):
+            provider = self.settings.active_provider if self.settings.active_provider in ("harness", "cloud") else "harness"
 
         max_retries = max(0, int(getattr(self.settings.harness_config, "max_retries", 2)))
         try:
             if provider == "cloud":
+                if not (self.settings.cloud_config.api_key or "").strip():
+                    raise RuntimeError(
+                        "CLOUD_NOT_CONFIGURED: 云端 API Key 尚未配置。请在右上角「模型设置」中填写有效的 API Key，或切换为「Magpie + DeepSeek Harness」免费反代引擎。"
+                    )
                 model = sel.model_override or self.settings.cloud_config.model
                 text = await self._call_with_retry(
                     stage,
@@ -189,43 +175,34 @@ class ModelRouter:
                 self.routing_trace[stage] = label
                 return text, label
 
-            if provider == "local":
-                model = sel.model_override or self.settings.local_config.model
-                text = await self._call_with_retry(
-                    stage,
-                    f"local/{model}",
-                    max_retries,
-                    lambda: call_local_llm(
-                        system_prompt, user_prompt, self.settings.local_config, model_override=model
-                    ),
+            # Default & only other engine: Magpie + DeepSeek Harness (or CLI harness)
+            free_auth = self.settings.free_ai_auth
+            if (
+                self.settings.harness_config.preferred_cli == "dsh"
+                and free_auth.preferred_proxy_mode == "magpie_dsh"
+                and not free_auth.authorized_use_local_ai
+            ):
+                raise RuntimeError(
+                    "AUTH_REQUIRED: 使用本机免费 AI 软件（Qoder CN / WorkBuddy / Trae CN）通过 Magpie + DeepSeek Harness 反代出题前，需先取得您的授权确认。"
                 )
-                label = f"local-{self.settings.local_config.engine}/{model}"
-                self.routing_trace[stage] = label
-                return text, label
 
-            if provider == "harness":
-                text = await run_cli_harness(
-                    system_prompt,
-                    user_prompt,
-                    self.settings.harness_config,
-                    cancel_token=self.cancel_token,
-                    status_cb=lambda msg: self._emit_stage_status(stage, msg),
-                )
+            text = await run_cli_harness(
+                system_prompt,
+                user_prompt,
+                self.settings.harness_config,
+                cancel_token=self.cancel_token,
+                status_cb=lambda msg: self._emit_stage_status(stage, msg),
+                free_ai_auth=free_auth,
+            )
+            if self.settings.harness_config.preferred_cli == "dsh" and free_auth.preferred_proxy_mode == "magpie_dsh":
+                label = f"harness/magpie-dsh ({free_auth.selected_free_model})"
+            else:
                 label = f"harness/{self.settings.harness_config.preferred_cli}-cli"
-                self.routing_trace[stage] = label
-                return text, label
+            self.routing_trace[stage] = label
+            return text, label
 
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            self.check_cancelled()
-            if not self.settings.enable_fallback:
-                raise
-            label = f"{provider} 失败({str(exc)[:60]}) -> heuristic 回退"
-            self.routing_trace[stage] = label
-            return None, label
-
-        return None, "heuristic"
 
     async def _call_with_retry(
         self,
@@ -285,8 +262,6 @@ class ModelRouter:
                     await self._emit_stage_status(stage, f"{label} 输出非合法 JSON，正在自动重试...")
                     await asyncio.sleep(1.0)
                     continue
-        if not self.settings.enable_fallback and last_exc is not None:
+        if last_exc is not None:
             raise last_exc
-        fallback_label = f"{last_label} JSON解析失败({str(last_exc)[:40]}) -> heuristic 回退"
-        self.routing_trace[stage] = fallback_label
-        return None, fallback_label
+        raise RuntimeError(f"{last_label} 未返回合法 JSON 数据")

@@ -969,18 +969,6 @@ async def extract_text_from_image_vision(
             api_key=settings.cloud_config.api_key,
             model=settings.cloud_config.vision_model or settings.cloud_config.model,
         )
-    if provider == "local":
-        base_url = (
-            f"{settings.local_config.ollama_url.rstrip('/')}/v1"
-            if settings.local_config.engine == "ollama"
-            else f"{settings.local_config.lmstudio_url.rstrip('/')}/v1"
-        )
-        return await _call_openai_vision(
-            image_path=image_path,
-            base_url=base_url,
-            api_key="local",
-            model=settings.local_config.vision_model or settings.local_config.model,
-        )
     return ""
 
 

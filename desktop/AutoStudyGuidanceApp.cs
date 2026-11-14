@@ -24,7 +24,7 @@ namespace AutoStudyGuidanceDesktop
     internal sealed class MainWindow : Form
     {
         private const string ServerUrl = "http://127.0.0.1:8000";
-        private const string ReadyTitle = "Auto Study Guidance · 智能导学与题库工作台";
+        private const string ReadyTitle = "Auto Study Guidance v1.0.0 · 智能导学与题库工作台";
 
         private readonly WebView2 _webView;
         private readonly Panel _loadingPanel;

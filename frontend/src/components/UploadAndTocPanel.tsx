@@ -1,13 +1,14 @@
 import React, { useRef, useState } from 'react';
 import {
-  UploadCloud,
-  FileText,
-  Image as ImageIcon,
-  Check,
-  Sparkles,
   BookOpen,
+  CheckSquare,
+  FileText,
   FolderOpen,
+  Loader2,
+  Sparkles,
+  Square,
   Trash2,
+  UploadCloud,
 } from 'lucide-react';
 import { DocumentIR, ProjectSummary } from '../types';
 import { SpringButton } from '../utils/springPhysics';
@@ -46,461 +47,201 @@ export const UploadAndTocPanel: React.FC<Props> = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {/* Card 1: Drag & Drop Uploader + 1-Click Demo */}
+    <div className="space-y-4">
+      {/* Step 1 Upload Dropzone */}
       <div
+        data-glass-panel="true"
+        className="asg-card p-3.5 space-y-3"
         style={{
-          fontSize: '11px',
-          fontWeight: 600,
-          color: '#636366',
-          paddingLeft: '4px',
+          borderColor: dragActive ? '#3B5BDB' : 'var(--border-default)',
+          backgroundColor: dragActive ? 'var(--brand-tint)' : 'var(--bg-surface)',
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragActive(false);
+          handleFiles(e.dataTransfer.files);
         }}
       >
-        教材 / 课件导入
-      </div>
-
-      <div
-        style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '14px',
-          border: '1px solid rgba(60, 60, 67, 0.08)',
-          boxShadow: '0 2px 8px -4px rgba(0, 0, 0, 0.04)',
-          padding: '12px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px',
-        }}
-      >
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={() => setDragActive(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            handleFiles(e.dataTransfer.files);
-          }}
-          onClick={() => inputRef.current?.click()}
-          style={{
-            cursor: 'pointer',
-            borderRadius: '11px',
-            border: dragActive ? '1.5px dashed #007AFF' : '1.5px dashed rgba(60, 60, 67, 0.22)',
-            backgroundColor: dragActive ? 'rgba(0, 122, 255, 0.06)' : '#F9F9FB',
-            padding: '14px 10px',
-            textAlign: 'center',
-          }}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            className="hidden"
-            accept=".pdf,.pptx,.ppt,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-          <UploadCloud
-            style={{
-              width: '26px',
-              height: '26px',
-              margin: '0 auto',
-              color: '#007AFF',
-            }}
-          />
-          <p
-            style={{
-              marginTop: '6px',
-              fontSize: '12px',
-              fontWeight: 600,
-              color: '#1C1C1E',
-            }}
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+            <UploadCloud className="w-4 h-4 text-[#3B5BDB]" />
+            资料上传
+          </span>
+          <span
+            className="text-[10.5px] px-2 py-0.5 rounded-full font-semibold"
+            style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
           >
-            {uploading ? '正在解析并切分章节目录...' : '拖拽或点击导入课本 / PPTX'}
-          </p>
-          <p
-            style={{
-              marginTop: '3px',
-              fontSize: '10.5px',
-              color: '#636366',
-              lineHeight: 1.45,
-            }}
-          >
-            PDF (OCR) · PPTX · DOCX · EPUB · MD · 图片
-          </p>
+            PDF / PPTX / 图片
+          </span>
         </div>
 
+        <input
+          ref={inputRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.pptx,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+
         <SpringButton
-          springLabel="加载示例课件"
+          springLabel="上传教材或课件"
           disabled={uploading}
-          onClick={onLoadDemo}
-          maxShift={6}
+          onClick={() => inputRef.current?.click()}
+          className="w-full py-2.5 px-3 rounded-xl border border-dashed text-xs font-semibold flex items-center justify-center gap-1.5"
           style={{
-            width: '100%',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            borderRadius: '10px',
-            border: '1px solid rgba(0, 122, 255, 0.22)',
-            backgroundColor: 'rgba(0, 122, 255, 0.08)',
-            color: '#007AFF',
-            fontSize: '11.5px',
-            fontWeight: 600,
-            padding: '8px 10px',
-            cursor: uploading ? 'not-allowed' : 'pointer',
-            opacity: uploading ? 0.6 : 1,
+            borderColor: '#3B5BDB',
+            color: '#3B5BDB',
+            backgroundColor: 'var(--brand-tint)',
+            cursor: uploading ? 'wait' : 'pointer',
           }}
         >
-          <Sparkles className="w-3.5 h-3.5 shrink-0" />
-          <span>{uploading ? '加载解析中...' : '一键加载示例 PPTX 课件'}</span>
+          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+          <span>{uploading ? '正在执行 OCR 与切片...' : '选择或拖拽文件上传'}</span>
+        </SpringButton>
+
+        <SpringButton
+          springLabel="加载示例PPTX"
+          disabled={uploading}
+          onClick={onLoadDemo}
+          className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
+          style={{
+            borderColor: 'var(--border-default)',
+            backgroundColor: 'var(--bg-subtle)',
+            color: 'var(--text-primary)',
+            cursor: uploading ? 'not-allowed' : 'pointer',
+          }}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
+          <span>载入示例课件 (梯度下降讲义)</span>
         </SpringButton>
       </div>
 
-      {/* Card 2: Parsed DocumentIR & Chapter Checklist */}
+      {/* Chapter Scope Checklist */}
       {documentIr && (
-        <>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingLeft: '4px',
-              marginTop: '2px',
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#636366' }}>
-              章节与范围 ({selectedChapterIds.length}/{documentIr.chapters.length})
-            </span>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <SpringButton
-                springLabel="全选章节"
-                onClick={() => onSelectAllChapters(true)}
-                maxShift={4}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: '#007AFF',
-                  cursor: 'pointer',
-                  padding: '2px 4px',
-                }}
-              >
-                全选
-              </SpringButton>
-              <SpringButton
-                springLabel="清空章节"
-                onClick={() => onSelectAllChapters(false)}
-                maxShift={4}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  fontSize: '11px',
-                  fontWeight: 500,
-                  color: '#8E8E93',
-                  cursor: 'pointer',
-                  padding: '2px 4px',
-                }}
-              >
-                清空
-              </SpringButton>
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
-              border: '1px solid rgba(60, 60, 67, 0.08)',
-              boxShadow: '0 2px 8px -4px rgba(0, 0, 0, 0.04)',
-              overflow: 'hidden',
-            }}
-          >
-            {/* Document Metadata Header */}
-            <div
-              style={{
-                padding: '10px 12px',
-                borderBottom: '1px solid rgba(60, 60, 67, 0.1)',
-                backgroundColor: '#FAFAFC',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  color: '#1C1C1E',
-                }}
-              >
-                <BookOpen className="w-3.5 h-3.5 text-[#007AFF] shrink-0" />
-                <span className="truncate">{documentIr.filename}</span>
+        <div data-glass-panel="true" className="asg-card p-3.5 space-y-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-xs font-bold truncate" title={documentIr.filename}>
+                {documentIr.filename}
               </div>
-              <div
-                className="mac-sp-tabular"
-                style={{
-                  marginTop: '5px',
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: '6px',
-                  fontSize: '10.5px',
-                  color: '#636366',
-                }}
-              >
-                <span
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid rgba(60, 60, 67, 0.12)',
-                    borderRadius: '5px',
-                    padding: '1px 6px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {documentIr.file_type}
-                </span>
+              <div className="text-[11px] mt-0.5 flex flex-wrap items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
                 <span>{documentIr.total_pages_or_slides} 页/张</span>
-                <span>· {documentIr.total_chars.toLocaleString()} 字</span>
-                <span>· {documentIr.all_assets.length} 图</span>
+                <span>·</span>
+                <span>{documentIr.total_chars.toLocaleString()} 字</span>
                 {documentIr.ocr_applied && (
-                  <span style={{ color: '#34C759', fontWeight: 600 }}>· OCR</span>
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                    style={{ backgroundColor: 'var(--semantic-success-tint)', color: 'var(--semantic-success)' }}
+                  >
+                    OCR 已识别
+                  </span>
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Chapter Rows */}
-            <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
-              {documentIr.chapters.map((ch) => {
-                const checked = selectedChapterIds.includes(ch.chapter_id);
-                return (
-                  <div
-                    key={ch.chapter_id}
-                    onClick={() => onToggleChapter(ch.chapter_id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '9px',
-                      padding: '9px 12px',
-                      borderBottom: '1px solid rgba(60, 60, 67, 0.08)',
-                      cursor: 'pointer',
-                      backgroundColor: checked ? 'rgba(0, 122, 255, 0.04)' : '#FFFFFF',
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: '16px',
-                        height: '16px',
-                        borderRadius: '5px',
-                        marginTop: '2px',
-                        flexShrink: 0,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: checked ? '#007AFF' : '#FFFFFF',
-                        border: checked ? '1px solid #007AFF' : '1.5px solid #C7C7CC',
-                        color: '#FFFFFF',
-                      }}
-                    >
-                      {checked && <Check className="w-3 h-3" strokeWidth={3} />}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          color: '#1C1C1E',
-                          lineHeight: 1.35,
-                        }}
-                      >
-                        {ch.title}
-                      </div>
-                      <div
-                        className="mac-sp-tabular"
-                        style={{
-                          marginTop: '2px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          fontSize: '10.5px',
-                          color: '#8E8E93',
-                        }}
-                      >
-                        <span>
-                          P{ch.start_page}–{ch.end_page}
-                        </span>
-                        <span>{ch.char_count.toLocaleString()} 字</span>
-                        {ch.assets.length > 0 && (
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '2px',
-                              color: '#34C759',
-                              fontWeight: 600,
-                            }}
-                          >
-                            <ImageIcon className="w-3 h-3" /> {ch.assets.length}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+          <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: 'var(--border-default)' }}>
+            <span className="text-[11px] font-bold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+              <BookOpen className="w-3.5 h-3.5 text-[#3B5BDB]" />
+              练习范围 ({selectedChapterIds.length}/{documentIr.chapters.length})
+            </span>
+            <div className="flex items-center gap-2 text-[11px] font-semibold">
+              <button type="button" onClick={() => onSelectAllChapters(true)} className="text-[#3B5BDB] hover:underline">
+                全选
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectAllChapters(false)}
+                style={{ color: 'var(--text-muted)' }}
+                className="hover:underline"
+              >
+                清空
+              </button>
             </div>
           </div>
 
-          {/* Card 3: Extracted Assets Preview */}
-          {documentIr.all_assets.length > 0 && (
-            <>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: '#636366',
-                  paddingLeft: '4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                }}
-              >
-                <FileText className="w-3 h-3 text-[#007AFF]" />
-                原书图表资产 ({documentIr.all_assets.length})
-              </div>
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid rgba(60, 60, 67, 0.08)',
-                  padding: '10px',
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '8px',
-                }}
-              >
-                {documentIr.all_assets.slice(0, 4).map((a) => (
-                  <div
-                    key={a.asset_id}
-                    style={{
-                      borderRadius: '8px',
-                      border: '1px solid rgba(60, 60, 67, 0.1)',
-                      overflow: 'hidden',
-                      backgroundColor: '#F9F9FB',
-                    }}
-                  >
-                    <img
-                      src={a.url}
-                      alt={a.caption}
-                      style={{
-                        height: '58px',
-                        width: '100%',
-                        objectFit: 'contain',
-                        backgroundColor: '#FFFFFF',
-                      }}
-                    />
-                    <div
-                      className="truncate"
-                      style={{
-                        padding: '3px 6px',
-                        fontSize: '10px',
-                        color: '#636366',
-                      }}
-                      title={a.caption}
-                    >
-                      P{a.page_or_slide} · {a.caption}
+          <div className="max-h-60 overflow-y-auto space-y-1.5 pr-0.5">
+            {documentIr.chapters.map((ch) => {
+              const checked = selectedChapterIds.includes(ch.chapter_id);
+              return (
+                <button
+                  key={ch.chapter_id}
+                  type="button"
+                  onClick={() => onToggleChapter(ch.chapter_id)}
+                  className="w-full text-left p-2 rounded-lg border transition flex items-start gap-2"
+                  style={{
+                    borderColor: checked ? '#3B5BDB' : 'var(--border-default)',
+                    backgroundColor: checked ? 'var(--brand-tint)' : 'var(--bg-subtle)',
+                  }}
+                >
+                  {checked ? (
+                    <CheckSquare className="w-3.5 h-3.5 text-[#3B5BDB] shrink-0 mt-0.5" />
+                  ) : (
+                    <Square className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: 'var(--text-muted)' }} />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11.5px] font-semibold truncate">{ch.title}</div>
+                    <div className="text-[10.5px]" style={{ color: 'var(--text-secondary)' }}>
+                      P{ch.start_page}-{ch.end_page} · {ch.char_count} 字
                     </div>
                   </div>
-                ))}
-              </div>
-            </>
-          )}
-        </>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
-      {/* Card 4: Project History */}
+      {/* History Projects */}
       {projects.length > 0 && (
-        <>
-          <div
-            style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              color: '#636366',
-              paddingLeft: '4px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px',
-              marginTop: '2px',
-            }}
-          >
-            <FolderOpen className="w-3 h-3 text-[#007AFF]" />
-            历史资料项目 ({projects.length})
+        <div data-glass-panel="true" className="asg-card p-3.5 space-y-2">
+          <div className="text-[11px] font-bold flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+            <FolderOpen className="w-3.5 h-3.5 text-[#3B5BDB]" />
+            最近工作区 ({projects.length})
           </div>
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
-              border: '1px solid rgba(60, 60, 67, 0.08)',
-              overflow: 'hidden',
-              maxHeight: '210px',
-              overflowY: 'auto',
-            }}
-          >
+          <div className="space-y-1.5 max-h-48 overflow-y-auto">
             {projects.map((p) => {
-              const isActive = documentIr?.project_id === p.project_id;
+              const isCurrent = documentIr?.project_id === p.project_id;
               return (
                 <div
                   key={p.project_id}
                   onClick={() => onOpenProject(p.project_id)}
+                  className="p-2 rounded-lg border cursor-pointer flex items-center justify-between gap-2 transition"
                   style={{
-                    cursor: 'pointer',
-                    padding: '9px 12px',
-                    borderBottom: '1px solid rgba(60, 60, 67, 0.08)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    backgroundColor: isActive ? 'rgba(0, 122, 255, 0.08)' : '#FFFFFF',
+                    borderColor: isCurrent ? '#3B5BDB' : 'var(--border-default)',
+                    backgroundColor: isCurrent ? 'var(--brand-tint)' : 'var(--bg-subtle)',
                   }}
                 >
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div
-                      className="truncate"
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: isActive ? 700 : 600,
-                        color: isActive ? '#007AFF' : '#1C1C1E',
-                      }}
-                    >
-                      {p.filename}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11.5px] font-semibold truncate flex items-center gap-1">
+                      <FileText className="w-3 h-3 shrink-0 text-[#3B5BDB]" />
+                      <span className="truncate">{p.filename}</span>
                     </div>
-                    <div
-                      className="mac-sp-tabular"
-                      style={{ fontSize: '10.5px', color: '#8E8E93', marginTop: '1px' }}
-                    >
-                      {p.chapter_count} 章 · {p.has_package ? '已生成资料' : '待确认方案'}
+                    <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                      {p.chapter_count} 章 · {p.has_package ? '已生成资料' : '待生成'}
                     </div>
                   </div>
-                  <SpringButton
-                    springLabel="删除项目"
+                  <button
+                    type="button"
                     onClick={(e) => onDeleteProject(p.project_id, e)}
-                    maxShift={4}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      padding: '4px',
-                      color: '#8E8E93',
-                      cursor: 'pointer',
-                    }}
+                    className="p-1 rounded hover:bg-rose-500/10 text-rose-500"
                     title="删除项目"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </SpringButton>
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
               );
             })}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
