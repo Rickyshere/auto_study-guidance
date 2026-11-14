@@ -169,7 +169,6 @@ export const SpringButton = React.forwardRef<HTMLButtonElement, SpringButtonProp
       response = 0.22,
       springLabel,
       disabled,
-      className,
       style,
       onPointerDown,
       onPointerMove,
@@ -317,7 +316,6 @@ export const SpringButton = React.forwardRef<HTMLButtonElement, SpringButtonProp
       'button',
       {
         ...rest,
-        className: ['asg-spring-btn', className].filter(Boolean).join(' '),
         ref: assignRef,
         disabled,
         onPointerDown: handlePointerDown,
@@ -596,8 +594,6 @@ export function SpringSegmentedControl<T extends string>({
     'div',
     {
       ref: trackRef,
-      className: 'asg-spring-track',
-      role: 'radiogroup',
       style: {
         position: 'relative',
         isolation: 'isolate',
@@ -616,7 +612,6 @@ export function SpringSegmentedControl<T extends string>({
     },
     React.createElement('div', {
       ref: thumbRef,
-      className: 'asg-spring-thumb',
       onPointerDown: onThumbDown,
       onPointerMove: onThumbMove,
       onPointerUp: onThumbUp,
@@ -797,7 +792,6 @@ export const SpringToggleSwitch: React.FC<{
       'span',
       {
         ref: trackRef,
-        className: 'asg-spring-switch-track',
         style: {
           position: 'relative',
           width: '40px',
@@ -812,7 +806,6 @@ export const SpringToggleSwitch: React.FC<{
       },
       React.createElement('span', {
         ref: knobRef,
-        className: 'asg-spring-switch-knob',
         style: {
           width: '18px',
           height: '18px',
