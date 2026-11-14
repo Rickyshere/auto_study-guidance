@@ -955,7 +955,10 @@ def _build_cli_command(
     if preferred == "codex":
         return [exe, "exec", "--json", "--skip-git-repo-check", "-"], True
     if preferred == "dsh":
-        return [exe, "--output-format", "stream-json", "--verbose"], True
+        dsh_script = Path(__file__).with_name("dsh_cli.py")
+        if VENV_PYTHON.exists() and dsh_script.exists():
+            return [str(VENV_PYTHON), str(dsh_script), "--output-format", "stream-json", "--verbose"], True
+        return [exe, "--profile", "headless", "--output-format", "stream-json", "--verbose"], True
     if preferred == "gemini":
         return [exe, "--output-format", "stream-json"], True
     if custom_tokens is not None:

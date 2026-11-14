@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Output format",
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose streaming")
+    parser.add_argument("--profile", default=None, help="Optional compatibility profile flag")
     parser.add_argument("--model", default=None, help="Override model name")
     parser.add_argument("prompt_pos", nargs="*", help="Positional prompt")
     args = parser.parse_args(argv)
@@ -156,78 +157,95 @@ def main(argv: list[str] | None = None) -> int:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    body: dict = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": is_stream_json,
-    }
+    candidate_models = [model]
+    if "127.0.0.1:3425" in url and model != "qoder-cn/fast":
+        candidate_models.append("qoder-cn/fast")
+    fallback_statuses = {404, 405, 502, 503}
 
     try:
         with httpx.Client(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
-            if is_stream_json:
-                _emit_ndjson({"type": "init", "provider": "dsh", "model": model})
-                chunks: list[str] = []
-                total_chars = 0
-                with client.stream("POST", url, headers=headers, json=body) as resp:
-                    if resp.status_code >= 400:
-                        err_body = resp.read().decode("utf-8", errors="replace")[:500]
+            for idx, active_model in enumerate(candidate_models):
+                has_fallback = idx + 1 < len(candidate_models)
+                req_body: dict = {
+                    "model": active_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": is_stream_json,
+                }
+                if is_stream_json:
+                    chunks: list[str] = []
+                    total_chars = 0
+                    retry_fallback = False
+                    with client.stream("POST", url, headers=headers, json=req_body) as resp:
+                        if resp.status_code >= 400:
+                            err_body = resp.read().decode("utf-8", errors="replace")[:500]
+                            if resp.status_code in fallback_statuses and has_fallback:
+                                retry_fallback = True
+                            else:
+                                _emit_ndjson(
+                                    {
+                                        "type": "error",
+                                        "is_error": True,
+                                        "status_code": resp.status_code,
+                                        "message": f"DSH HTTP {resp.status_code}: {err_body}",
+                                    }
+                                )
+                                return 1
+                        else:
+                            model = active_model
+                            _emit_ndjson({"type": "init", "provider": "dsh", "model": model})
+                            for delta in _iter_sse_deltas(resp):
+                                chunks.append(delta)
+                                total_chars += len(delta)
+                                _emit_ndjson(
+                                    {
+                                        "type": "assistant",
+                                        "delta": delta,
+                                        "accumulated_chars": total_chars,
+                                    }
+                                )
+                    if retry_fallback:
+                        continue
+
+                    full_text = "".join(chunks).strip()
+                    if not full_text:
                         _emit_ndjson(
                             {
                                 "type": "error",
                                 "is_error": True,
-                                "status_code": resp.status_code,
-                                "message": f"DSH HTTP {resp.status_code}: {err_body}",
+                                "message": "DSH stream completed with empty response.",
                             }
                         )
                         return 1
-                    for delta in _iter_sse_deltas(resp):
-                        chunks.append(delta)
-                        total_chars += len(delta)
-                        _emit_ndjson(
-                            {
-                                "type": "assistant",
-                                "delta": delta,
-                                "accumulated_chars": total_chars,
-                            }
-                        )
-
-                full_text = "".join(chunks).strip()
-                if not full_text:
                     _emit_ndjson(
                         {
-                            "type": "error",
-                            "is_error": True,
-                            "message": "DSH stream completed with empty response.",
+                            "type": "result",
+                            "subtype": "success",
+                            "is_error": False,
+                            "result": full_text,
                         }
                     )
-                    return 1
-                _emit_ndjson(
-                    {
-                        "type": "result",
-                        "subtype": "success",
-                        "is_error": False,
-                        "result": full_text,
-                    }
-                )
-                return 0
+                    return 0
 
-            resp = client.post(url, headers=headers, json=body)
-            if resp.status_code >= 400:
-                sys.stderr.write(
-                    f"DSH HTTP {resp.status_code}: {resp.text[:500]}\n"
-                )
-                return 1
-            data = resp.json()
-            text = (
-                ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
-                or ""
-            ).strip()
-            if not text:
-                sys.stderr.write("DSH returned an empty response.\n")
-                return 1
-            sys.stdout.write(text + "\n")
-            sys.stdout.flush()
-            return 0
+                resp = client.post(url, headers=headers, json=req_body)
+                if resp.status_code >= 400:
+                    if resp.status_code in fallback_statuses and has_fallback:
+                        continue
+                    sys.stderr.write(
+                        f"DSH HTTP {resp.status_code}: {resp.text[:500]}\n"
+                    )
+                    return 1
+                model = active_model
+                data = resp.json()
+                text = (
+                    ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+                    or ""
+                ).strip()
+                if not text:
+                    sys.stderr.write("DSH returned an empty response.\n")
+                    return 1
+                sys.stdout.write(text + "\n")
+                sys.stdout.flush()
+                return 0
     except Exception as exc:
         msg = f"DSH CLI request error: {exc}"
         if is_stream_json:
