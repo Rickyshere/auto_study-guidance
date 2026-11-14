@@ -1,5 +1,7 @@
 import {
   CloudConfig,
+  ExamDirectionType,
+  ExamSoulSpec,
   FreeAiAuthConfig,
   GpuVramInfo,
   OcrEngineStatusItem,
@@ -22,6 +24,9 @@ export interface SseProgressEvent {
   percent?: number;
   progress?: number;
   message?: string;
+  agent_id?: string;
+  soul_file?: string;
+  detail_data?: Record<string, any>;
   ok?: boolean;
   package?: StudyPackage;
   detail?: ProjectDetailResponse;
@@ -526,6 +531,191 @@ export const api = {
       throw new Error('示例课件识别流未返回完成数据');
     }
     return finalDetail;
+  },
+
+  getExamAgentSouls: () => requestJson<{ souls: ExamSoulSpec[] }>('/api/exam-agents/souls'),
+
+  probeOxrStatus: () =>
+    requestJson<{
+      local_oxr_installed: boolean;
+      local_oxr_running: boolean;
+      local_oxr_ready: boolean;
+      selected_engine: string;
+      summary: string;
+    }>('/api/ocr/probe-oxr'),
+
+  uploadExamProjectStream: async (
+    file: File,
+    onEvent: (evt: SseProgressEvent) => void,
+    signal?: AbortSignal
+  ): Promise<ProjectDetailResponse> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/projects/upload-exam-stream', {
+      method: 'POST',
+      body: fd,
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const detail = await res.text();
+      throw new Error(detail || `试卷上传 OXR 识别失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalDetail: ProjectDetailResponse | null = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            const evt = JSON.parse(line.slice(5).trim()) as SseProgressEvent;
+            onEvent(evt);
+            if (evt.type === 'error') {
+              throw new Error(evt.message || '试卷 OXR 提取出错');
+            }
+            if (evt.type === 'complete' && evt.detail) {
+              finalDetail = evt.detail;
+            }
+          }
+        }
+      }
+    }
+    if (!finalDetail) {
+      throw new Error('试卷 OXR 提取流未返回完成数据');
+    }
+    return finalDetail;
+  },
+
+  loadDemoExamProjectStream: async (
+    onEvent: (evt: SseProgressEvent) => void,
+    signal?: AbortSignal
+  ): Promise<ProjectDetailResponse> => {
+    const res = await fetch('/api/projects/demo-exam-stream', {
+      method: 'POST',
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`装载示例试卷失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalDetail: ProjectDetailResponse | null = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            const evt = JSON.parse(line.slice(5).trim()) as SseProgressEvent;
+            onEvent(evt);
+            if (evt.type === 'error') {
+              throw new Error(evt.message || '示例试卷提取失败');
+            }
+            if (evt.type === 'complete' && evt.detail) {
+              finalDetail = evt.detail;
+            }
+          }
+        }
+      }
+    }
+    if (!finalDetail) {
+      throw new Error('示例试卷提取流未返回完成数据');
+    }
+    return finalDetail;
+  },
+
+  generateExamPackageStream: async (
+    projectId: string,
+    payload: {
+      direction: ExamDirectionType;
+      user_requirements: string;
+      raw_exam_text_override?: string;
+    },
+    onEvent: (evt: {
+      stage: string;
+      percent: number;
+      message: string;
+      agent_id?: string;
+      soul_file?: string;
+      detail?: Record<string, any>;
+    }) => void,
+    signal?: AbortSignal
+  ): Promise<StudyPackage> => {
+    const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate-exam`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`试卷生成请求失败 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalPkg: StudyPackage | null = null;
+
+    if (signal) {
+      signal.addEventListener(
+        'abort',
+        () => {
+          reader.cancel().catch(() => {});
+        },
+        { once: true }
+      );
+    }
+
+    while (true) {
+      if (signal?.aborted) {
+        const abortErr = new Error('已暂停生成');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        const jsonStr = line.replace(/^data:\s*/, '');
+        try {
+          const evt = JSON.parse(jsonStr);
+          if (evt.type === 'progress') {
+            onEvent({
+              stage: String(evt.stage || ''),
+              percent: Number(evt.percent ?? 10),
+              message: String(evt.message || ''),
+              agent_id: evt.agent_id,
+              soul_file: evt.soul_file,
+              detail: evt.detail,
+            });
+          } else if (evt.type === 'complete') {
+            finalPkg = evt.package as StudyPackage;
+          } else if (evt.type === 'error') {
+            throw new Error(evt.message || '试卷生成出错');
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message !== 'Unexpected end of JSON input') {
+            throw err;
+          }
+        }
+      }
+    }
+    if (!finalPkg) {
+      throw new Error('试卷生成流未返回完整结果包');
+    }
+    return finalPkg;
   },
 
   generateVariantQuestion: (

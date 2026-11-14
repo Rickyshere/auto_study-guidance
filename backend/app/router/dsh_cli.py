@@ -123,8 +123,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", action="store_true", help="Verbose streaming")
     parser.add_argument("--profile", default=None, help="Optional compatibility profile flag")
     parser.add_argument("--model", default=None, help="Override model name")
+    parser.add_argument("--soul-file", dest="soul_file", default=None, help="Optional path to agent soul.md file")
     parser.add_argument("prompt_pos", nargs="*", help="Positional prompt")
     args = parser.parse_args(argv)
+
+    soul_path_str = (args.soul_file or os.environ.get("DSH_SOUL_FILE") or "").strip()
+    soul_content = ""
+    soul_filename = ""
+    if soul_path_str:
+        sp = Path(soul_path_str)
+        if sp.is_file():
+            soul_content = sp.read_text(encoding="utf-8", errors="replace").strip()
+            soul_filename = sp.name
 
     prompt = args.prompt_flag
     if not prompt and args.prompt_pos:
@@ -166,9 +176,18 @@ def main(argv: list[str] | None = None) -> int:
         with httpx.Client(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
             for idx, active_model in enumerate(candidate_models):
                 has_fallback = idx + 1 < len(candidate_models)
+                messages_payload = []
+                if soul_content:
+                    messages_payload.append(
+                        {
+                            "role": "system",
+                            "content": f"[Uploaded Soul File: {soul_filename}]\n{soul_content}",
+                        }
+                    )
+                messages_payload.append({"role": "user", "content": prompt})
                 req_body: dict = {
                     "model": active_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages_payload,
                     "stream": is_stream_json,
                 }
                 if is_stream_json:

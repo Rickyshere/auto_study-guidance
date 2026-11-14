@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
@@ -9,12 +10,17 @@ from app.schemas import (
     ChapterNode,
     DeliverableConfig,
     DocumentIR,
+    KnowledgeFlashcard,
     QuizPaper,
     QuizQuestion,
     StudyBlueprint,
     StudyPackage,
 )
 from app.workflows.presets import sync_deliverable_flags_with_items
+from app.workflows.souls import (
+    build_courseware_deliverable_soul,
+    get_courseware_soul_label,
+)
 
 ProgressCallback = Optional[Callable[[str, int, str], Awaitable[None]]]
 
@@ -37,8 +43,124 @@ def _replace_table_pipes_in_math(line: str) -> str:
     return re.sub(r"(?<!\$)\$(?!\$)([^\n$]+?)(?<!\$)\$(?!\$)", _fix_inline, line)
 
 
+_INLINE_TABLE_SEP_RE = re.compile(
+    r"\|\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|"
+)
+_PURE_TABLE_SEP_RE = re.compile(
+    r"^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?$"
+)
+
+
+def _unescaped_pipe_positions(s: str) -> List[int]:
+    return [idx for idx, ch in enumerate(s) if ch == "|" and (idx == 0 or s[idx - 1] != "\\")]
+
+
+def expand_inline_markdown_tables(text: str) -> str:
+    """Expand single-line collapsed GFM tables (often emitted inside JSON fields) into multi-line tables."""
+    if not text or "|" not in text:
+        return text
+
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or _PURE_TABLE_SEP_RE.match(stripped):
+            out_lines.append(line)
+            continue
+
+        m = _INLINE_TABLE_SEP_RE.search(line)
+        if not m:
+            out_lines.append(line)
+            continue
+
+        sep_str = m.group(0).strip()
+        num_cols = len([c for c in sep_str.strip("|").split("|")])
+        if num_cols < 2:
+            out_lines.append(line)
+            continue
+
+        before_r = line[: m.start()].rstrip()
+        after = line[m.end() :]
+
+        prefix_text = ""
+        header_row = ""
+        if before_r.endswith("|"):
+            before_pipes = _unescaped_pipe_positions(before_r)
+            if len(before_pipes) >= num_cols + 1:
+                hdr_start = before_pipes[-(num_cols + 1)]
+                prefix_text = before_r[:hdr_start].rstrip()
+                header_row = before_r[hdr_start:].strip()
+            elif len(before_pipes) == num_cols:
+                # Header omitted opening '|', split after sentence colon/period before first cell
+                first_pipe = before_pipes[0]
+                prefix_candidate = before_r[:first_pipe]
+                punct_idx = max(
+                    prefix_candidate.rfind("："),
+                    prefix_candidate.rfind(":"),
+                    prefix_candidate.rfind("。"),
+                    prefix_candidate.rfind("；"),
+                )
+                if punct_idx >= 0:
+                    prefix_text = before_r[: punct_idx + 1].strip()
+                    header_row = "| " + before_r[punct_idx + 1 :].strip()
+                else:
+                    header_row = "| " + before_r.strip()
+
+        if not header_row:
+            out_lines.append(line)
+            continue
+
+        data_rows: List[str] = []
+        pos = 0
+        after_len = len(after)
+        while pos < after_len:
+            while pos < after_len and after[pos].isspace():
+                pos += 1
+            if pos >= after_len or after[pos] != "|":
+                break
+            row_pipes = [pos]
+            scan = pos + 1
+            while scan < after_len and len(row_pipes) < num_cols + 1:
+                if after[scan] == "|" and after[scan - 1] != "\\":
+                    row_pipes.append(scan)
+                scan += 1
+            if len(row_pipes) == num_cols + 1:
+                data_rows.append(after[pos : row_pipes[-1] + 1].strip())
+                pos = row_pipes[-1] + 1
+            else:
+                break
+
+        suffix_text = after[pos:].strip()
+        if prefix_text:
+            out_lines.append(prefix_text)
+            out_lines.append("")
+        out_lines.append(header_row)
+        out_lines.append(sep_str)
+        out_lines.extend(data_rows)
+        if suffix_text:
+            out_lines.append("")
+            out_lines.append(expand_inline_markdown_tables(suffix_text))
+        elif after and not data_rows:
+            out_lines.append(after.strip())
+
+    return "\n".join(out_lines)
+
+
+def _unescape_non_math_percent_and_space(line: str) -> str:
+    """Clean stray LaTeX escapes (\\% and '\\ ') outside $...$ math delimiters and backticks."""
+    if "\\" not in line:
+        return line
+    parts = re.split(r"(\$\$[^$]+\$\$|\$[^$\n]+\$|`[^`\n]+`)", line)
+    for idx in range(0, len(parts), 2):
+        seg = parts[idx]
+        if "\\" in seg:
+            seg = seg.replace(r"\%", "%")
+            seg = re.sub(r"\\(?=[ \t])", "", seg)
+            parts[idx] = seg
+    return "".join(parts)
+
+
 def normalize_markdown_math(text: str) -> str:
-    """Normalize LaTeX delimiters for remark-math/rehype-katex and escape table math pipes."""
+    """Normalize LaTeX delimiters for remark-math/rehype-katex, expand inline tables, and escape table math pipes."""
     if not text:
         return text
 
@@ -54,10 +176,32 @@ def normalize_markdown_math(text: str) -> str:
         lambda m: f"${m.group(1).strip()}$",
         out,
     )
+    # Expand single-line collapsed GFM tables into multi-line tables before per-line fixes
+    out = expand_inline_markdown_tables(out)
 
     # Fix already-unescaped parenthesized formulas that contain LaTeX commands / ^{ / _{
     out_lines: List[str] = []
+    in_display = False
+    in_fence = False
     for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+        # Lines inside a multi-line $$ ... $$ block are pure LaTeX: never rewrite them.
+        if in_display:
+            if stripped.count("$$") % 2 == 1:
+                in_display = False
+            out_lines.append(line)
+            continue
+        if line.count("$$") % 2 == 1:
+            in_display = True
+            out_lines.append(line)
+            continue
         if "`" not in line and "$" not in line and _LATEX_CMD_RE.search(line):
             # Convert balanced (...) chunks containing LaTeX commands when not preceded by a word char or \
             chars: List[str] = []
@@ -84,6 +228,7 @@ def normalize_markdown_math(text: str) -> str:
                 chars.append(ch)
                 i += 1
             line = "".join(chars)
+        line = _unescape_non_math_percent_and_space(line)
         line = _replace_table_pipes_in_math(line)
         out_lines.append(line)
 
@@ -214,46 +359,26 @@ def build_notes_prompts(
     blueprint: StudyBlueprint,
     context_text: str,
 ) -> Tuple[str, str]:
-    """Construct refined system & user prompts for study notes and worked examples."""
+    """Construct refined system & user prompts mounting Mode A/B/C soul.md for notes & worked examples."""
     d = blueprint.deliverables
     focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
     chapter_anchors = _build_chapter_anchor_table(selected_chapters)
 
     items_set = set(d.selected_items or [])
     is_c_extract = d.scenario_type == "C_sprint" or "key_knowledge_extraction" in items_set
-
-    if is_c_extract:
-        style_block = (
-            "二、教学风格（当前为【场景C · 考前冲刺 / 重要知识提取】）：\n"
-            "   - 目标是在最短时间内提取**核心必考知识点、高频结论定理、公式适用边界与典型考场大题套路**：\n"
-            "     (1) 高频核心考点与必背结论清单（按重要程度星级排序，注明前提假设与易丢分细节）；\n"
-            "     (2) 核心公式推导逻辑与快速记忆口诀；\n"
-            "     (3) 2~3 道【高频考场母题与得分套路示范】（每题标注 **【题目】**、**【命题意图】**、**【思路引导】**、**【详细解答】**、**【易错点拨与变式】**）；\n"
-            "     (4) 易混概念对比表与考前急救自检 Checklist。"
-        )
-    else:
-        style_block = (
-            "二、教学风格（当前为【场景A · 详细自学案（附带例题）】）：\n"
-            "   - 面向零基础/初次学习，必须通俗易懂、逻辑递进，完整包含以下模块：\n"
-            "     (1) 学习目标与重难点拆解；(2) 前置概念导读与直觉类比（用日常现象或几何直觉解释抽象概念）；(3) 核心概念与定理公式精讲；\n"
-            "     (4) 不少于 4 道高质量、难度递进的【典型例题与深度解析】（须覆盖「概念辨析型 → 公式推导/定量计算型 → 综合应用/反例探究型」，每道例题均须包含完整条件/数据或选项，并严格按以下五个加粗标签分节：\n"
-            "         - **【题目】**：交代清晰条件、待求目标或完整情景；\n"
-            "         - **【命题意图】**：一句话点明本题考察的核心能力与知识陷阱；\n"
-            "         - **【思路引导】**：给出切入突破口与关键转化步骤，不直接剧透答案；\n"
-            "         - **【详细解答】**：逐步推导计算并给出严谨结论；\n"
-            "         - **【易错点拨与变式】**：剖析学生最易混淆的错误做法，并附 1 句简短变式思考）；\n"
-            "     (5) 易混概念对比表与自学自检 Checklist。"
-        )
+    deliverable_id = "key_knowledge_extraction" if is_c_extract else "detailed_study_guide"
+    soul_spec = build_courseware_deliverable_soul(d.scenario_type, deliverable_id)
 
     notes_sys = (
-        "你是一位顶尖学科导师、命题研究专家与教材主编。请严格依据提供的教材/课件原文内容，编写高水准的结构化学习资料。\n"
-        "一、内容真实性与格式规范：\n"
-        "1. 严格忠于原文事实、符号体系与推导逻辑，切勿编造教材未出现的定理或数据；若原文附有配图 Markdown 链接（如 `![...](...)`），请在对应知识点段落自然内联引用。\n"
-        "2. 规范使用 Markdown 层级标题、对比表格与要点清单；所有行内数学公式必须严格使用 `$...$`，独立公式块使用 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；Markdown 表格内的范数请写 `\\parallel W \\parallel` 而非 `\\|W\\|`。\n"
-        f"{style_block}"
+        f"{soul_spec}\n\n"
+        "---\n\n"
+        "### 执行与真实性补充契约\n"
+        "1. 严格忠于提供的教材/课件原文事实、符号体系与推导逻辑，切勿编造教材未出现的定理或数据。\n"
+        "2. 严格按照上述 `soul.md` 中的模式人设（Mode A/B/C）、全局协议与交付物结构模板直接输出完整 Markdown 文档。"
     )
     notes_user = (
         f"文档名称: {document_ir.filename}\n"
+        f"所处学习模式: {get_courseware_soul_label(d.scenario_type)}\n"
         f"方案标题: {blueprint.blueprint_title}\n"
         f"核心考点: {focus_str}\n"
         f"用户定制指令: {blueprint.custom_instructions or '无额外指令'}\n\n"
@@ -263,44 +388,89 @@ def build_notes_prompts(
     return notes_sys, notes_user
 
 
-def build_quiz_prompts(
+def build_cheatsheet_prompts(
     document_ir: DocumentIR,
     selected_chapters: List[ChapterNode],
     blueprint: StudyBlueprint,
     context_text: str,
 ) -> Tuple[str, str]:
-    """Construct fine-grained system & user prompts for high-quality exercise generation."""
+    """Construct cheatsheet prompts mounting Mode A (A4), Mode B (B3), or Mode C (C2) soul.md."""
+    d = blueprint.deliverables
+    focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
+    chapter_anchors = _build_chapter_anchor_table(selected_chapters)
+    soul_spec = build_courseware_deliverable_soul(d.scenario_type, "cheatsheet")
+
+    cs_sys = (
+        f"{soul_spec}\n\n"
+        "---\n\n"
+        "### 排版补充提醒\n"
+        "- 所有行内/块级公式严格使用 `$...$` 或 `$$...$$`；Markdown 表格内的范数请用 `\\parallel W \\parallel^2`，并保持表格紧凑以免打印溢出。"
+    )
+    cs_user = (
+        f"文档名称: {document_ir.filename}\n"
+        f"所处学习模式: {get_courseware_soul_label(d.scenario_type)}\n"
+        f"速记密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n"
+        f"用户定制指令: {blueprint.custom_instructions or '无额外指令'}\n\n"
+        f"选中章节与页码锚点：\n{chapter_anchors}\n\n"
+        f"教材/课件原文内容：\n{context_text[:18000]}"
+    )
+    return cs_sys, cs_user
+
+
+def build_mindmap_prompts(
+    document_ir: DocumentIR,
+    selected_chapters: List[ChapterNode],
+    blueprint: StudyBlueprint,
+) -> Tuple[str, str]:
+    """Construct MindMap prompts mounting Mode A (A5) or Mode B (B4) / C soul.md."""
+    d = blueprint.deliverables
+    soul_spec = build_courseware_deliverable_soul(d.scenario_type, "mindmap")
+    mm_sys = (
+        f"{soul_spec}\n\n"
+        "---\n\n"
+        "### Mermaid 输出硬性格式契约\n"
+        "请在最上方输出一个完整的 ```mermaid ... ``` 代码块（推荐使用 `flowchart LR`，所有节点文本必须用英文双引号包裹如 `c1[\"核心概念\"]`，节点文本内部禁止再出现英文双引号、括号或分号），可在代码块下方附带简洁的层级清单说明。"
+    )
+    mm_user = (
+        f"文档: {document_ir.filename} | 学习模式: {get_courseware_soul_label(d.scenario_type)} | 深度: {d.mindmap_depth} 层\n"
+        f"重点关注: {', '.join(blueprint.focus_topics[:8]) or '全章主干'}\n"
+        f"章节与关键词：\n"
+        + "\n".join(
+            f"- {c.title} (P{c.start_page}-{c.end_page}): {', '.join(c.key_terms[:6])}"
+            for c in selected_chapters
+        )
+    )
+    return mm_sys, mm_user
+
+
+def build_quiz_prompts(
+    document_ir: DocumentIR,
+    selected_chapters: List[ChapterNode],
+    blueprint: StudyBlueprint,
+    context_text: str,
+    paper_id: str = "sync_homework",
+) -> Tuple[str, str]:
+    """Construct fine-grained system & user prompts mounting Mode A/B/C soul.md for exercise generation."""
     d = blueprint.deliverables
     focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
     chapter_anchors = _build_chapter_anchor_table(selected_chapters)
     alloc = _compute_quiz_allocation(d, blueprint.target_difficulty)
+    soul_spec = build_courseware_deliverable_soul(d.scenario_type, paper_id)
 
     quiz_sys = (
-        "你是一位兼具学科深度与教育测量学素养的资深命题专家。请严格依据教材/课件原文与知识锚点，命制一套高区分度、零歧义、解析透彻的高质量习题，并只输出一个合法 JSON 对象。\n\n"
-        "一、命题质量铁律（严禁低质“送分题/纯抄书题”）：\n"
-        "1. 禁止出现“什么是 XX？”“教材第几章讲了什么？”或原文整句挖空式的浅层记忆题；每道题都必须考查**机理辨析、条件适用边界、定量计算/公式推导、步骤因果排序、反例判断或具体情境迁移应用**。\n"
-        "2. 单选题（`type=\"mcq\"`）选项与干扰项工程：\n"
-        "   - 必须提供严格 4 个选项：`[\"A. ...\", \"B. ...\", \"C. ...\", \"D. ...\"]`，四选项长度、句式和专业深度应保持均衡（禁止出现过短、幽默或明显荒谬的凑数选项）；`answer` 仅填写单个大写字母 `\"A\"`/`\"B\"`/`\"C\"`/`\"D\"`。\n"
-        "   - 3 个错误干扰项必须各自对应真实高频误区：如公式符号/系数/量纲错误、混淆充分条件与必要条件、忽略定理前提约束、因果颠倒或边界条件越界。\n"
-        "3. 填空题（`type=\"fill_blank\"`）：\n"
-        "   - 题干必须在最核心的结论、临界条件或数学表达式位置使用下划线 `______` 标记；`options` 固定为空数组 `[]`；`answer` 必须简明、唯一、客观可判分（禁止开放性长句）。\n"
-        "4. 简答/计算/综合探究题（`type=\"short_answer\"`）：\n"
-        "   - 必须创设具体问题情景、待推导命题或对比分析任务，适当采用 `(1) ... (2) ...` 分步设问；`options` 固定为空数组 `[]`；`answer` 必须按采分点结构化列出（格式如 `【得分点1】...（X分）；【得分点2】...（Y分）`）。\n"
-        "5. 三层认知梯度（`tier`）与难度（`difficulty`）协同：\n"
-        "   - `基础达标`（`easy` 或 `medium`）：核心机理理解、关键前提辨析与公式直接应用；\n"
-        "   - `能力提升`（`medium`）：跨概念综合对比、中间步骤推导计算或错误方案诊断；\n"
-        "   - `拓展探究`（`hard`）：极限/边界情形分析、多步建模或复杂场景权衡推理。\n"
-        "6. 解析字段（`explanation`）结构化强制标准：\n"
-        "   - 每道题的 `explanation` 必须完整包含三部分：`【考点定位】...` + `【详解与推导】...` + `【易错点拨】...`。\n"
-        "   - 对于单选题，**`【详解与推导】` 必须先论证正确选项为何成立，再逐一指出其余 3 个干扰项分别错在何处**；对于计算/简答题，必须写出完整中间推导与得分依据。\n"
-        "7. 章节溯源与 LaTeX / JSON 转义契约：\n"
-        "   - 题目应尽量均匀覆盖所有选中章节，并准确填写 `source_chapter`（对应章节标题）与 `source_page`（页码/幻灯片范围，如 `P3-5`）。\n"
-        "   - 所有行内公式使用 `$...$`，独立公式使用 `$$...$$`，禁止 `\\(...\\)` / `\\[...\\]`；**所有 JSON 字符串内部的 LaTeX 反斜杠必须双写转义**（例如写 `\"$\\\\frac{a}{b}$\"`、`\"$\\\\theta$\"`、`\"$\\\\nabla$\"`、`\"$\\\\times$\"`）。\n"
-        "   - 只输出纯 JSON 对象，不要包含 Markdown 说明或前后寒暄文字。\n\n"
+        f"{soul_spec}\n\n"
+        "---\n\n"
+        "### 一、工程级命题质量铁律与 JSON 结构契约\n"
+        "1. **严禁低质送分题**：禁止出现“什么是 XX？”“第几章讲了什么？”式浅层记忆题；题目须考查机理辨析、条件边界、定量计算、步骤因果或情景迁移（严格契合上述 Mode A/B/C 人设与难度梯度）。\n"
+        "2. **单选题 (`type=\"mcq\"`)**：严格提供 4 个选项 `[\"A. ...\", \"B. ...\", \"C. ...\", \"D. ...\"]`，四选项长度与专业度均衡；`answer` 仅填单个大写字母 `\"A\"`/`\"B\"`/`\"C\"`/`\"D\"`。\n"
+        "3. **填空题 (`type=\"fill_blank\"`)**：题干关键空位使用 `__________`；`options` 固定为 `[]`；`answer` 须简明唯一客观。\n"
+        "4. **简答/计算/综合题 (`type=\"short_answer\"`)**：须创设完整情景或分步设问 `(1)...(2)...`；`options` 固定为 `[]`；`answer` 按采分点列出（如 `【得分点1】...（X分）；【得分点2】...（Y分）`）。\n"
+        "5. **解析字段 (`explanation`) 强制模块**：包含 `【考点定位】...` + `【详解与推导】...` + `【易错点拨】...`（若为 Mode B 请写透 `【设错陷阱揭秘】【同类题通法总结】`；若为 Mode C 抱佛脚卷，末尾必须附 `【考场抢分包】👉 若考场直接考原题 / 👉 若考场换个问法 / 👉 简答题标准背诵模板`）。\n"
+        "6. **LaTeX & JSON 双反斜杠**：行内用 `$...$`，独立用 `$$...$$`，JSON 字符串内的 LaTeX 反斜杠必须双写（例如 `\"$\\\\frac{a}{b}$\"`）。只输出纯 JSON 对象，不要包含任何前后解释文字。\n\n"
         "JSON 结构契约：\n"
         "{\n"
         '  "title": "试卷/练习标题",\n'
-        '  "instructions": "作答说明（含题型题量、总分、建议用时及答题要求）",\n'
+        '  "instructions": "作答说明（含题型题量、总分、建议用时及打印答题说明）",\n'
         '  "questions": [\n'
         "    {\n"
         '      "id": "q_1",\n'
@@ -308,7 +478,7 @@ def build_quiz_prompts(
         '      "difficulty": "easy" | "medium" | "hard",\n'
         '      "tier": "基础达标" | "能力提升" | "拓展探究",\n'
         '      "score": 5,\n'
-        '      "question": "题干内容（含具体情境或公式 $...$）",\n'
+        '      "question": "题干内容（含具体情境、考点标注或公式 $...$）",\n'
         '      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
         '      "answer": "单选填 A/B/C/D；填空填唯一标准答案；简答按【得分点1】...列出",\n'
         '      "explanation": "【考点定位】... \\n【详解与推导】... \\n【易错点拨】...",\n'
@@ -322,14 +492,15 @@ def build_quiz_prompts(
     quiz_user = (
         f"## 命题蓝图与契约\n"
         f"- 文档名称: {document_ir.filename}\n"
+        f"- 所处模式人格: {get_courseware_soul_label(d.scenario_type)}\n"
         f"- 方案名称: {blueprint.blueprint_title}\n"
-        f"- 模板类型: {blueprint.preset_name} (quiz_mode={d.quiz_mode})\n"
+        f"- 模板类型: {blueprint.preset_name} (paper_id={paper_id}, quiz_mode={d.quiz_mode})\n"
         f"- 目标难度: {blueprint.target_difficulty} | 建议用时: {d.suggested_minutes} 分钟\n"
         f"- 严格题量契约: 单选题 {d.mcq_count} 道 + 填空题 {d.fill_blank_count} 道 + 简答/分析题 {d.short_answer_count} 道（共 {alloc['total_qs']} 道，切勿少出或多出）\n"
         f"- 分值分配建议: {alloc['score_plan_text']}\n"
         f"- 认知分层配比目标: 基础达标约 {alloc['tier_basic']} 题 / 能力提升约 {alloc['tier_improve']} 题 / 拓展探究约 {alloc['tier_explore']} 题\n"
         f"- 重点考察主题: {focus_str}\n"
-        f"- 用户定制指令: {blueprint.custom_instructions or '重点突出机制理解、公式推演与典型误区辨析'}\n\n"
+        f"- 用户定制指令: {blueprint.custom_instructions or '严格按对应模式 soul.md 要求命制'}\n\n"
         f"## 选中章节与知识锚点（请均衡覆盖并准确溯源）\n{chapter_anchors}\n\n"
         f"## 教材/课件原文内容\n{context_text[:20000]}"
     )
@@ -476,7 +647,7 @@ async def _generate_single_quiz_paper(
     )
     d = blueprint.deliverables
     quiz_sys, quiz_user = build_quiz_prompts(
-        document_ir, selected_chapters, blueprint, context_text
+        document_ir, selected_chapters, blueprint, context_text, paper_id=paper_id
     )
     paper_user = (
         f"## 本套试卷专项定位（paper_id={paper_id}）\n"
@@ -566,48 +737,9 @@ async def _run_generate_study_package(
     d = sync_deliverable_flags_with_items(blueprint.deliverables)
     blueprint = blueprint.model_copy(update={"deliverables": d})
     items_set = set(d.selected_items or [])
-    focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
+    soul_label = get_courseware_soul_label(d.scenario_type)
+    router.routing_trace["soul_profile"] = soul_label
 
-    # 1. Study Notes / Knowledge Extraction
-    study_notes_md = ""
-    if d.include_study_guide_notes:
-        router.check_cancelled()
-        current_stage_state["stage"] = "notes"
-        current_stage_state["percent"] = 18
-        notes_label = "重要知识提取" if "key_knowledge_extraction" in items_set or d.scenario_type == "C_sprint" else "详细自学案（附带例题）"
-        if progress_cb:
-            await progress_cb("notes", 18, f"正在生成【{notes_label}】...")
-        notes_sys, notes_user = build_notes_prompts(
-            document_ir, selected_chapters, blueprint, context_text
-        )
-        res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
-        if not res_notes or not res_notes.strip():
-            raise RuntimeError(f"AI 未生成有效的{notes_label}内容，请检查模型配置后重试。")
-        study_notes_md = normalize_markdown_math(res_notes)
-
-    # 2. Cheat Sheet
-    cheatsheet_md = ""
-    if d.include_cheatsheet:
-        router.check_cancelled()
-        current_stage_state["stage"] = "cheatsheet"
-        current_stage_state["percent"] = 36
-        if progress_cb:
-            await progress_cb("cheatsheet", 36, "正在浓缩考前速记表 (知识点与公式 Cheat Sheet)...")
-        cs_sys = (
-            "请根据以下教材/课件原文，提炼一份高密度、适合考前突击复盘与日常速查的《考前速记表 (Cheat Sheet)》。\n"
-            "格式严格要求：所有行内/块级数学公式必须使用 `$...$` 或 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；"
-            "Markdown 表格内的范数请用 `\\parallel W \\parallel^2` 而非 `\\|W\\|^2`，并控制单元格文本紧凑以免表格过宽溢出。\n"
-            "内容要求包含：1) 核心概念/公式与适用边界速查 Markdown 表格；2) 高频易混概念/公式对比表；3) 考前必背与常见计算陷阱 Checklist。"
-        )
-        cs_user = (
-            f"场景: {blueprint.preset_name} | 密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
-        )
-        res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
-        if not res_cs or not res_cs.strip():
-            raise RuntimeError("AI 未生成有效的考前速记表内容，请重试。")
-        cheatsheet_md = normalize_markdown_math(res_cs)
-
-    # 3. Quiz Papers (supporting 1 or multiple selected papers for A/B/C scenarios)
     ordered_paper_ids = [
         pid
         for pid in (
@@ -622,21 +754,136 @@ async def _run_generate_study_package(
     if not ordered_paper_ids and d.include_quiz:
         ordered_paper_ids = ["cram_exam_paper" if d.scenario_type == "C_sprint" else "sync_homework"]
 
-    generated_papers: List[QuizPaper] = []
-    if ordered_paper_ids:
-        for idx, pid in enumerate(ordered_paper_ids):
-            router.check_cancelled()
-            paper_name = _PAPER_SPECS.get(pid, (pid,))[0]
-            pct = 48 + int(34 * idx / max(1, len(ordered_paper_ids)))
-            current_stage_state["stage"] = "quiz"
+    total_tasks = (
+        (1 if d.include_study_guide_notes else 0)
+        + (1 if d.include_cheatsheet else 0)
+        + len(ordered_paper_ids)
+        + (1 if d.include_mindmap else 0)
+    )
+    completed_tasks = 0
+    sem = asyncio.Semaphore(3)
+    progress_lock = asyncio.Lock()
+
+    async def _advance_progress(stage_key: str, msg: str) -> None:
+        nonlocal completed_tasks
+        async with progress_lock:
+            completed_tasks += 1
+            pct = 12 + int(76 * completed_tasks / max(1, total_tasks))
+            current_stage_state["stage"] = stage_key
             current_stage_state["percent"] = pct
             if progress_cb:
-                await progress_cb("quiz", pct, f"正在命制《{paper_name}》（{idx + 1}/{len(ordered_paper_ids)}）及详细解析...")
-            generated_papers.append(
-                await _generate_single_quiz_paper(
-                    document_ir, selected_chapters, blueprint, context_text, pid, router
-                )
+                await progress_cb(stage_key, pct, msg)
+
+    current_stage_state["stage"] = "soul_mount"
+    current_stage_state["percent"] = 12
+    if progress_cb:
+        await progress_cb(
+            "soul_mount",
+            12,
+            f"已挂载《{soul_label}》与全球打印规范，正在并发启动 {max(1, total_tasks)} 个交付物子 Agent...",
+        )
+
+    study_notes_md = ""
+    cheatsheet_md = ""
+    papers_by_pid: Dict[str, QuizPaper] = {}
+    mindmap_mermaid = ""
+
+    async def _task_notes() -> None:
+        nonlocal study_notes_md
+        async with sem:
+            router.check_cancelled()
+            notes_label = (
+                "重要知识提取 (C1)"
+                if ("key_knowledge_extraction" in items_set or d.scenario_type == "C_sprint")
+                else "详细自学案（附带例题）(A1)"
             )
+            if progress_cb:
+                await progress_cb(
+                    "notes",
+                    current_stage_state["percent"],
+                    f"正在生成【{notes_label}】（已随任务上传 {soul_label}）...",
+                )
+            notes_sys, notes_user = build_notes_prompts(
+                document_ir, selected_chapters, blueprint, context_text
+            )
+            res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
+            if not res_notes or not res_notes.strip():
+                raise RuntimeError(f"AI 未生成有效的{notes_label}内容，请检查模型配置后重试。")
+            study_notes_md = normalize_markdown_math(res_notes)
+            await _advance_progress("notes", f"✓ 已完成【{notes_label}】")
+
+    async def _task_cheatsheet() -> None:
+        nonlocal cheatsheet_md
+        async with sem:
+            router.check_cancelled()
+            if progress_cb:
+                await progress_cb(
+                    "cheatsheet",
+                    current_stage_state["percent"],
+                    f"正在浓缩【考前速记表】（已随任务上传 {soul_label}）...",
+                )
+            cs_sys, cs_user = build_cheatsheet_prompts(
+                document_ir, selected_chapters, blueprint, context_text
+            )
+            res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
+            if not res_cs or not res_cs.strip():
+                raise RuntimeError("AI 未生成有效的考前速记表内容，请重试。")
+            cheatsheet_md = normalize_markdown_math(res_cs)
+            await _advance_progress("cheatsheet", "✓ 已完成【考前速记表】")
+
+    async def _task_paper(pid: str) -> None:
+        async with sem:
+            router.check_cancelled()
+            paper_name = _PAPER_SPECS.get(pid, (pid,))[0]
+            if progress_cb:
+                await progress_cb(
+                    "quiz",
+                    current_stage_state["percent"],
+                    f"正在命制《{paper_name}》（已随任务上传 {soul_label}）...",
+                )
+            paper = await _generate_single_quiz_paper(
+                document_ir, selected_chapters, blueprint, context_text, pid, router
+            )
+            papers_by_pid[pid] = paper
+            await _advance_progress("quiz", f"✓ 已完成《{paper_name}》（{len(paper.questions)} 题）")
+
+    async def _task_mindmap() -> None:
+        nonlocal mindmap_mermaid
+        async with sem:
+            router.check_cancelled()
+            if progress_cb:
+                await progress_cb(
+                    "mindmap",
+                    current_stage_state["percent"],
+                    f"正在构建 Mermaid 知识图谱 MindMap（已随任务上传 {soul_label}）...",
+                )
+            mm_sys, mm_user = build_mindmap_prompts(document_ir, selected_chapters, blueprint)
+            res_mm, _ = await router.execute_text("mindmap_generation", mm_sys, mm_user)
+            mindmap_mermaid = _sanitize_mermaid_code(res_mm) if res_mm else ""
+            if not mindmap_mermaid:
+                lines = ["flowchart LR", f'  root["{document_ir.filename[:24]}"]']
+                for idx, c in enumerate(selected_chapters[:8], start=1):
+                    safe_title = c.title.replace('"', "'")[:24]
+                    lines.append(f'  ch{idx}["{safe_title}"]')
+                    lines.append(f"  root --> ch{idx}")
+                mindmap_mermaid = "\n".join(lines)
+            await _advance_progress("mindmap", "✓ 已完成 MindMap 知识图谱")
+
+    coros = []
+    if d.include_study_guide_notes:
+        coros.append(_task_notes())
+    if d.include_cheatsheet:
+        coros.append(_task_cheatsheet())
+    for pid in ordered_paper_ids:
+        coros.append(_task_paper(pid))
+    if d.include_mindmap:
+        coros.append(_task_mindmap())
+
+    if coros:
+        await asyncio.gather(*coros)
+
+    generated_papers = [papers_by_pid[pid] for pid in ordered_paper_ids if pid in papers_by_pid]
+    if generated_papers:
         quiz_paper = generated_papers[0]
         extra_quiz_papers = generated_papers[1:]
     else:
@@ -651,35 +898,6 @@ async def _run_generate_study_package(
             questions=[],
         )
         extra_quiz_papers = []
-
-    # 4. Mindmap
-    mindmap_mermaid = ""
-    if d.include_mindmap:
-        router.check_cancelled()
-        current_stage_state["stage"] = "mindmap"
-        current_stage_state["percent"] = 88
-        if progress_cb:
-            await progress_cb("mindmap", 88, "正在构建 Mermaid 可视化 MindMap 知识图谱...")
-        mm_sys = (
-            "请根据教材章节结构与核心概念，生成一段可直接渲染的 Mermaid `flowchart LR` 知识图谱代码。\n"
-            "语法要求：所有节点文本必须用英文双引号包裹，例如 `c1[\"核心概念\"]`，节点文本内不要包含双引号、括号或分号。只输出 Mermaid 代码。"
-        )
-        mm_user = (
-            f"文档: {document_ir.filename}\n深度: {d.mindmap_depth} 层\n"
-            f"章节与关键词：\n"
-            + "\n".join(
-                f"- {c.title}: {', '.join(c.key_terms[:5])}" for c in selected_chapters
-            )
-        )
-        res_mm, _ = await router.execute_text("mindmap_generation", mm_sys, mm_user)
-        mindmap_mermaid = _sanitize_mermaid_code(res_mm) if res_mm else ""
-        if not mindmap_mermaid:
-            lines = ["flowchart LR", f'  root["{document_ir.filename[:24]}"]']
-            for idx, c in enumerate(selected_chapters[:8], start=1):
-                safe_title = c.title.replace('"', "'")[:24]
-                lines.append(f'  ch{idx}["{safe_title}"]')
-                lines.append(f"  root --> ch{idx}")
-            mindmap_mermaid = "\n".join(lines)
 
     # 5. Global Quality Verification
     router.check_cancelled()
@@ -731,6 +949,7 @@ async def _run_generate_study_package(
     if progress_cb:
         await progress_cb("done", 100, "学习资料生成完成！")
 
+    flashcards = extract_knowledge_flashcards(document_ir, study_notes_md, cheatsheet_md, quiz_paper)
     confirmed_bp = blueprint.model_copy(update={"confirmed": True})
     return StudyPackage(
         project_id=document_ir.project_id,
@@ -741,5 +960,176 @@ async def _run_generate_study_package(
         cheatsheet_markdown=cheatsheet_md,
         quiz_paper=quiz_paper,
         extra_quiz_papers=extra_quiz_papers,
+        flashcards=flashcards,
         mindmap_mermaid=mindmap_mermaid,
     )
+
+
+def _strip_quiz_option_leakage(text: str) -> str:
+    """Remove references like '选A' or '正确答案' from conceptual explanations used on knowledge flashcards."""
+    cleaned = re.sub(r"^(?:本题|答案|参考答案)?(?:选|为|是)\s*[A-D](?:[.、:：\s]+)?", "", (text or "").strip())
+    cleaned = re.sub(r"(?:故选|因此选|故正确答案为)\s*[A-D][。.]?", "", cleaned)
+    return cleaned.strip()
+
+
+def extract_knowledge_flashcards(
+    document_ir: DocumentIR,
+    study_notes_md: str,
+    cheatsheet_md: str,
+    quiz_paper: Optional[QuizPaper],
+    max_cards: int = 18,
+) -> List[KnowledgeFlashcard]:
+    """Build dedicated active-recall knowledge-point flashcards (strictly decoupled from quiz stems/options)."""
+    cards: List[KnowledgeFlashcard] = []
+    seen_keys: set[str] = set()
+
+    def _add_card(category: str, key: str, front: str, answer: str, explanation: str, source: str) -> None:
+        if len(cards) >= max_cards:
+            return
+        norm_key = re.sub(r"\s+", "", key).lower()[:48]
+        if not norm_key or norm_key in seen_keys:
+            return
+        seen_keys.add(norm_key)
+        cards.append(
+            KnowledgeFlashcard(
+                id=f"kf_{len(cards) + 1}",
+                category=category,
+                front=normalize_markdown_math(front.strip()),
+                answer=normalize_markdown_math(answer.strip()),
+                explanation=normalize_markdown_math(explanation.strip()),
+                source=source.strip() or document_ir.filename,
+            )
+        )
+
+    # 1. Extract '**概念/公式**：说明' definitions from cheatsheet first (highest density), then notes
+    for src_label, md_text in [("考前速记浓缩", cheatsheet_md), ("课程学习讲义", study_notes_md)]:
+        if not md_text:
+            continue
+        current_heading = ""
+        lines = md_text.splitlines()
+        i = 0
+        while i < len(lines) and len(cards) < max_cards:
+            line = lines[i].strip()
+            heading_m = re.match(r"^#{1,4}\s+(.+)$", line)
+            if heading_m:
+                current_heading = re.sub(r"[`*_]", "", heading_m.group(1)).strip()
+                i += 1
+                continue
+
+            # Display formula block $$...$$
+            if line.startswith("$$"):
+                formula_lines = [line]
+                if not (line.endswith("$$") and len(line) > 4):
+                    j = i + 1
+                    while j < len(lines) and j < i + 12:
+                        formula_lines.append(lines[j].strip())
+                        if lines[j].strip().endswith("$$"):
+                            i = j
+                            break
+                        j += 1
+                formula_block = "\n".join(formula_lines).strip()
+                if len(formula_block) > 6 and current_heading:
+                    ctx_next = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                    _add_card(
+                        "核心公式",
+                        f"formula_{current_heading}_{formula_block[:24]}",
+                        f"**【公式默写】** 请写出「{current_heading}」对应的核心公式及其变量/适用含义。",
+                        formula_block,
+                        ctx_next if ctx_next and not ctx_next.startswith("#") else f"出自模块：{current_heading}",
+                        f"{src_label} · {current_heading}",
+                    )
+                i += 1
+                continue
+
+            # Bold definition pattern: - **Term**：Definition
+            def_m = re.match(r"^(?:[-*+]\s+|\d+[.、]\s+)?\*\*([^*]{2,42})\*\*\s*[：:\-—]\s*(.{6,})$", line)
+            if def_m:
+                term = def_m.group(1).strip()
+                detail = def_m.group(2).strip()
+                if not re.match(r"^[A-D][.、:：\s]", term) and "例题" not in term:
+                    short_ans = re.split(r"[。；\n]", detail)[0].strip() or detail
+                    has_formula = "$" in detail or "\\" in detail or "公式" in term or "定理" in term
+                    _add_card(
+                        "核心公式" if has_formula else "核心概念",
+                        f"term_{term}",
+                        f"**【知识点记忆】** 请简述「{term}」的核心定义、公式表达或判断要点。",
+                        short_ans[:140] + ("..." if len(short_ans) > 140 else ""),
+                        detail,
+                        f"{src_label}" + (f" · {current_heading}" if current_heading else ""),
+                    )
+            i += 1
+
+    # 2. Extract structured section summaries from cheatsheet / notes
+    for src_label, md_text in [("考前速记浓缩", cheatsheet_md), ("课程学习讲义", study_notes_md)]:
+        if not md_text or len(cards) >= max_cards:
+            break
+        sections = re.split(r"\n(?=##+ )", md_text.strip())
+        for sec in sections:
+            if len(cards) >= max_cards:
+                break
+            sec_lines = sec.strip().splitlines()
+            if not sec_lines:
+                continue
+            heading = re.sub(r"^#+\s*", "", sec_lines[0]).replace("**", "").strip()
+            body = "\n".join(sec_lines[1:]).strip()
+            if not heading or not body or len(body) < 20:
+                continue
+            if any(skip in heading for skip in ("例题", "参考答案", "自测", "目录")):
+                continue
+            bullets = [
+                re.sub(r"^[-*+\d.、\s]+", "", ln).strip()
+                for ln in sec_lines[1:]
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            core_ans = bullets[0][:140] if bullets else body.splitlines()[0][:140]
+            _add_card(
+                "知识模块",
+                f"sec_{heading}",
+                f"**【考点精要梳理】** 回忆「{heading}」包含哪些关键结论与适用条件？",
+                core_ans,
+                body[:420] + ("\n..." if len(body) > 420 else ""),
+                f"{src_label} · {heading}",
+            )
+
+    # 3. Supplement pure conceptual knowledge cards from quiz knowledge_tags & distilled explanations (NO stems/options)
+    if quiz_paper and quiz_paper.questions and len(cards) < max_cards:
+        for q in quiz_paper.questions:
+            if len(cards) >= max_cards:
+                break
+            tags = [t.strip() for t in (q.knowledge_tags or []) if t.strip()]
+            primary_tag = tags[0] if tags else (q.source_chapter or "").strip()
+            if not primary_tag or primary_tag in ("综合", "默认"):
+                continue
+            clean_exp = _strip_quiz_option_leakage(q.explanation or "")
+            if not clean_exp:
+                continue
+            concise_takeaway = re.split(r"[。；\n]", clean_exp)[0].strip()
+            if len(concise_takeaway) < 6:
+                concise_takeaway = clean_exp[:120]
+            _add_card(
+                "考点规律与易错点",
+                f"kp_{primary_tag}",
+                f"**【考点与避坑记忆】** 关于「{primary_tag}」，解题核心规律与常见误区是什么？",
+                concise_takeaway[:150],
+                clean_exp[:380] + ("..." if len(clean_exp) > 380 else ""),
+                f"核心考点 · {' / '.join(tags[:2]) if tags else q.source_chapter}",
+            )
+
+    # 4. Supplement key terms from DocumentIR chapters if deck is still small
+    if len(cards) < 6 and document_ir.chapters:
+        for ch in document_ir.chapters:
+            if len(cards) >= max_cards:
+                break
+            terms = [t.strip() for t in (ch.key_terms or []) if t.strip()]
+            preview = (ch.summary_preview or ch.content_text[:260]).strip()
+            for term in terms[:3]:
+                _add_card(
+                    "核心术语",
+                    f"ch_term_{term}",
+                    f"**【核心概念辨析】** 结合《{ch.title}》，简述「{term}」的内涵与关键联系。",
+                    f"{term}（出自 P{ch.start_page}-{ch.end_page}）",
+                    preview,
+                    f"{ch.title} · P{ch.start_page}",
+                )
+
+    return cards[:max_cards]

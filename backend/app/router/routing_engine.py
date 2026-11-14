@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.router.cloud_provider import call_cloud_llm
@@ -144,16 +145,24 @@ class ModelRouter:
         stage: StageName,
         system_prompt: str,
         user_prompt: str,
+        soul_file_path: Optional[Path] = None,
     ) -> Tuple[Optional[str], str]:
         """
         Execute a stage via configured provider.
-        Returns (response_text_or_None_if_heuristic, provider_trace_label).
+        Optionally attaches a soul.md file to both Cloud system context and CLI harnesses.
         """
         self.check_cancelled()
         sel = self.resolve_stage(stage)
         provider: ProviderType = sel.provider
         if provider not in ("harness", "cloud"):
             provider = self.settings.active_provider if self.settings.active_provider in ("harness", "cloud") else "harness"
+
+        effective_system_prompt = system_prompt
+        if soul_file_path and soul_file_path.is_file():
+            soul_raw = soul_file_path.read_text(encoding="utf-8", errors="replace").strip()
+            soul_tag = f"[Uploaded Soul File: {soul_file_path.name}]\n{soul_raw}"
+            if soul_tag not in effective_system_prompt:
+                effective_system_prompt = f"{soul_tag}\n\n{system_prompt}".strip()
 
         max_retries = max(0, int(getattr(self.settings.harness_config, "max_retries", 2)))
         try:
@@ -168,7 +177,7 @@ class ModelRouter:
                     f"cloud/{model}",
                     max_retries,
                     lambda: call_cloud_llm(
-                        system_prompt, user_prompt, self.settings.cloud_config, model_override=model
+                        effective_system_prompt, user_prompt, self.settings.cloud_config, model_override=model
                     ),
                 )
                 label = f"cloud/{model}"
@@ -192,6 +201,7 @@ class ModelRouter:
                 cancel_token=self.cancel_token,
                 status_cb=lambda msg: self._emit_stage_status(stage, msg),
                 free_ai_auth=free_auth,
+                soul_file_path=soul_file_path,
             )
             if free_auth.preferred_proxy_mode == "magpie_dsh":
                 label = f"harness/magpie-dsh ({free_auth.selected_free_model})"
@@ -240,13 +250,16 @@ class ModelRouter:
         stage: StageName,
         system_prompt: str,
         user_prompt: str,
+        soul_file_path: Optional[Path] = None,
     ) -> Tuple[Optional[Any], str]:
         max_json_retries = min(1, max(0, int(getattr(self.settings.harness_config, "max_retries", 2))))
         last_label = "heuristic"
         last_exc: Optional[Exception] = None
         for attempt in range(1, 2 + max_json_retries):
             self.check_cancelled()
-            raw_text, label = await self.execute_text(stage, system_prompt, user_prompt)
+            raw_text, label = await self.execute_text(
+                stage, system_prompt, user_prompt, soul_file_path=soul_file_path
+            )
             last_label = label
             if raw_text is None:
                 return None, label

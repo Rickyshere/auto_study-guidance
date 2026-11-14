@@ -1,6 +1,8 @@
 export type ProviderType = 'harness' | 'cloud';
 export type UiVisualMode = 'academic_pure' | 'liquid_glass';
 export type ScenarioType = 'A_beginner' | 'B_consolidate' | 'C_sprint';
+export type ProjectType = 'courseware' | 'exam_paper';
+export type ExamDirectionType = 'original_to_bank' | 'similar_paper' | 'both';
 
 export type StageName =
   | 'vision_ocr'
@@ -157,12 +159,16 @@ export interface ChapterNode {
 
 export interface DocumentIR {
   project_id: string;
+  project_type?: ProjectType;
   filename: string;
   file_type: string;
   created_at: string;
   total_pages_or_slides: number;
   total_chars: number;
   ocr_applied: boolean;
+  oxr_engine_used?: string;
+  oxr_probe_summary?: string;
+  raw_exam_text?: string;
   chapters: ChapterNode[];
   all_assets: AssetItem[];
 }
@@ -234,6 +240,84 @@ export interface QuizQuestion {
   explanation: string;
   source_chapter: string;
   source_page: string;
+  knowledge_tags?: string[];
+  applied_strategies?: string[];
+  reverse_design?: string;
+  blind_review_summary?: string;
+}
+
+export interface ExamToneAndPersona {
+  stem_style: string;
+  phrasing_habits: string[];
+  option_length_style: string;
+}
+
+export interface ExamAgentStyleProfile {
+  subject_and_level: string;
+  overall_difficulty: string;
+  tone_and_persona: ExamToneAndPersona;
+  formatting_rules: string;
+  user_override_directives: string[];
+}
+
+export interface ExamDistractorRecipeItem {
+  item: string;
+  trap_type: string;
+  detail: string;
+}
+
+export interface ExamQuestionBlueprintItem {
+  question_id: number;
+  target_question_type: string;
+  target_difficulty: string;
+  knowledge_points: string[];
+  original_skeleton: string;
+  distractor_recipe: ExamDistractorRecipeItem[];
+  assigned_strategies: string[];
+  generation_directive: string;
+}
+
+export interface ExamGeneratedQuestionItem {
+  question_id: number;
+  question_type: string;
+  knowledge_tags: string[];
+  applied_strategies: string[];
+  reverse_design: string;
+  correct_answer: string;
+  detailed_analysis: string;
+  stem: string;
+  options?: Record<string, string> | null;
+}
+
+export interface ExamBlindReviewResult {
+  question_id: number;
+  attempt: number;
+  reasoning_process: string;
+  my_answer: string;
+  expected_answer: string;
+  is_valid: boolean;
+  passed: boolean;
+  defect_report?: string | null;
+}
+
+export interface ExamPipelineMetadata {
+  direction: ExamDirectionType;
+  user_requirements: string;
+  oxr_engine_used: string;
+  oxr_probe_summary: string;
+  soul_files_uploaded: string[];
+  style_profile?: ExamAgentStyleProfile | null;
+  question_blueprints: ExamQuestionBlueprintItem[];
+  generated_items: ExamGeneratedQuestionItem[];
+  blind_reviews: ExamBlindReviewResult[];
+}
+
+export interface ExamSoulSpec {
+  agent_id: string;
+  filename: string;
+  name: string;
+  summary: string;
+  content: string;
 }
 
 export interface QuizPaper {
@@ -247,6 +331,15 @@ export interface QuizPaper {
   questions: QuizQuestion[];
 }
 
+export interface KnowledgeFlashcard {
+  id: string;
+  category: string;
+  front: string;
+  answer: string;
+  explanation: string;
+  source: string;
+}
+
 export interface StudyPackage {
   project_id: string;
   blueprint_used: StudyBlueprint;
@@ -257,11 +350,19 @@ export interface StudyPackage {
   cheatsheet_markdown: string;
   quiz_paper: QuizPaper;
   extra_quiz_papers: QuizPaper[];
+  flashcards?: KnowledgeFlashcard[];
   mindmap_mermaid: string;
+  exam_pipeline_metadata?: ExamPipelineMetadata | null;
+}
+
+export interface VariantQuestionRequest {
+  source_question: QuizQuestion;
+  selected_chapter_ids: string[];
 }
 
 export interface ProjectSummary {
   project_id: string;
+  project_type?: ProjectType;
   filename: string;
   file_type: string;
   created_at: string;

@@ -1,10 +1,13 @@
 import React, { useRef, useState } from 'react';
 import {
+  ArrowRight,
   BookOpen,
   CheckSquare,
   FileText,
   FolderOpen,
   Loader2,
+  RotateCcw,
+  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -20,10 +23,18 @@ interface Props {
   onSelectAllChapters: (all: boolean) => void;
   onUploadFile: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<void>;
+  onUploadExamFile?: (file: File) => Promise<void>;
+  onLoadDemoExam?: () => Promise<void>;
+  uploadMode?: 'courseware' | 'exam_paper';
+  onChangeUploadMode?: (mode: 'courseware' | 'exam_paper') => void;
   uploading: boolean;
   projects: ProjectSummary[];
   onOpenProject: (projectId: string) => void;
   onDeleteProject: (projectId: string, e: React.MouseEvent) => void;
+  hasStudyPackage?: boolean;
+  isWorkflowActive?: boolean;
+  onReconfigureGenerate?: () => void;
+  onBackToStudio?: () => void;
 }
 
 export const UploadAndTocPanel: React.FC<Props> = ({
@@ -33,16 +44,35 @@ export const UploadAndTocPanel: React.FC<Props> = ({
   onSelectAllChapters,
   onUploadFile,
   onLoadDemo,
+  onUploadExamFile,
+  onLoadDemoExam,
+  uploadMode,
+  onChangeUploadMode,
   uploading,
   projects,
   onOpenProject,
   onDeleteProject,
+  hasStudyPackage,
+  isWorkflowActive,
+  onReconfigureGenerate,
+  onBackToStudio,
 }) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [localUploadMode, setLocalUploadMode] = useState<'courseware' | 'exam_paper'>('courseware');
+  const effectiveUploadMode = uploadMode ?? localUploadMode;
+
+  const setMode = (mode: 'courseware' | 'exam_paper') => {
+    setLocalUploadMode(mode);
+    onChangeUploadMode?.(mode);
+  };
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    if (effectiveUploadMode === 'exam_paper' && onUploadExamFile) {
+      await onUploadExamFile(files[0]);
+      return;
+    }
     await onUploadFile(files[0]);
   };
 
@@ -67,24 +97,68 @@ export const UploadAndTocPanel: React.FC<Props> = ({
           handleFiles(e.dataTransfer.files);
         }}
       >
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
             <UploadCloud className="w-4 h-4 text-[#3B5BDB]" />
-            资料上传
+            {effectiveUploadMode === 'exam_paper' ? '上传试卷' : '资料上传'}
           </span>
           <span
             className="text-[10.5px] px-2 py-0.5 rounded-full font-semibold"
-            style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
+            style={{
+              backgroundColor: effectiveUploadMode === 'exam_paper' ? 'var(--brand-tint)' : 'var(--bg-subtle)',
+              color: effectiveUploadMode === 'exam_paper' ? '#3B5BDB' : 'var(--text-secondary)',
+            }}
           >
-            PDF / PPTX / 图片
+            {effectiveUploadMode === 'exam_paper' ? '强制 OXR' : 'PDF / PPTX / 图片'}
           </span>
+        </div>
+
+        {/* Peer Entry Mode Switcher */}
+        <div
+          className="grid grid-cols-2 gap-1 p-1 rounded-xl border"
+          style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+        >
+          <button
+            type="button"
+            disabled={uploading}
+            onClick={() => setMode('courseware')}
+            className="px-2 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1"
+            style={{
+              backgroundColor: effectiveUploadMode === 'courseware' ? 'var(--bg-surface)' : 'transparent',
+              color: effectiveUploadMode === 'courseware' ? '#3B5BDB' : 'var(--text-secondary)',
+              boxShadow: effectiveUploadMode === 'courseware' ? '0 1px 2px rgba(15,23,42,0.06)' : 'none',
+              cursor: uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <BookOpen className="w-3 h-3" />
+            <span>上传课件</span>
+          </button>
+          <button
+            type="button"
+            disabled={uploading}
+            onClick={() => setMode('exam_paper')}
+            className="px-2 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1"
+            style={{
+              backgroundColor: effectiveUploadMode === 'exam_paper' ? 'var(--bg-surface)' : 'transparent',
+              color: effectiveUploadMode === 'exam_paper' ? '#3B5BDB' : 'var(--text-secondary)',
+              boxShadow: effectiveUploadMode === 'exam_paper' ? '0 1px 2px rgba(15,23,42,0.06)' : 'none',
+              cursor: uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <ShieldCheck className="w-3 h-3" />
+            <span>上传试卷</span>
+          </button>
         </div>
 
         <input
           ref={inputRef}
           type="file"
           className="hidden"
-          accept=".pdf,.pptx,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp"
+          accept={
+            effectiveUploadMode === 'exam_paper'
+              ? '.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff'
+              : '.pdf,.pptx,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp'
+          }
           onChange={(e) => {
             handleFiles(e.target.files);
             e.target.value = '';
@@ -92,7 +166,7 @@ export const UploadAndTocPanel: React.FC<Props> = ({
         />
 
         <SpringButton
-          springLabel="上传教材或课件"
+          springLabel={effectiveUploadMode === 'exam_paper' ? '上传试卷原卷' : '上传教材或课件'}
           disabled={uploading}
           onClick={() => inputRef.current?.click()}
           className="w-full py-2.5 px-3 rounded-xl border border-dashed text-xs font-semibold flex items-center justify-center gap-1.5"
@@ -103,25 +177,57 @@ export const UploadAndTocPanel: React.FC<Props> = ({
             cursor: uploading ? 'wait' : 'pointer',
           }}
         >
-          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-          <span>{uploading ? '正在执行 OCR 与切片...' : '选择或拖拽文件上传'}</span>
+          {uploading ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : effectiveUploadMode === 'exam_paper' ? (
+            <ShieldCheck className="w-3.5 h-3.5" />
+          ) : (
+            <UploadCloud className="w-3.5 h-3.5" />
+          )}
+          <span>
+            {uploading
+              ? effectiveUploadMode === 'exam_paper'
+                ? '正在执行强制 OXR 扫描...'
+                : '正在执行 OCR 与切片...'
+              : effectiveUploadMode === 'exam_paper'
+              ? '选择或拖拽试卷上传 (优先本地 OXR)'
+              : '选择或拖拽课件文件上传'}
+          </span>
         </SpringButton>
 
-        <SpringButton
-          springLabel="加载示例PPTX"
-          disabled={uploading}
-          onClick={onLoadDemo}
-          className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
-          style={{
-            borderColor: 'var(--border-default)',
-            backgroundColor: 'var(--bg-subtle)',
-            color: 'var(--text-primary)',
-            cursor: uploading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
-          <span>载入示例课件 (梯度下降讲义)</span>
-        </SpringButton>
+        {effectiveUploadMode === 'exam_paper' && onLoadDemoExam ? (
+          <SpringButton
+            springLabel="载入示例试卷"
+            disabled={uploading}
+            onClick={onLoadDemoExam}
+            className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--bg-subtle)',
+              color: 'var(--text-primary)',
+              cursor: uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
+            <span>载入示例试卷 (生理学期中卷)</span>
+          </SpringButton>
+        ) : (
+          <SpringButton
+            springLabel="加载示例PPTX"
+            disabled={uploading}
+            onClick={onLoadDemo}
+            className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--bg-subtle)',
+              color: 'var(--text-primary)',
+              cursor: uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
+            <span>载入示例课件 (梯度下降讲义)</span>
+          </SpringButton>
+        )}
       </div>
 
       {/* Chapter Scope Checklist */}
@@ -136,22 +242,62 @@ export const UploadAndTocPanel: React.FC<Props> = ({
                 <span>{documentIr.total_pages_or_slides} 页/张</span>
                 <span>·</span>
                 <span>{documentIr.total_chars.toLocaleString()} 字</span>
+                {documentIr.project_type === 'exam_paper' && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                    style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                  >
+                    试卷 · OXR
+                  </span>
+                )}
                 {documentIr.ocr_applied && (
                   <span
                     className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
                     style={{ backgroundColor: 'var(--semantic-success-tint)', color: 'var(--semantic-success)' }}
                   >
-                    OCR 已识别
+                    {documentIr.oxr_engine_used ? `${documentIr.oxr_engine_used} 已识别` : 'OCR 已识别'}
                   </span>
                 )}
               </div>
             </div>
           </div>
 
+          {hasStudyPackage && (
+            <div className="pt-1 border-t" style={{ borderColor: 'var(--border-default)' }}>
+              {isWorkflowActive && onBackToStudio ? (
+                <SpringButton
+                  springLabel="返回学习成果"
+                  onClick={onBackToStudio}
+                  className="w-full py-2 px-3 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5"
+                  style={{ backgroundColor: '#3B5BDB' }}
+                >
+                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>返回已生成的学习成果</span>
+                </SpringButton>
+              ) : onReconfigureGenerate ? (
+                <SpringButton
+                  springLabel="重新配置生成"
+                  onClick={onReconfigureGenerate}
+                  className="w-full py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: '#3B5BDB',
+                    color: '#3B5BDB',
+                    backgroundColor: 'var(--brand-tint)',
+                  }}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>
+                    {documentIr.project_type === 'exam_paper' ? '重新配置并生成试卷' : '重新配置与重新生成'}
+                  </span>
+                </SpringButton>
+              ) : null}
+            </div>
+          )}
+
           <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: 'var(--border-default)' }}>
             <span className="text-[11px] font-bold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
               <BookOpen className="w-3.5 h-3.5 text-[#3B5BDB]" />
-              练习范围 ({selectedChapterIds.length}/{documentIr.chapters.length})
+              {documentIr.project_type === 'exam_paper' ? '原卷页面范围' : '练习范围'} ({selectedChapterIds.length}/{documentIr.chapters.length})
             </span>
             <div className="flex items-center gap-2 text-[11px] font-semibold">
               <button type="button" onClick={() => onSelectAllChapters(true)} className="text-[#3B5BDB] hover:underline">
@@ -224,8 +370,17 @@ export const UploadAndTocPanel: React.FC<Props> = ({
                     <div className="text-[11.5px] font-semibold truncate flex items-center gap-1">
                       <FileText className="w-3 h-3 shrink-0 text-[#3B5BDB]" />
                       <span className="truncate">{p.filename}</span>
+                      {p.project_type === 'exam_paper' && (
+                        <span
+                          className="text-[9.5px] px-1 py-0.2 rounded font-bold shrink-0"
+                          style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                        >
+                          试卷
+                        </span>
+                      )}
                     </div>
                     <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                      {p.project_type === 'exam_paper' ? 'OXR 试卷 · ' : ''}
                       {p.chapter_count} 章 · {p.has_package ? '已生成资料' : '待生成'}
                     </div>
                   </div>

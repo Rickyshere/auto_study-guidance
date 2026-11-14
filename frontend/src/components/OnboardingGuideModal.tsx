@@ -22,12 +22,12 @@ interface TourStep {
 const TOUR_STEPS: TourStep[] = [
   {
     targetId: 'upload-panel',
-    badge: '步骤 1 / 5 · 资料上传与范围',
-    title: '上传课本 / 课件并勾选章节',
+    badge: '步骤 1 / 5 · 资料与试卷双入口',
+    title: '上传课本 / 课件或试卷（强制 OXR）',
     description:
-      '在这里拖拽或选择 PDF、PPTX、Word、Markdown 或图片。没有现成文件时，可直接点击「载入示例课件」立刻体验。上传解析后可在下方勾选出题章节范围。',
+      '支持在侧边栏或欢迎页选择「上传课件 (PDF/PPTX/Word)」或「上传试卷 (强制 OXR · 四子 Agent 盲测组卷)」。也可一键载入示例课件或示例期中真题卷立即体验。',
     preferredPlacement: 'right',
-    tip: '提示：多章教材可先勾选 1～2 章测试生成速度。',
+    tip: '提示：试卷上传仅只读探查本地 OXR，无则直连云端 OXR 提取文本层。',
   },
   {
     targetId: 'main-workspace',
@@ -41,9 +41,9 @@ const TOUR_STEPS: TourStep[] = [
   {
     targetId: 'topbar-views',
     badge: '步骤 3 / 5 · 学习成果工作台',
-    title: '讲义、单题卡片练习与键盘闪卡',
+    title: '讲义、在线刷题、知识点闪卡与速记',
     description:
-      '资料生成后，可在顶部切换讲义、单题卡片式在线练习、键盘控制的 3D 翻转闪卡（← / → 切题、Space 翻转，一轮结束可复习错题或打乱重来）、考前速记与思维导图，全部支持公式渲染与 PDF 导出。',
+      '资料生成后，可在顶部自由切换「讲义知识提取」「在线练习卡片（←/→ 切题做题与变式题）」「知识点闪卡（独立 3D 翻转回忆核心概念与公式，Space 翻转、← 需复习、→ 已掌握）」「考前速记」与「MindMap」，全部支持公式渲染与 PDF 导出。',
     preferredPlacement: 'bottom',
   },
   {

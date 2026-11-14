@@ -948,6 +948,7 @@ def _build_cli_command(
     preferred: str,
     exe: str,
     custom_tokens: Optional[List[str]] = None,
+    soul_file_path: Optional[Path] = None,
 ) -> tuple[List[str], bool]:
     """Build subprocess argv and whether stream-json output parsing is expected."""
     if preferred == "claude":
@@ -956,8 +957,9 @@ def _build_cli_command(
         return [exe, "exec", "--json", "--skip-git-repo-check", "-"], True
     if preferred == "dsh":
         dsh_script = Path(__file__).with_name("dsh_cli.py")
+        soul_args = ["--soul-file", str(soul_file_path)] if (soul_file_path and soul_file_path.is_file()) else []
         if VENV_PYTHON.exists() and dsh_script.exists():
-            return [str(VENV_PYTHON), str(dsh_script), "--output-format", "stream-json", "--verbose"], True
+            return [str(VENV_PYTHON), str(dsh_script), "--output-format", "stream-json", "--verbose", *soul_args], True
         return [exe, "--profile", "headless", "--output-format", "stream-json", "--verbose"], True
     if preferred == "gemini":
         return [exe, "--output-format", "stream-json"], True
@@ -1169,14 +1171,23 @@ async def _run_cli_attempt(
     return out_text
 
 
-def _build_cli_prompt(system_prompt: str, user_prompt: str) -> str:
+def _build_cli_prompt(
+    system_prompt: str,
+    user_prompt: str,
+    soul_file_path: Optional[Path] = None,
+) -> str:
     """Wrap system and task prompts for non-interactive local CLI agents with strict format & quality rules."""
+    soul_header = ""
+    if soul_file_path and soul_file_path.is_file():
+        soul_raw = soul_file_path.read_text(encoding="utf-8", errors="replace").strip()
+        soul_header = f"[Uploaded Soul File: {soul_file_path.name}]\n{soul_raw}\n\n"
     return (
         "[Execution Mode & Output Contract]\n"
         "You are running inside an automated non-interactive study-material generation pipeline.\n"
         "1. Rely strictly on the document context and instructions below. Do NOT invoke filesystem search, shell commands, git, or web tools, and do NOT ask follow-up questions.\n"
         "2. Output ONLY the final deliverable in the exact requested format (pure valid JSON when JSON is requested, or clean Markdown when Markdown is requested), with zero conversational preamble or closing remarks.\n"
         "3. Prioritize high academic rigor: multi-step reasoning, misconception-grounded distractors, complete step-by-step explanations, and strict LaTeX formatting (`$...$` / `$$...$$`; double-escape all backslashes inside JSON strings).\n\n"
+        f"{soul_header}"
         f"[System Instructions]\n{system_prompt}\n\n"
         f"[Task]\n{user_prompt}"
     )
@@ -1189,12 +1200,13 @@ async def run_cli_harness(
     cancel_token: Optional[HarnessCancelToken] = None,
     status_cb: Optional[Callable[[str], Any]] = None,
     free_ai_auth: Optional[FreeAiAuthConfig] = None,
+    soul_file_path: Optional[Path] = None,
 ) -> str:
     """Invoke a local CLI Agent Harness with stream-json progress, cancellation, strict exit validation, and auto-retry."""
     if cancel_token:
         cancel_token.raise_if_cancelled()
 
-    combined_prompt = _build_cli_prompt(system_prompt, user_prompt)
+    combined_prompt = _build_cli_prompt(system_prompt, user_prompt, soul_file_path=soul_file_path)
     detected = {item.name: item for item in detect_installed_harnesses()}
     if free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
         preferred = "dsh"
@@ -1209,6 +1221,8 @@ async def run_cli_harness(
                 break
 
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if soul_file_path and soul_file_path.is_file():
+        env["DSH_SOUL_FILE"] = str(soul_file_path)
     if preferred == "dsh" and free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
         env["DSH_BASE_URL"] = (free_ai_auth.magpie_gateway_url or "http://127.0.0.1:3425/v1").strip()
         env["DSH_API_KEY"] = (free_ai_auth.magpie_gateway_key or "magpie").strip()
@@ -1244,7 +1258,9 @@ async def run_cli_harness(
         item = detected.get(preferred)
         if not item or not item.available or not item.executable_path:
             raise RuntimeError(f"本机未检测到 {preferred} CLI 可执行文件，请在设置中点击“一键安装”")
-        cmd, expect_stream_json = _build_cli_command(preferred, item.executable_path)
+        cmd, expect_stream_json = _build_cli_command(
+            preferred, item.executable_path, soul_file_path=soul_file_path
+        )
 
     try:
         last_exc: Optional[Exception] = None

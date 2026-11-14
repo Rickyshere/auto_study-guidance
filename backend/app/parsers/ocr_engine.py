@@ -870,23 +870,105 @@ async def _extract_with_somark_free_api(image_path: Path, settings: RouterSettin
     headers: Dict[str, str] = {}
     if settings.ocr_config.somark_api_key:
         headers["Authorization"] = f"Bearer {settings.ocr_config.somark_api_key}"
+    suffix = image_path.suffix.lower()
+    mime = "image/jpeg" if suffix in (".jpg", ".jpeg") else ("image/webp" if suffix == ".webp" else "image/png")
     try:
+        raw_bytes = image_path.read_bytes()
         async with httpx.AsyncClient(timeout=45.0) as client:
-            with image_path.open("rb") as f:
-                files = {"file": (image_path.name, f, "image/png")}
-                for ep in (f"{base_url}/ocr", f"{base_url}/parse", base_url):
+            for ep in (f"{base_url}/ocr", f"{base_url}/parse", f"{base_url}/file_parse", base_url):
+                try:
+                    files = {"file": (image_path.name, raw_bytes, mime)}
                     resp = await client.post(ep, files=files, headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
                         if isinstance(data, dict):
-                            txt = data.get("markdown") or data.get("text") or data.get("content") or ""
+                            txt = (
+                                data.get("markdown")
+                                or data.get("md_content")
+                                or data.get("text")
+                                or data.get("content")
+                                or ""
+                            )
                             if not txt and isinstance(data.get("data"), dict):
-                                txt = data["data"].get("markdown") or data["data"].get("text") or ""
+                                txt = (
+                                    data["data"].get("markdown")
+                                    or data["data"].get("text")
+                                    or data["data"].get("content")
+                                    or ""
+                                )
                             if txt:
                                 return str(txt).strip()
+                except Exception:
+                    continue
     except Exception:
         pass
     return ""
+
+
+async def probe_local_oxr_only(settings: RouterSettings) -> Dict[str, Any]:
+    """Probe whether a local OXR model/service is ready without triggering any download or installation."""
+    state = _load_ocr_state()
+    oxr_installed = bool(state.get("oxr_full", False) or OXR_REPO_DIR.exists() or _has_python_pkg("oxr"))
+    oxr_url = settings.ocr_config.oxr_service_url
+    oxr_running = await _probe_http_alive(oxr_url)
+
+    if oxr_running:
+        return {
+            "local_oxr_installed": oxr_installed or True,
+            "local_oxr_running": True,
+            "local_oxr_ready": True,
+            "selected_engine": "oxr_full",
+            "summary": f"已探查到本机 OXR 服务在线（{oxr_url}），直接选用本地 OXR 识别试卷。",
+        }
+
+    if oxr_installed:
+        return {
+            "local_oxr_installed": True,
+            "local_oxr_running": False,
+            "local_oxr_ready": False,
+            "selected_engine": "somark_free_api",
+            "summary": "仅探查模式：检测到本地存在 OXR 文件但服务未启动（未触发下载），已直接切换云端 OXR (SoMark Free-OXR) 识别试卷。",
+        }
+
+    return {
+        "local_oxr_installed": False,
+        "local_oxr_running": False,
+        "local_oxr_ready": False,
+        "selected_engine": "somark_free_api",
+        "summary": "仅探查模式：本机未检测到 OXR 模型，已直接选用云端 OXR (SoMark Free-OXR) 识别试卷。",
+    }
+
+
+async def extract_exam_page_with_forced_oxr(
+    image_path: Path,
+    settings: RouterSettings,
+    prefer_local_oxr: bool,
+) -> tuple[str, str]:
+    """Run forced OXR extraction on an exam page image (local OXR if probed ready -> Cloud OXR -> VLM/RapidOCR fallback)."""
+    if prefer_local_oxr:
+        txt = await _extract_with_http_service(image_path, settings.ocr_config.oxr_service_url)
+        if txt:
+            return txt, "oxr_full"
+
+    cloud_txt = await _extract_with_somark_free_api(image_path, settings)
+    if cloud_txt:
+        return cloud_txt, "somark_free_api"
+
+    if settings.cloud_config.api_key:
+        vlm_txt = await _call_openai_vision(
+            image_path=image_path,
+            base_url=settings.cloud_config.base_url,
+            api_key=settings.cloud_config.api_key,
+            model=settings.cloud_config.vision_model or settings.cloud_config.model,
+        )
+        if vlm_txt:
+            return vlm_txt, "somark_free_api (VLM 辅助提取)"
+
+    local_txt = extract_text_from_image_local(image_path)
+    if local_txt:
+        return local_txt, "somark_free_api (RapidOCR 本地兜底)"
+
+    return "", "somark_free_api"
 
 
 async def _extract_with_paddleocr(image_path: Path) -> str:

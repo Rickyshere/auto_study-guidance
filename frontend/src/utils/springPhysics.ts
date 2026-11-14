@@ -414,7 +414,12 @@ export function SpringSegmentedControl<T extends string>({
     (targetVal: T, instant: boolean, boostVx: number | null = null, boostVy: number | null = null) => {
       const btn = btnRefs.current[targetVal];
       const track = trackRef.current;
-      if (!btn || !track || !xRef.current || !yRef.current || !wRef.current || !hRef.current) return;
+      if (!btn) {
+        if (thumbRef.current) thumbRef.current.style.opacity = '0';
+        return;
+      }
+      if (thumbRef.current) thumbRef.current.style.opacity = '1';
+      if (!track || !xRef.current || !yRef.current || !wRef.current || !hRef.current) return;
       xRef.current.bounds = [3, Math.max(3, track.clientWidth - btn.offsetWidth - 3)];
       yRef.current.bounds = [3, Math.max(3, track.clientHeight - btn.offsetHeight - 3)];
       if (instant) {

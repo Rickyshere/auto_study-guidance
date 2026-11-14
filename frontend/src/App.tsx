@@ -15,9 +15,11 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  UploadCloud,
 } from 'lucide-react';
 import { api } from './api';
 import { BlueprintNegotiator } from './components/BlueprintNegotiator';
+import { ExamPaperWorkbench, ExamProgressState } from './components/ExamPaperWorkbench';
 import { LiquidGlassCanvas, LiquidGlassOptics } from './components/LiquidGlassCanvas';
 import { OnboardingGuideModal } from './components/OnboardingGuideModal';
 import { DEFAULT_LIQUID_OPTICS, RouterConfigModal } from './components/RouterConfigModal';
@@ -26,6 +28,7 @@ import { UpdatePushModal } from './components/UpdatePushModal';
 import { UploadAndTocPanel } from './components/UploadAndTocPanel';
 import {
   DocumentIR,
+  ExamDirectionType,
   PresetTemplate,
   ProjectSummary,
   ProviderStatusResponse,
@@ -110,6 +113,7 @@ export function App() {
     }
   }, []);
 
+  const [uploadMode, setUploadMode] = useState<'courseware' | 'exam_paper'>('courseware');
   const [uploading, setUploading] = useState(false);
   const [ocrProgress, setOcrProgress] = useState<{
     active: boolean;
@@ -126,6 +130,7 @@ export function App() {
     message: string;
     logs?: string[];
   } | null>(null);
+  const [examProgress, setExamProgress] = useState<ExamProgressState | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Free AI Proxy Authorization & Cloud Missing Prompt Modals
@@ -134,6 +139,8 @@ export function App() {
   const [cloudPromptOpen, setCloudPromptOpen] = useState(false);
 
   const generateAbortRef = useRef<AbortController | null>(null);
+  const coursewareWelcomeInputRef = useRef<HTMLInputElement | null>(null);
+  const examWelcomeInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -271,7 +278,9 @@ export function App() {
   // Step 1 -> Step 2 Live Streaming Upload + OCR Progress
   const handleUploadFile = async (file: File) => {
     setErrorMsg(null);
+    setUploadMode('courseware');
     setUploading(true);
+    setExamProgress(null);
     setStudyPackage(null);
     setActiveMainView('workflow');
     setWorkflowStep(2);
@@ -312,7 +321,9 @@ export function App() {
 
   const handleLoadDemo = async () => {
     setErrorMsg(null);
+    setUploadMode('courseware');
     setUploading(true);
+    setExamProgress(null);
     setStudyPackage(null);
     setActiveMainView('workflow');
     setWorkflowStep(2);
@@ -351,12 +362,115 @@ export function App() {
     }
   };
 
+  // Peer Entry: Upload Exam Paper (Forced OXR: local read-only probe -> Cloud OXR)
+  const handleUploadExamFile = async (file: File) => {
+    setErrorMsg(null);
+    setUploadMode('exam_paper');
+    setUploading(true);
+    setExamProgress(null);
+    setStudyPackage(null);
+    setBlueprint(null);
+    setActiveMainView('workflow');
+    setWorkflowStep(2);
+    setOcrProgress({
+      active: true,
+      percent: 4,
+      stage: 'oxr_probe',
+      message: `正在探查本地 OXR 环境并准备提取试卷《${file.name}》...`,
+      logs: [`接收原卷 ${file.name} (${Math.round(file.size / 1024)} KB) · 执行只读 OXR 探查`],
+    });
+    try {
+      const detail = await api.uploadExamProjectStream(file, (evt) => {
+        const msg = String(evt.message || '');
+        const pct = Number(evt.percent ?? 24);
+        setOcrProgress((prev) => ({
+          active: evt.type !== 'complete',
+          percent: pct,
+          stage: evt.stage || 'oxr',
+          message: msg || '正在执行 OXR 原卷识别与公式提取...',
+          logs: msg && prev?.logs[prev.logs.length - 1] !== msg ? [...(prev?.logs || []).slice(-8), msg] : prev?.logs || [],
+        }));
+      });
+      setDocumentIr(detail.document_ir);
+      setBlueprint(detail.blueprint || null);
+      setStudyPackage(detail.study_package || null);
+      setOcrProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              active: false,
+              percent: 100,
+              message: `OXR 原卷识别完成！提取 ${detail.document_ir.total_chars.toLocaleString()} 字`,
+            }
+          : null
+      );
+      await refreshProjects();
+    } catch (e: any) {
+      setOcrProgress(null);
+      setErrorMsg(e?.message || '上传试卷与 OXR 解析失败');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleLoadDemoExam = async () => {
+    setErrorMsg(null);
+    setUploadMode('exam_paper');
+    setUploading(true);
+    setExamProgress(null);
+    setStudyPackage(null);
+    setBlueprint(null);
+    setActiveMainView('workflow');
+    setWorkflowStep(2);
+    setOcrProgress({
+      active: true,
+      percent: 8,
+      stage: 'oxr_probe',
+      message: '正在探查本地 OXR 并载入示例真题原卷...',
+      logs: ['载入《大学生理学与生物物理》期中真题示例卷...'],
+    });
+    try {
+      const detail = await api.loadDemoExamProjectStream((evt) => {
+        const msg = String(evt.message || '');
+        const pct = Number(evt.percent ?? 40);
+        setOcrProgress((prev) => ({
+          active: evt.type !== 'complete',
+          percent: pct,
+          stage: evt.stage || 'oxr',
+          message: msg || '正在提取试卷文本层...',
+          logs: msg && prev?.logs[prev.logs.length - 1] !== msg ? [...(prev?.logs || []).slice(-8), msg] : prev?.logs || [],
+        }));
+      });
+      setDocumentIr(detail.document_ir);
+      setBlueprint(detail.blueprint || null);
+      setStudyPackage(detail.study_package || null);
+      setOcrProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              active: false,
+              percent: 100,
+              message: `示例试卷 OXR 文本层准备就绪 (${detail.document_ir.total_chars.toLocaleString()} 字)`,
+            }
+          : null
+      );
+      await refreshProjects();
+    } catch (e: any) {
+      setOcrProgress(null);
+      setErrorMsg(e?.message || '加载示例试卷失败');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleOpenProject = async (projectId: string) => {
     setErrorMsg(null);
     setOcrProgress(null);
+    setExamProgress(null);
     try {
       const detail = await api.getProjectDetail(projectId);
       setDocumentIr(detail.document_ir);
+      setUploadMode(detail.document_ir.project_type === 'exam_paper' ? 'exam_paper' : 'courseware');
       setBlueprint(detail.blueprint || null);
       setStudyPackage(detail.study_package || null);
       if (detail.study_package) {
@@ -377,6 +491,7 @@ export function App() {
       setDocumentIr(null);
       setBlueprint(null);
       setStudyPackage(null);
+      setExamProgress(null);
       setWorkflowStep(1);
       setActiveMainView('workflow');
     }
@@ -401,6 +516,25 @@ export function App() {
   };
 
   const autoSwitchTabForPackage = useCallback((pkg: StudyPackage) => {
+    const allPapers = [pkg.quiz_paper, ...(pkg.extra_quiz_papers || [])].filter(Boolean);
+    const hasSimilar = allPapers.some(
+      (p) => p.paper_id === 'similar_style_paper' && (p.questions?.length || 0) > 0
+    );
+    const hasOriginal = allPapers.some(
+      (p) => p.paper_id === 'original_exam_bank' && (p.questions?.length || 0) > 0
+    );
+
+    if (pkg.exam_pipeline_metadata || hasSimilar || hasOriginal) {
+      if (hasSimilar) {
+        setActiveMainView('quiz_similar');
+      } else if (hasOriginal) {
+        setActiveMainView('quiz_original');
+      } else {
+        setActiveMainView('notes');
+      }
+      return;
+    }
+
     const items = pkg.blueprint_used?.deliverables?.selected_items || [];
     if (pkg.study_notes_markdown && (items.includes('detailed_study_guide') || items.includes('key_knowledge_extraction'))) {
       setActiveMainView('notes');
@@ -411,7 +545,7 @@ export function App() {
     } else if (pkg.mindmap_mermaid) {
       setActiveMainView('mindmap');
     } else {
-      setActiveMainView('blueprint_trace');
+      setActiveMainView('notes');
     }
   }, []);
 
@@ -483,6 +617,118 @@ export function App() {
     await run();
   };
 
+  const handleGenerateExam = async (
+    direction: ExamDirectionType,
+    userRequirements: string,
+    rawExamTextOverride?: string
+  ) => {
+    if (!documentIr) return;
+    const run = async () => {
+      setErrorMsg(null);
+      setGenerating(true);
+      setExamProgress({
+        percent: 4,
+        stage: 'exam_init',
+        message: '已确认试卷生成配置，正在调度 OXR 文本层与四子 Agent...',
+        agentStates: { a: 'idle', b: 'idle', c: 'idle', d: 'idle', orig: 'idle' },
+        logs: [`启动试卷生成方向：${direction}`],
+      });
+      const controller = new AbortController();
+      generateAbortRef.current = controller;
+      try {
+        const pkg = await api.generateExamPackageStream(
+          documentIr.project_id,
+          {
+            direction,
+            user_requirements: userRequirements,
+            raw_exam_text_override: rawExamTextOverride,
+          },
+          (evt) => {
+            setExamProgress((prev) => {
+              const base: ExamProgressState = prev || {
+                percent: evt.percent || 5,
+                stage: evt.stage || 'exam_init',
+                message: evt.message || '',
+                agentStates: { a: 'idle', b: 'idle', c: 'idle', d: 'idle', orig: 'idle' },
+                logs: [],
+              };
+              const nextStates = { ...base.agentStates };
+              const msg = String(evt.message || '');
+              const agentId = (evt.agent_id || '') as '' | 'a' | 'b' | 'c' | 'd' | 'orig';
+              const status = String(evt.detail?.status || '');
+              const isDoneMsg =
+                msg.startsWith('✓') || msg.includes('完成') || status === 'done' || status === 'passed';
+
+              if (evt.stage === 'agent_b' && nextStates.a !== 'done') nextStates.a = 'done';
+              if (evt.stage === 'agent_c') {
+                nextStates.a = 'done';
+                nextStates.b = 'done';
+                if (status === 'done') nextStates.c = 'done';
+                else if (status === 'retry' || Number(evt.detail?.attempt || 1) > 1) nextStates.c = 'retry';
+                else nextStates.c = 'running';
+              } else if (evt.stage === 'agent_d' || evt.stage === 'finalize') {
+                nextStates.a = 'done';
+                nextStates.b = 'done';
+                nextStates.c = 'done';
+                if (evt.stage === 'finalize' || status === 'done') nextStates.d = 'done';
+                else if (status === 'retry') nextStates.d = 'retry';
+                else nextStates.d = 'running';
+              } else if (agentId && agentId in nextStates) {
+                if (
+                  status === 'retry' ||
+                  status === 'failed' ||
+                  Number(evt.detail?.attempt || 1) > 1 ||
+                  msg.includes('打回') ||
+                  msg.includes('重写')
+                ) {
+                  nextStates[agentId] = isDoneMsg ? 'done' : 'retry';
+                } else {
+                  nextStates[agentId] = isDoneMsg ? 'done' : 'running';
+                }
+              } else if (evt.stage === 'complete' || (evt.percent ?? 0) >= 99) {
+                if (nextStates.a === 'running') nextStates.a = 'done';
+                if (nextStates.b === 'running') nextStates.b = 'done';
+                if (nextStates.c === 'running' || nextStates.c === 'retry') nextStates.c = 'done';
+                if (nextStates.d === 'running' || nextStates.d === 'retry') nextStates.d = 'done';
+                if (nextStates.orig === 'running') nextStates.orig = 'done';
+              }
+
+              const prevLogs = base.logs;
+              const nextLogs =
+                msg && prevLogs[prevLogs.length - 1] !== msg ? [...prevLogs.slice(-14), msg] : prevLogs;
+              return {
+                percent: evt.percent ?? base.percent,
+                stage: evt.stage || base.stage,
+                message: msg || base.message,
+                agentStates: nextStates,
+                logs: nextLogs,
+              };
+            });
+          },
+          controller.signal
+        );
+        setBlueprint(pkg.blueprint_used);
+        setStudyPackage(pkg);
+        autoSwitchTabForPackage(pkg);
+        await refreshProjects();
+      } catch (e: any) {
+        if (e?.name === 'AbortError' || controller.signal.aborted) {
+          setExamProgress((prev) =>
+            prev ? { ...prev, percent: 0, message: '已确认打断并终止试卷生成任务' } : null
+          );
+        } else {
+          handleEngineError(e?.message || '试卷四子 Agent 生成失败', run);
+        }
+      } finally {
+        if (generateAbortRef.current === controller) generateAbortRef.current = null;
+        setGenerating(false);
+        setTimeout(() => setExamProgress(null), 1500);
+      }
+    };
+    if (!ensureEngineReadyOrPrompt(run)) return;
+    await run();
+  };
+
   const handleCancelGenerate = () => {
     if (documentIr?.project_id) {
       api.cancelGeneration(documentIr.project_id).catch(() => {});
@@ -493,7 +739,11 @@ export function App() {
     }
     setGenerating(false);
     setProgressInfo({ percent: 0, message: '已打断并终止后台生成任务' });
-    setTimeout(() => setProgressInfo(null), 2000);
+    setExamProgress((prev) => (prev ? { ...prev, percent: 0, message: '已打断并终止后台试卷生成任务' } : null));
+    setTimeout(() => {
+      setProgressInfo(null);
+      setExamProgress(null);
+    }, 2000);
   };
 
   const handleAuthorizeAndContinue = async () => {
@@ -517,20 +767,46 @@ export function App() {
 
   const topbarOptions = useMemo<SegmentedOption<MainViewKey>[]>(() => {
     if (!documentIr) {
-      return [{ value: 'workflow', label: '① 资料上传与 OCR' }];
+      return [{ value: 'workflow', label: uploadMode === 'exam_paper' ? '① 上传试卷 (强制 OXR)' : '① 资料上传与 OCR' }];
     }
     if (!studyPackage) {
+      if (documentIr.project_type === 'exam_paper') {
+        return [{ value: 'workflow', label: '② 试卷 OXR 与四子 Agent 组卷' }];
+      }
       return [{ value: 'workflow', label: workflowStep === 2 ? '② OCR 识别与显存配置' : '③ 选择 A/B/C 场景与参数' }];
     }
+
+    const isExamMode =
+      documentIr.project_type === 'exam_paper' || Boolean(studyPackage.exam_pipeline_metadata);
+
+    if (isExamMode) {
+      const opts: SegmentedOption<MainViewKey>[] = [
+        { value: 'notes', label: '知识点提取与讲解' },
+      ];
+      const allPapers = [studyPackage.quiz_paper, ...(studyPackage.extra_quiz_papers || [])].filter(Boolean);
+      const hasSimilar = allPapers.some(
+        (p) => p.paper_id === 'similar_style_paper' && (p.questions?.length || 0) > 0
+      );
+      const hasOriginal = allPapers.some(
+        (p) => p.paper_id === 'original_exam_bank' && (p.questions?.length || 0) > 0
+      );
+      if (hasSimilar) {
+        opts.push({ value: 'quiz_similar', label: '变式卷' });
+      }
+      if (hasOriginal) {
+        opts.push({ value: 'quiz_original', label: '原卷' });
+      }
+      return opts;
+    }
+
     return [
       { value: 'notes', label: '讲义 / 知识提取' },
       { value: 'quiz', label: '在线练习卡片' },
+      { value: 'flashcards', label: '知识点闪卡' },
       { value: 'cheatsheet', label: '考前速记' },
       { value: 'mindmap', label: 'MindMap' },
-      { value: 'blueprint_trace', label: '明细与路由' },
-      { value: 'workflow', label: '重新配置生成' },
     ];
-  }, [documentIr, studyPackage, workflowStep]);
+  }, [documentIr, studyPackage, workflowStep, uploadMode]);
 
   const activeEngineText = () => {
     const s = providerStatus?.settings;
@@ -584,7 +860,7 @@ export function App() {
                   className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
                   style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  v1.0.0
+                  v1.1.0
                 </span>
               </div>
               <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
@@ -741,10 +1017,23 @@ export function App() {
                 onSelectAllChapters={handleSelectAllChapters}
                 onUploadFile={handleUploadFile}
                 onLoadDemo={handleLoadDemo}
+                onUploadExamFile={handleUploadExamFile}
+                onLoadDemoExam={handleLoadDemoExam}
+                uploadMode={uploadMode}
+                onChangeUploadMode={setUploadMode}
                 uploading={uploading}
                 projects={projects}
                 onOpenProject={handleOpenProject}
                 onDeleteProject={handleDeleteProject}
+                hasStudyPackage={Boolean(studyPackage)}
+                isWorkflowActive={activeMainView === 'workflow'}
+                onReconfigureGenerate={() => {
+                  setActiveMainView('workflow');
+                  if (documentIr?.project_type !== 'exam_paper') setWorkflowStep(3);
+                }}
+                onBackToStudio={() => {
+                  if (studyPackage) autoSwitchTabForPackage(studyPackage);
+                }}
               />
             </aside>
           )}
@@ -753,66 +1042,200 @@ export function App() {
             {!documentIr && !ocrProgress?.active ? (
               <div
                 data-glass-panel="true"
-                className="asg-card max-w-[720px] mx-auto mt-8 p-8 text-center space-y-5"
+                className="asg-card max-w-[880px] mx-auto mt-6 p-7 sm:p-8 space-y-6"
               >
-                <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center bg-[#EDF2FF] text-[#3B5BDB]">
-                  <BookOpen className="w-7 h-7" />
-                </div>
-                <div className="space-y-2">
+                <div className="text-center space-y-2.5">
+                  <div className="w-13 h-13 rounded-2xl mx-auto flex items-center justify-center bg-[#EDF2FF] text-[#3B5BDB]">
+                    <BookOpen className="w-7 h-7" />
+                  </div>
                   <div className="flex items-center justify-center gap-2">
                     <h1 className="text-2xl font-bold">Auto Study Guidance</h1>
                     <span
                       className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.0.0
+                      v1.1.0
                     </span>
                   </div>
-                  <p className="text-sm leading-relaxed max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
-                    上传教材、课件或讲义图片，自动完成文档解析，按学习场景生成自学讲义、章节练习、冲刺试卷、速记卡与思维导图。
+                  <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
+                    请选择初始入口：上传日常教材/课件进行三场景导学备考，或直接上传真题/模拟试卷启用强制 OXR 识别与四子 Agent 协同命制同源风格卷。
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-                  <SpringButton
-                    springLabel="体验示例课件"
-                    disabled={uploading}
-                    onClick={handleLoadDemo}
-                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
-                    style={{ backgroundColor: '#3B5BDB' }}
+
+                {/* Hidden file inputs for direct peer entry cards */}
+                <input
+                  ref={coursewareWelcomeInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.pptx,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUploadFile(f);
+                    e.target.value = '';
+                  }}
+                />
+                <input
+                  ref={examWelcomeInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUploadExamFile(f);
+                    e.target.value = '';
+                  }}
+                />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
+                  {/* Peer Entry 1: Courseware / PDF / PPTX */}
+                  <div
+                    className="p-5 rounded-2xl border flex flex-col justify-between gap-4 transition"
+                    style={{
+                      borderColor: uploadMode === 'courseware' ? '#3B5BDB' : 'var(--border-default)',
+                      backgroundColor: 'var(--bg-subtle)',
+                    }}
                   >
-                    <Sparkles className="w-4 h-4" />
-                    <span>载入示例课件</span>
-                  </SpringButton>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                          <BookOpen className="w-4 h-4 text-[#3B5BDB]" />
+                          上传教材 / 课件 (PDF / PPTX)
+                        </span>
+                        <span
+                          className="text-[10.5px] px-2 py-0.5 rounded-full font-semibold"
+                          style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)' }}
+                        >
+                          A/B/C 三场景
+                        </span>
+                      </div>
+                      <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                        支持 PDF、PPTX、Word、Markdown 与图片讲义。自动分章节 OCR 提取并按「入门自学 / 巩固提高 / 考前抱佛脚」生成讲义、题库、速记与思维导图。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SpringButton
+                        springLabel="选择课件上传"
+                        disabled={uploading}
+                        onClick={() => {
+                          setUploadMode('courseware');
+                          coursewareWelcomeInputRef.current?.click();
+                        }}
+                        className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
+                        style={{ backgroundColor: '#3B5BDB' }}
+                      >
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        <span>选择课件上传</span>
+                      </SpringButton>
+                      <SpringButton
+                        springLabel="载入示例课件"
+                        disabled={uploading}
+                        onClick={handleLoadDemo}
+                        className="px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center gap-1.5"
+                        style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
+                        <span>载入示例课件</span>
+                      </SpringButton>
+                    </div>
+                  </div>
+
+                  {/* Peer Entry 2: Upload Exam Paper (Forced OXR + 4 Agents a/b/c/d) */}
+                  <div
+                    className="p-5 rounded-2xl border flex flex-col justify-between gap-4 transition"
+                    style={{
+                      borderColor: uploadMode === 'exam_paper' ? '#3B5BDB' : 'var(--border-default)',
+                      backgroundColor: 'var(--bg-subtle)',
+                    }}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                          <ShieldCheck className="w-4 h-4 text-[#2B8A3E]" />
+                          上传试卷 (强制 OXR)
+                        </span>
+                        <span
+                          className="text-[10.5px] px-2 py-0.5 rounded-full font-semibold"
+                          style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                        >
+                          四子 Agent a/b/c/d
+                        </span>
+                      </div>
+                      <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                        仅只读探查本地 OXR，无则直连云端 OXR 扫描试卷文本层；可选生成原卷在线题库与解析、四子 Agent（a 风格指纹 → b 蓝图 → c 逆向命题 ⇄ d 盲测打回）或两项都要。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SpringButton
+                        springLabel="选择试卷上传"
+                        disabled={uploading}
+                        onClick={() => {
+                          setUploadMode('exam_paper');
+                          examWelcomeInputRef.current?.click();
+                        }}
+                        className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
+                        style={{ backgroundColor: '#2B8A3E' }}
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>选择试卷上传</span>
+                      </SpringButton>
+                      <SpringButton
+                        springLabel="载入示例试卷"
+                        disabled={uploading}
+                        onClick={handleLoadDemoExam}
+                        className="px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center gap-1.5"
+                        style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
+                        <span>载入示例试卷</span>
+                      </SpringButton>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-center pt-1">
                   <SpringButton
                     springLabel="系统设置"
                     onClick={() => setConfigOpen(true)}
-                    className="px-4 py-2.5 rounded-xl text-xs font-bold border flex items-center gap-1.5"
+                    className="px-4 py-2 rounded-xl text-xs font-bold border flex items-center gap-1.5"
                     style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
                   >
-                    <Settings className="w-4 h-4 text-[#3B5BDB]" />
-                    <span>系统设置</span>
+                    <Settings className="w-3.5 h-3.5 text-[#3B5BDB]" />
+                    <span>系统设置（AI 出题引擎 · 显存分级 OCR · Liquid Glass）</span>
                   </SpringButton>
                 </div>
               </div>
             ) : activeMainView === 'workflow' || !studyPackage ? (
-              <BlueprintNegotiator
-                documentIr={documentIr}
-                workflowStep={workflowStep}
-                onChangeWorkflowStep={setWorkflowStep}
-                ocrProgress={ocrProgress}
-                presets={presets}
-                blueprint={blueprint}
-                providerStatus={providerStatus}
-                onChangeBlueprint={setBlueprint}
-                onAiFillParams={handleAiFillParams}
-                onConfirmAndGenerate={handleConfirmAndGenerate}
-                onCancelGenerate={handleCancelGenerate}
-                onOpenSettings={() => setConfigOpen(true)}
-                onRefreshProviderStatus={refreshProviderStatus}
-                aiFilling={aiFilling}
-                generating={generating}
-                progressInfo={progressInfo}
-              />
+              documentIr?.project_type === 'exam_paper' || (ocrProgress?.active && uploadMode === 'exam_paper') ? (
+                <ExamPaperWorkbench
+                  documentIr={documentIr}
+                  ocrProgress={ocrProgress}
+                  providerStatus={providerStatus}
+                  generating={generating}
+                  examProgress={examProgress}
+                  onGenerateExam={handleGenerateExam}
+                  onCancelGenerate={handleCancelGenerate}
+                  onOpenSettings={() => setConfigOpen(true)}
+                />
+              ) : (
+                <BlueprintNegotiator
+                  documentIr={documentIr}
+                  workflowStep={workflowStep}
+                  onChangeWorkflowStep={setWorkflowStep}
+                  ocrProgress={ocrProgress}
+                  presets={presets}
+                  blueprint={blueprint}
+                  providerStatus={providerStatus}
+                  onChangeBlueprint={setBlueprint}
+                  onAiFillParams={handleAiFillParams}
+                  onConfirmAndGenerate={handleConfirmAndGenerate}
+                  onCancelGenerate={handleCancelGenerate}
+                  onOpenSettings={() => setConfigOpen(true)}
+                  onRefreshProviderStatus={refreshProviderStatus}
+                  aiFilling={aiFilling}
+                  generating={generating}
+                  progressInfo={progressInfo}
+                />
+              )
             ) : (
               <StudyStudio
                 studyPackage={studyPackage}

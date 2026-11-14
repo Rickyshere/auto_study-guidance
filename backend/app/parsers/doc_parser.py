@@ -8,7 +8,11 @@ from docx import Document as DocxDocument
 import ebooklib
 from ebooklib import epub
 
-from app.parsers.ocr_engine import extract_text_from_image_vision
+from app.parsers.ocr_engine import (
+    extract_exam_page_with_forced_oxr,
+    extract_text_from_image_vision,
+    probe_local_oxr_only,
+)
 from app.parsers.pdf_parser import extract_key_terms
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
 
@@ -207,6 +211,72 @@ async def parse_image_file(
         total_pages_or_slides=1,
         total_chars=len(effective_text),
         ocr_applied=bool(ocr_text),
+        chapters=[chap],
+        all_assets=[asset],
+    )
+
+
+async def parse_exam_image(
+    file_path: Path,
+    project_id: str,
+    assets_dir: Path,
+    settings: RouterSettings,
+    progress_cb: OcrProgressCallback = None,
+) -> DocumentIR:
+    """Parse an exam image using forced OXR probing (local OXR if ready -> Cloud OXR)."""
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    dest = assets_dir / file_path.name
+    if dest != file_path:
+        dest.write_bytes(file_path.read_bytes())
+
+    if progress_cb:
+        await progress_cb(8, "oxr_probe", "正在探查本机 OXR 模型状态（仅探查不下载）...")
+    probe = await probe_local_oxr_only(settings)
+    prefer_local_oxr = bool(probe["local_oxr_ready"])
+    probe_summary = str(probe["summary"])
+
+    if progress_cb:
+        mode_label = "本地 OXR" if prefer_local_oxr else "云端 OXR (SoMark Free-OXR)"
+        await progress_cb(35, "oxr_scanning", f"{probe_summary} · 正在识别试卷图片 {file_path.name} ({mode_label})...")
+
+    ocr_text, used_engine = await extract_exam_page_with_forced_oxr(
+        dest, settings, prefer_local_oxr=prefer_local_oxr
+    )
+    effective_text = ocr_text or f"[试卷图片: {file_path.name}] (云端 OXR 暂未返回文本，可在下方文本框手动补充/校对试卷内容)"
+
+    if progress_cb:
+        await progress_cb(100, "oxr_done", f"试卷图片 OXR 识别完成（{used_engine}），共 {len(effective_text):,} 字。")
+
+    asset = AssetItem(
+        asset_id="exam_img_1",
+        filename=file_path.name,
+        url=f"/api/projects/{project_id}/assets/{file_path.name}",
+        page_or_slide=1,
+        caption=f"试卷原图: {file_path.name}",
+        ocr_text=ocr_text,
+    )
+    chap = ChapterNode(
+        chapter_id="exam_p1",
+        title=f"试卷原卷: {file_path.stem}",
+        start_page=1,
+        end_page=1,
+        char_count=len(effective_text),
+        summary_preview=effective_text[:180].replace("\n", " "),
+        content_text=effective_text,
+        assets=[asset],
+        key_terms=extract_key_terms(effective_text),
+    )
+    return DocumentIR(
+        project_id=project_id,
+        project_type="exam_paper",
+        filename=file_path.name,
+        file_type="exam_image",
+        total_pages_or_slides=1,
+        total_chars=len(effective_text),
+        ocr_applied=True,
+        oxr_engine_used=used_engine,
+        oxr_probe_summary=probe_summary,
+        raw_exam_text=effective_text,
         chapters=[chap],
         all_assets=[asset],
     )

@@ -244,6 +244,20 @@ body.dark-theme {
 .dark-theme .print-paper-sheet * {
   color-scheme: light;
 }
+.dark-theme .print-paper-sheet .markdown-body th {
+  background-color: #f1f5f9;
+  color: #111827;
+}
+.dark-theme .print-paper-sheet .markdown-body th,
+.dark-theme .print-paper-sheet .markdown-body td {
+  border-color: #cbd5e1;
+  color: #111827;
+}
+.dark-theme .print-paper-sheet .markdown-body p,
+.dark-theme .print-paper-sheet .markdown-body li,
+.dark-theme .print-paper-sheet .markdown-body .katex {
+  color: #111827;
+}
 
 /* ==================== Design Tokens & Spring Physics ==================== */
 :root {

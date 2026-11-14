@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import mermaid from 'mermaid';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -26,8 +27,16 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { api } from '../api';
-import { DocumentIR, QuizPaper, QuizQuestion, ScenarioType, StudyPackage } from '../types';
+import {
+  DocumentIR,
+  KnowledgeFlashcard,
+  QuizPaper,
+  QuizQuestion,
+  ScenarioType,
+  StudyPackage,
+} from '../types';
 import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
+import { normalizeMathMarkdown } from '../utils/mathMarkdown';
 import { MathMarkdown } from './MathMarkdown';
 
 mermaid.initialize({
@@ -36,7 +45,15 @@ mermaid.initialize({
   securityLevel: 'loose',
 });
 
-export type StudioTabKey = 'notes' | 'quiz' | 'cheatsheet' | 'mindmap' | 'blueprint_trace';
+export type StudioTabKey =
+  | 'notes'
+  | 'quiz'
+  | 'quiz_similar'
+  | 'quiz_original'
+  | 'flashcards'
+  | 'cheatsheet'
+  | 'mindmap'
+  | 'blueprint_trace';
 
 interface Props {
   studyPackage: StudyPackage;
@@ -151,47 +168,124 @@ function getScenarioMeta(scenario?: ScenarioType): {
   };
 }
 
-function buildFlashcardDeck(paper: QuizPaper | undefined, notesMarkdown: string): FlashcardItem[] {
-  const cards: FlashcardItem[] = [];
-  if (paper?.questions) {
-    for (const q of paper.questions) {
-      const optPreview =
-        q.type === 'mcq' && q.options.length > 0
-          ? `\n\n${q.options.map((o) => `- ${o}`).join('\n')}`
-          : '';
-      cards.push({
-        id: `fc_${q.id}`,
-        front: `${q.question}${optPreview}`,
-        answer: q.answer || '（见下方解析）',
-        explanation: q.explanation || '结合教材原文重点回顾该考点推导过程。',
-        badge:
-          q.type === 'mcq'
-            ? '选择记忆卡'
-            : q.type === 'fill_blank'
-            ? '概念填空卡'
-            : '简答逻辑卡',
-        source: `${q.source_chapter || '核心章节'} ${q.source_page || ''}`.trim(),
-      });
-    }
+function stripQuizOptionLeakage(text: string): string {
+  return (text || '')
+    .trim()
+    .replace(/^(?:本题|答案|参考答案)?(?:选|为|是)\s*[A-D](?:[.、:：\s]+)?/i, '')
+    .replace(/(?:故选|因此选|故正确答案为)\s*[A-D][。.]?/gi, '')
+    .trim();
+}
+
+function buildKnowledgeFlashcardDeck(
+  studyPackage: StudyPackage,
+  documentIr?: DocumentIR | null
+): FlashcardItem[] {
+  // 1. Prefer backend-extracted dedicated knowledge-point flashcards
+  if (studyPackage.flashcards && studyPackage.flashcards.length > 0) {
+    return studyPackage.flashcards.map((fc: KnowledgeFlashcard) => ({
+      id: fc.id,
+      front: fc.front,
+      answer: fc.answer || '（详见背面记忆要点）',
+      explanation: fc.explanation || '结合教材或讲义原文深化理解。',
+      badge: fc.category || '核心概念',
+      source: fc.source || documentIr?.filename || '知识体系梳理',
+    }));
   }
 
-  // Supplement from markdown headings if question count is small
-  if (cards.length < 3 && notesMarkdown) {
-    const sections = notesMarkdown.split(/\n(?=##+ )/).slice(0, 6);
+  // 2. Legacy fallback for previously saved packages (strictly NO quiz stems or MCQ options)
+  const cards: FlashcardItem[] = [];
+  const seen = new Set<string>();
+  const addCard = (
+    id: string,
+    front: string,
+    answer: string,
+    explanation: string,
+    badge: string,
+    source: string
+  ) => {
+    const key = answer.replace(/\s+/g, '').slice(0, 40).toLowerCase();
+    if (!key || seen.has(key) || cards.length >= 18) return;
+    seen.add(key);
+    cards.push({ id, front, answer, explanation, badge, source });
+  };
+
+  // 2a. Exam blueprint knowledge skeletons (from Agent B, never question stems)
+  const blueprints = studyPackage.exam_pipeline_metadata?.question_blueprints || [];
+  for (const bp of blueprints) {
+    const kpLabel = bp.knowledge_points?.filter(Boolean).join(' / ') || `第 ${bp.question_id} 题考点`;
+    const traps = (bp.distractor_recipe || [])
+      .map((r) => `- **${r.trap_type || '干扰陷阱'}**：${r.detail}`)
+      .join('\n');
+    addCard(
+      `kf_bp_${bp.question_id}`,
+      `**【核心考点回忆】** 请阐述「${kpLabel}」的核心推导机制，并指出常见命题设错陷阱。`,
+      bp.original_skeleton || kpLabel,
+      traps || bp.generation_directive || '注重因果推导链条与边界条件识别。',
+      '高频考点与避坑',
+      `Agent B 解构 · 原卷第 ${bp.question_id} 题`
+    );
+  }
+
+  // 2b. Cheatsheet & Study Notes concepts/formulas
+  const sources: Array<[string, string]> = [
+    ['考前速记', studyPackage.cheatsheet_markdown || ''],
+    studyPackage.exam_pipeline_metadata
+      ? ['课程讲义', '']
+      : ['学习讲义', studyPackage.study_notes_markdown || ''],
+  ];
+  for (const [srcLabel, md] of sources) {
+    if (!md) continue;
+    const sections = md.split(/\n(?=##+ )/).slice(0, 10);
     sections.forEach((sec, idx) => {
       const lines = sec.trim().split('\n');
-      const heading = (lines[0] || '').replace(/^#+\s*/, '').trim();
+      const heading = (lines[0] || '').replace(/^#+\s*/, '').replace(/\*\*/g, '').trim();
       const body = lines.slice(1).join('\n').trim();
-      if (heading && body) {
-        cards.push({
-          id: `fc_note_${idx}`,
-          front: `**核心模块梳理：** ${heading}`,
-          answer: heading,
-          explanation: body.slice(0, 520) + (body.length > 520 ? '\n...' : ''),
-          badge: '笔记精要卡',
-          source: '自学知识讲义',
-        });
-      }
+      if (!heading || !body || /例题|答案|自测|目录/.test(heading)) return;
+      const bullets = lines
+        .slice(1)
+        .map((ln) => ln.replace(/^[-*+\d.、\s]+/, '').trim())
+        .filter((ln) => ln && !ln.startsWith('#'));
+      addCard(
+        `kf_sec_${srcLabel}_${idx}`,
+        `**【知识点梳理】** 回忆「${heading}」的核心概念、公式表达或关键结论。`,
+        (bullets[0] || body.split('\n')[0] || heading).slice(0, 140),
+        body.slice(0, 420) + (body.length > 420 ? '\n...' : ''),
+        body.includes('$') ? '核心公式与概念' : '知识模块',
+        `${srcLabel} · ${heading}`
+      );
+    });
+  }
+
+  // 2c. Knowledge tags & conceptual takeaways from quiz explanations (strictly excluding q.question & q.options)
+  if (cards.length < 12 && studyPackage.quiz_paper?.questions) {
+    studyPackage.quiz_paper.questions.forEach((q, idx) => {
+      const kp = q.knowledge_tags?.[0] || q.source_chapter || '';
+      const cleanExp = stripQuizOptionLeakage(q.explanation || '');
+      if (!kp || !cleanExp) return;
+      addCard(
+        `kf_tag_${idx}`,
+        `**【考点与避坑记忆】** 关于「${kp}」，其核心规律与易错点是什么？`,
+        kp,
+        cleanExp.slice(0, 380) + (cleanExp.length > 380 ? '...' : ''),
+        '考点规律',
+        q.source_chapter || '核心知识点'
+      );
+    });
+  }
+
+  // 2d. Document chapters key terms
+  if (cards.length < 6 && documentIr?.chapters) {
+    documentIr.chapters.forEach((ch, idx) => {
+      (ch.key_terms || []).slice(0, 3).forEach((term, ti) => {
+        addCard(
+          `kf_ch_${idx}_${ti}`,
+          `**【核心概念辨析】** 结合《${ch.title}》，简述「${term}」的核心定义与作用。`,
+          term,
+          ch.summary_preview || ch.content_text.slice(0, 260),
+          '核心术语',
+          `${ch.title} · P${ch.start_page}`
+        );
+      });
     });
   }
 
@@ -241,7 +335,6 @@ export const StudyStudio: React.FC<Props> = ({
   }, [allPapers, selectedPaperId, studyPackage.quiz_paper]);
 
   // Quiz state scoped by paper_id -> question_id
-  const [practiceMode, setPracticeMode] = useState<'cards' | 'flashcards'>('cards');
   const [answersByPaper, setAnswersByPaper] = useState<Record<string, Record<string, string>>>({});
   const [checkedBlankByPaper, setCheckedBlankByPaper] = useState<
     Record<string, Record<string, boolean>>
@@ -279,6 +372,30 @@ export const StudyStudio: React.FC<Props> = ({
   const [mermaidError, setMermaidError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number>(1);
 
+  const isExamMode =
+    documentIr?.project_type === 'exam_paper' || Boolean(studyPackage.exam_pipeline_metadata);
+  const isQuizTab =
+    activeTab === 'quiz' || activeTab === 'quiz_similar' || activeTab === 'quiz_original';
+
+  // Keep selected paper synchronized with Top Bar tabs (`变式卷` / `原卷`) in exam paper mode
+  useEffect(() => {
+    if (
+      activeTab === 'quiz_similar' &&
+      allPapers.some((p) => p.paper_id === 'similar_style_paper')
+    ) {
+      setSelectedPaperId('similar_style_paper');
+      setCurrentCardIdx(0);
+      setWrongBookFilterOnly(false);
+    } else if (
+      activeTab === 'quiz_original' &&
+      allPapers.some((p) => p.paper_id === 'original_exam_bank')
+    ) {
+      setSelectedPaperId('original_exam_bank');
+      setCurrentCardIdx(0);
+      setWrongBookFilterOnly(false);
+    }
+  }, [activeTab, allPapers]);
+
   // Reset per package generation
   useEffect(() => {
     setSelectedPaperId(studyPackage.quiz_paper?.paper_id || 'default');
@@ -291,10 +408,10 @@ export const StudyStudio: React.FC<Props> = ({
     setVariantError(null);
   }, [studyPackage.generated_at, studyPackage.project_id]);
 
-  // Rebuild flashcard deck when activePaper changes
+  // Rebuild dedicated knowledge-point flashcard deck per generated study package
   const baseFlashDeck = useMemo(
-    () => buildFlashcardDeck(activePaper, studyPackage.study_notes_markdown),
-    [activePaper, studyPackage.study_notes_markdown]
+    () => buildKnowledgeFlashcardDeck(studyPackage, documentIr),
+    [studyPackage, documentIr]
   );
 
   useEffect(() => {
@@ -526,15 +643,15 @@ export const StudyStudio: React.FC<Props> = ({
     setFlashRoundFinished(false);
   };
 
-  // Global keyboard shortcuts when Quiz / Flashcard tab is open
+  // Global keyboard shortcuts when Quiz or Knowledge Flashcards tab is open
   useEffect(() => {
-    if (activeTab !== 'quiz' || previewSpec) return;
+    if ((!isQuizTab && activeTab !== 'flashcards') || previewSpec) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      if (practiceMode === 'cards') {
+      if (isQuizTab) {
         if (e.key === 'ArrowLeft') {
           e.preventDefault();
           setCurrentCardIdx((i) => Math.max(0, i - 1));
@@ -542,7 +659,7 @@ export const StudyStudio: React.FC<Props> = ({
           e.preventDefault();
           setCurrentCardIdx((i) => Math.min(Math.max(0, visibleQuestions.length - 1), i + 1));
         }
-      } else if (practiceMode === 'flashcards' && !flashRoundFinished) {
+      } else if (activeTab === 'flashcards' && !flashRoundFinished) {
         if (e.key === ' ' || e.key === 'Enter') {
           e.preventDefault();
           setIsFlashFlipped((f) => !f);
@@ -560,7 +677,7 @@ export const StudyStudio: React.FC<Props> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeTab,
-    practiceMode,
+    isQuizTab,
     previewSpec,
     visibleQuestions.length,
     flashRoundFinished,
@@ -725,7 +842,7 @@ export const StudyStudio: React.FC<Props> = ({
                     }}
                   >
                     <BookOpen className="w-3.5 h-3.5" />
-                    <span>{scenarioMeta.tag}</span>
+                    <span>{isExamMode ? '试卷核心知识点提取与深度解析' : scenarioMeta.tag}</span>
                   </div>
                   <h2
                     style={{
@@ -735,7 +852,7 @@ export const StudyStudio: React.FC<Props> = ({
                       margin: 0,
                     }}
                   >
-                    {scenarioMeta.notesTitle} · {studyPackage.blueprint_used.blueprint_title}
+                    {isExamMode ? '知识点提取与讲解' : scenarioMeta.notesTitle} · {studyPackage.blueprint_used.blueprint_title}
                   </h2>
                 </div>
 
@@ -804,15 +921,15 @@ export const StudyStudio: React.FC<Props> = ({
       )}
 
       {/* ================= TAB 2: CARD-SWITCHING QUIZ + KEYBOARD FLASHCARDS ================= */}
-      {activeTab === 'quiz' && (
+      {isQuizTab && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {!hasQuiz ? (
             <div className="asg-card" data-glass-panel="true" style={{ padding: '28px' }}>
               <EmptyDeliverableBanner
                 title="当前试卷暂无习题内容"
-                hint="你可以在左侧步骤 3 中勾选同步练习、单元检测卷、巩固卷或佛教卷后重新生成，或先浏览笔记与闪卡。"
+                hint="你可以在左侧栏重新配置参数后生成，或先查看知识点提取与讲解。"
                 onSwitch={() => onChangeTab('notes')}
-                switchLabel="查看知识讲义"
+                switchLabel={isExamMode ? '查看知识点提取与讲解' : '查看知识讲义'}
               />
             </div>
           ) : (
@@ -838,18 +955,30 @@ export const StudyStudio: React.FC<Props> = ({
                   }}
                 >
                   <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
-                    <SpringSegmentedControl<'cards' | 'flashcards'>
-                      compact
-                      springLabel="练习模式"
-                      value={practiceMode}
-                      onChange={setPracticeMode}
-                      options={[
-                        { value: 'cards', label: '卡片刷题' },
-                        { value: 'flashcards', label: '键盘闪卡记忆' },
-                      ]}
-                    />
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        color: 'var(--asg-brand-primary)',
+                        backgroundColor: 'var(--asg-brand-tint)',
+                        padding: '5px 12px',
+                        borderRadius: '9999px',
+                      }}
+                    >
+                      <ClipboardCheck className="w-3.5 h-3.5" />
+                      <span>
+                        {activeTab === 'quiz_similar'
+                          ? '变式卷 · 在线作答（← / → 切题）'
+                          : activeTab === 'quiz_original'
+                          ? '原卷 · 在线作答（← / → 切题）'
+                          : '在线练习卡片（← / → 切题）'}
+                      </span>
+                    </span>
 
-                    {allPapers.length > 1 && (
+                    {allPapers.length > 1 && activeTab === 'quiz' && (
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)', fontWeight: 600 }}>
                           切换试卷：
@@ -891,34 +1020,32 @@ export const StudyStudio: React.FC<Props> = ({
                   </div>
 
                   <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                    {practiceMode === 'cards' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWrongBookFilterOnly((v) => !v);
-                          setCurrentCardIdx(0);
-                        }}
-                        style={{
-                          ...secondaryToolbarBtnStyle,
-                          borderColor: wrongBookFilterOnly
-                            ? 'var(--asg-semantic-warning)'
-                            : 'var(--asg-border-default)',
-                          backgroundColor: wrongBookFilterOnly
-                            ? 'var(--asg-warning-tint)'
-                            : 'var(--asg-bg-surface)',
-                          color: wrongBookFilterOnly
-                            ? 'var(--asg-semantic-warning)'
-                            : 'var(--asg-text-primary)',
-                        }}
-                      >
-                        <BookmarkCheck className="w-3.5 h-3.5" />
-                        <span>
-                          {wrongBookFilterOnly
-                            ? `仅看错题本 (${wrongBookCount})`
-                            : `错题本 (${wrongBookCount})`}
-                        </span>
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWrongBookFilterOnly((v) => !v);
+                        setCurrentCardIdx(0);
+                      }}
+                      style={{
+                        ...secondaryToolbarBtnStyle,
+                        borderColor: wrongBookFilterOnly
+                          ? 'var(--asg-semantic-warning)'
+                          : 'var(--asg-border-default)',
+                        backgroundColor: wrongBookFilterOnly
+                          ? 'var(--asg-warning-tint)'
+                          : 'var(--asg-bg-surface)',
+                        color: wrongBookFilterOnly
+                          ? 'var(--asg-semantic-warning)'
+                          : 'var(--asg-text-primary)',
+                      }}
+                    >
+                      <BookmarkCheck className="w-3.5 h-3.5" />
+                      <span>
+                        {wrongBookFilterOnly
+                          ? `仅看错题本 (${wrongBookCount})`
+                          : `错题本 (${wrongBookCount})`}
+                      </span>
+                    </button>
 
                     <button
                       type="button"
@@ -954,8 +1081,7 @@ export const StudyStudio: React.FC<Props> = ({
                 </div>
 
                 {/* Practice Progress Bar + Question Pill Navigator */}
-                {practiceMode === 'cards' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <div
                       style={{
                         display: 'flex',
@@ -1052,12 +1178,10 @@ export const StudyStudio: React.FC<Props> = ({
                       })}
                     </div>
                   </div>
-                )}
               </div>
 
-              {/* ---------- MODE A: SINGLE-CARD QUIZ PRACTICE ---------- */}
-              {practiceMode === 'cards' && (
-                <div style={{ maxWidth: '760px', width: '100%', margin: '0 auto' }}>
+              {/* ---------- SINGLE-CARD QUIZ PRACTICE ---------- */}
+              <div style={{ maxWidth: '760px', width: '100%', margin: '0 auto' }}>
                   {visibleQuestions.length === 0 ? (
                     <div
                       className="asg-card"
@@ -1418,6 +1542,73 @@ export const StudyStudio: React.FC<Props> = ({
                               <MathMarkdown>{currentQuestion.explanation}</MathMarkdown>
                             </div>
 
+                            {((currentQuestion.applied_strategies && currentQuestion.applied_strategies.length > 0) ||
+                              currentQuestion.blind_review_summary ||
+                              currentQuestion.reverse_design) && (
+                              <div
+                                style={{
+                                  padding: '10px 12px',
+                                  borderRadius: '10px',
+                                  border: '1px solid var(--asg-border-default)',
+                                  backgroundColor: 'var(--asg-bg-surface)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
+                                  {currentQuestion.applied_strategies?.map((st) => (
+                                    <span
+                                      key={st}
+                                      style={{
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        fontFamily: 'JetBrains Mono, monospace',
+                                        padding: '2px 8px',
+                                        borderRadius: '999px',
+                                        backgroundColor: 'var(--asg-bg-subtle)',
+                                        border: '1px solid var(--asg-border-default)',
+                                        color: 'var(--asg-brand-primary)',
+                                      }}
+                                    >
+                                      {st}
+                                    </span>
+                                  ))}
+                                  {currentQuestion.blind_review_summary && (
+                                    <span
+                                      style={{
+                                        fontSize: '11.5px',
+                                        fontWeight: 600,
+                                        padding: '2px 8px',
+                                        borderRadius: '999px',
+                                        backgroundColor: 'var(--asg-bg-subtle)',
+                                        color: 'var(--asg-semantic-success)',
+                                      }}
+                                    >
+                                      {currentQuestion.blind_review_summary}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {currentQuestion.reverse_design && (
+                                  <details style={{ fontSize: '12.5px', color: 'var(--asg-text-secondary)' }}>
+                                    <summary
+                                      style={{
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                        color: 'var(--asg-text-primary)',
+                                      }}
+                                    >
+                                      查看 Agent C 逆向命题靶向设计思路
+                                    </summary>
+                                    <div className="asg-academic-prose" style={{ marginTop: '6px', lineHeight: 1.6 }}>
+                                      <MathMarkdown>{currentQuestion.reverse_design}</MathMarkdown>
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            )}
+
                             {variantError && (
                               <div
                                 style={{
@@ -1547,20 +1738,100 @@ export const StudyStudio: React.FC<Props> = ({
                     )
                   )}
                 </div>
-              )}
+            </>
+          )}
+        </section>
+      )}
 
-              {/* ---------- MODE B: KEYBOARD 3D FLASHCARDS + END-OF-ROUND PROMPT ---------- */}
-              {practiceMode === 'flashcards' && (
-                <div
+      {/* ================= TAB 2B: DEDICATED KNOWLEDGE-POINT 3D FLASHCARDS ================= */}
+      {activeTab === 'flashcards' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Dedicated Header Card (Decoupled from Quiz) */}
+          <div
+            className="asg-card no-print"
+            data-glass-panel="true"
+            style={{
+              padding: '16px 20px',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                <Layers className="w-4.5 h-4.5" style={{ color: 'var(--asg-brand-primary)' }} />
+                <h2
                   style={{
-                    maxWidth: '640px',
-                    width: '100%',
-                    margin: '6px auto 12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '16px',
+                    fontSize: '17px',
+                    fontWeight: 700,
+                    color: 'var(--asg-text-primary)',
+                    margin: 0,
                   }}
                 >
+                  知识点记忆反转闪卡 · Active Recall
+                </h2>
+                <span
+                  style={{
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    color: 'var(--asg-brand-primary)',
+                    backgroundColor: 'var(--asg-brand-tint)',
+                    padding: '2px 9px',
+                    borderRadius: '9999px',
+                  }}
+                >
+                  共 {baseFlashDeck.length} 张概念与考点卡
+                </span>
+              </div>
+              <p style={{ fontSize: '12.5px', color: 'var(--asg-text-secondary)', margin: 0 }}>
+                专注核心概念、公式定理、机理规律与命题设错陷阱的主动回忆，已与「在线练习卡片」完全分离。
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => onChangeTab('quiz')}
+                style={secondaryToolbarBtnStyle}
+              >
+                <ClipboardCheck className="w-3.5 h-3.5" />
+                <span>前往在线练习做题</span>
+              </button>
+              <SpringButton
+                springLabel="打乱重来"
+                disabled={baseFlashDeck.length === 0}
+                onClick={handleShuffleRestartFlashcards}
+                className="asg-btn-spring"
+                style={primaryToolbarBtnStyle}
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+                <span>打乱顺序重背</span>
+              </SpringButton>
+            </div>
+          </div>
+
+          {baseFlashDeck.length === 0 ? (
+            <div className="asg-card" data-glass-panel="true" style={{ padding: '28px' }}>
+              <EmptyDeliverableBanner
+                title="当前学习包暂无可提取的知识点闪卡"
+                hint="可重新生成包含讲义或考前速记的学习包，系统将自动提炼核心概念、公式与考点记忆卡。"
+                onSwitch={() => onChangeTab('quiz')}
+                switchLabel="前往在线练习"
+              />
+            </div>
+          ) : (
+            <div
+              style={{
+                maxWidth: '680px',
+                width: '100%',
+                margin: '4px auto 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+              }}
+            >
                   {flashRoundFinished ? (
                     /* End-of-Round Settlement Card */
                     <div
@@ -1756,8 +2027,8 @@ export const StudyStudio: React.FC<Props> = ({
                                 }}
                               >
                                 {showFrontSide
-                                  ? `正面题目 · ${flashDeck[flashIdx].badge}`
-                                  : '背面答案与解析'}
+                                  ? `知识点追问 · ${flashDeck[flashIdx].badge}`
+                                  : '核心结论与记忆要点'}
                               </span>
                               <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
                                 {flashDeck[flashIdx].source}
@@ -1790,7 +2061,7 @@ export const StudyStudio: React.FC<Props> = ({
                                       fontSize: '15.5px',
                                     }}
                                   >
-                                    标准结论：<MathMarkdown inline>{flashDeck[flashIdx].answer}</MathMarkdown>
+                                    核心结论 / 记忆要点：<MathMarkdown inline>{flashDeck[flashIdx].answer}</MathMarkdown>
                                   </div>
                                   <div
                                     style={{
@@ -1888,9 +2159,7 @@ export const StudyStudio: React.FC<Props> = ({
                       </>
                     )
                   )}
-                </div>
-              )}
-            </>
+            </div>
           )}
         </section>
       )}
@@ -2248,6 +2517,260 @@ export const StudyStudio: React.FC<Props> = ({
               </div>
             </div>
           )}
+
+          {/* 4-Agent Exam Pipeline Metadata (a / b / c / d + OXR) */}
+          {studyPackage.exam_pipeline_metadata && (() => {
+            const meta = studyPackage.exam_pipeline_metadata;
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--asg-text-primary)', margin: 0 }}>
+                  试卷 OXR 识别与四子 Agent (a / b / c / d) 命题盲测明细
+                </h3>
+
+                {/* OXR & Uploaded Soul Files Summary */}
+                <div
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '12px',
+                    border: '1px solid var(--asg-border-default)',
+                    backgroundColor: 'var(--asg-bg-subtle)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    fontSize: '13px',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+                    <span>
+                      <strong>生成方向：</strong>
+                      {meta.direction === 'original_to_bank'
+                        ? '原卷转在线题库'
+                        : meta.direction === 'similar_paper'
+                        ? '生成类似风格卷（四子 Agent）'
+                        : '原卷题库 + 类似风格卷'}
+                    </span>
+                    <span>
+                      <strong>OXR 引擎：</strong>
+                      <code>{meta.oxr_engine_used}</code>
+                    </span>
+                  </div>
+                  {meta.oxr_probe_summary && (
+                    <div style={{ fontSize: '12px', color: 'var(--asg-text-secondary)' }}>
+                      探查结果：{meta.oxr_probe_summary}
+                    </div>
+                  )}
+                  {meta.user_requirements && (
+                    <div style={{ fontSize: '12.5px', color: 'var(--asg-text-primary)' }}>
+                      <strong>用户额外需求：</strong>
+                      {meta.user_requirements}
+                    </div>
+                  )}
+                  {meta.soul_files_uploaded.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--asg-text-secondary)' }}>随任务上传魂文件：</span>
+                      {meta.soul_files_uploaded.map((sf) => (
+                        <span
+                          key={sf}
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'JetBrains Mono, monospace',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            border: '1px solid var(--asg-border-default)',
+                            backgroundColor: 'var(--asg-bg-surface)',
+                            color: 'var(--asg-brand-primary)',
+                          }}
+                        >
+                          {sf}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Agent A Style Profile */}
+                {meta.style_profile && (
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      borderRadius: '12px',
+                      border: '1px solid var(--asg-border-default)',
+                      backgroundColor: 'var(--asg-bg-subtle)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      fontSize: '13px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: 'var(--asg-text-primary)' }}>
+                      Agent A（soul_a.md）· 原卷命题风格指纹与全局硬性约束
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                      <div>
+                        <strong>学科与学段：</strong>
+                        {meta.style_profile.subject_and_level}
+                      </div>
+                      <div>
+                        <strong>整体难度：</strong>
+                        {meta.style_profile.overall_difficulty}
+                      </div>
+                    </div>
+                    <div>
+                      <strong>题干包装风格：</strong>
+                      {meta.style_profile.tone_and_persona?.stem_style}
+                    </div>
+                    <div>
+                      <strong>选项结构特征：</strong>
+                      {meta.style_profile.tone_and_persona?.option_length_style}
+                    </div>
+                    {meta.style_profile.formatting_rules && (
+                      <div>
+                        <strong>公式与排版规范：</strong>
+                        {meta.style_profile.formatting_rules}
+                      </div>
+                    )}
+                    {meta.style_profile.user_override_directives?.length > 0 && (
+                      <div>
+                        <strong>高优先级全局指令：</strong>
+                        <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                          {meta.style_profile.user_override_directives.map((dir, i) => (
+                            <li key={i}>{dir}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Agent B Blueprints */}
+                {meta.question_blueprints.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--asg-text-primary)' }}>
+                      Agent B（soul_b.md）· 三维解构与变异策略蓝图 ({meta.question_blueprints.length} 题)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+                      {meta.question_blueprints.map((bp) => (
+                        <div
+                          key={bp.question_id}
+                          style={{
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: '1px solid var(--asg-border-default)',
+                            backgroundColor: 'var(--asg-bg-subtle)',
+                            fontSize: '12.5px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                            <strong style={{ color: 'var(--asg-text-primary)' }}>
+                              第 {bp.question_id} 题 · {bp.target_question_type}（{bp.target_difficulty}）
+                            </strong>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {bp.assigned_strategies.map((st) => (
+                                <span
+                                  key={st}
+                                  style={{
+                                    fontSize: '11px',
+                                    fontFamily: 'JetBrains Mono, monospace',
+                                    padding: '1px 7px',
+                                    borderRadius: '999px',
+                                    backgroundColor: 'var(--asg-bg-surface)',
+                                    border: '1px solid var(--asg-border-default)',
+                                    color: 'var(--asg-brand-primary)',
+                                  }}
+                                >
+                                  {st}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <strong>考点：</strong>
+                            {bp.knowledge_points.join(' / ')}
+                          </div>
+                          <div>
+                            <strong>逻辑骨架：</strong>
+                            {bp.original_skeleton}
+                          </div>
+                          <div>
+                            <strong>新题指导：</strong>
+                            {bp.generation_directive}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Agent C <-> Agent D Blind Review Log */}
+                {meta.blind_reviews.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--asg-text-primary)' }}>
+                      Agent C ⇄ Agent D（soul_c.md / soul_d.md）· 盲测校验与打回重写轨迹 ({meta.blind_reviews.length} 条记录)
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {meta.blind_reviews.map((rev, idx) => (
+                        <div
+                          key={`${rev.question_id}_${rev.attempt}_${idx}`}
+                          style={{
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: `1px solid ${rev.passed ? 'var(--asg-border-default)' : 'var(--asg-semantic-warning)'}`,
+                            backgroundColor: rev.passed ? 'var(--asg-bg-subtle)' : 'var(--asg-warning-tint)',
+                            fontSize: '12.5px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                            <strong>
+                              第 {rev.question_id} 题 · 第 {rev.attempt} 轮盲测
+                            </strong>
+                            <span
+                              style={{
+                                fontSize: '11.5px',
+                                fontWeight: 700,
+                                color: rev.passed ? 'var(--asg-semantic-success)' : 'var(--asg-semantic-warning)',
+                              }}
+                            >
+                              {rev.passed ? '✓ 盲测一致通过' : '🔄 盲测未通过 / 打回 Agent C 重写'}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+                            <span>
+                              <strong>盲测作答 (my_answer)：</strong>
+                              {rev.my_answer || '（无）'}
+                            </span>
+                            <span>
+                              <strong>命题答案 (correct_answer)：</strong>
+                              {rev.expected_answer || '（无）'}
+                            </span>
+                          </div>
+                          {rev.defect_report && (
+                            <div style={{ color: 'var(--asg-semantic-warning)' }}>
+                              <strong>defect_report：</strong>
+                              {rev.defect_report}
+                            </div>
+                          )}
+                          {rev.reasoning_process && (
+                            <details>
+                              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>查看 Agent D 独立盲算推导过程</summary>
+                              <div className="asg-academic-prose" style={{ marginTop: '6px' }}>
+                                <MathMarkdown>{rev.reasoning_process}</MathMarkdown>
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </section>
       )}
 
@@ -2530,65 +3053,74 @@ function PrintPreviewModal({
           {title}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {items.map((q, idx) => (
-            <div
-              key={q.id}
-              style={{
-                breakInside: 'avoid',
-                fontSize: '12.5px',
-                lineHeight: 1.65,
-                color: '#1F2937',
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>
-                <span>{idx + 1}. </span>
-                <span style={{ color: '#4B5563', fontSize: '11px', marginRight: '4px' }}>
-                  [{q.score}分]
-                </span>
-                <MathMarkdown inline>{q.question}</MathMarkdown>
-              </div>
-              {q.options.length > 0 && (
-                <div
-                  style={{
-                    marginTop: '4px',
-                    paddingLeft: '14px',
-                    display: 'grid',
-                    gridTemplateColumns: isA3 ? '1fr 1fr' : '1fr',
-                    gap: '3px 12px',
-                    fontSize: '12px',
-                    color: '#374151',
-                  }}
-                >
-                  {q.options.map((opt, oi) => (
-                    <div key={oi}>
-                      <MathMarkdown inline>{opt}</MathMarkdown>
+          {items.map((q, idx) => {
+            const normStem = normalizeMathMarkdown(q.question || '');
+            const hasBlockStem = normStem.includes('\n|') || normStem.includes('\n\n');
+            return (
+              <div
+                key={q.id}
+                style={{
+                  breakInside: 'avoid',
+                  fontSize: '12.5px',
+                  lineHeight: 1.65,
+                  color: '#1F2937',
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>
+                  <span>{idx + 1}. </span>
+                  <span style={{ color: '#4B5563', fontSize: '11px', marginRight: '4px' }}>
+                    [{q.score}分]
+                  </span>
+                  {hasBlockStem ? (
+                    <div style={{ marginTop: '4px', fontWeight: 500 }}>
+                      <MathMarkdown>{q.question}</MathMarkdown>
                     </div>
-                  ))}
+                  ) : (
+                    <MathMarkdown inline>{q.question}</MathMarkdown>
+                  )}
                 </div>
-              )}
-              {q.type === 'short_answer' && (
-                <div
-                  style={{
-                    marginTop: '8px',
-                    height: '44px',
-                    borderBottom: '1px dashed #CBD5E1',
-                  }}
-                />
-              )}
-            </div>
-          ))}
+                {q.options.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: '4px',
+                      paddingLeft: '14px',
+                      display: 'grid',
+                      gridTemplateColumns: isA3 ? '1fr 1fr' : '1fr',
+                      gap: '3px 12px',
+                      fontSize: '12px',
+                      color: '#374151',
+                    }}
+                  >
+                    {q.options.map((opt, oi) => (
+                      <div key={oi}>
+                        <MathMarkdown inline>{opt}</MathMarkdown>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {q.type === 'short_answer' && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      height: '56px',
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
   };
 
-  return (
+  return createPortal(
     <div
       className="no-print"
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 80,
+        zIndex: 1000,
         backgroundColor: 'rgba(15, 23, 42, 0.56)',
         backdropFilter: 'blur(6px)',
         display: 'flex',
@@ -2937,7 +3469,8 @@ function PrintPreviewModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

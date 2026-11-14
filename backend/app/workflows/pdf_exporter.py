@@ -79,6 +79,53 @@ _MATH_SYMBOLS: List[Tuple[str, str]] = [
     (r"\qquad", "    "),
     (r"\;", " "),
     (r"\,", " "),
+    (r"\%", "%"),
+    (r"\ ", " "),
+    (r"\_", "_"),
+    (r"\odot", "⊙"),
+    (r"\otimes", "⊗"),
+    (r"\oplus", "⊕"),
+    (r"\top", "ᵀ"),
+    (r"\intercal", "ᵀ"),
+    (r"\circ", "∘"),
+    (r"\star", "⋆"),
+    (r"\ast", "∗"),
+    (r"\prime", "′"),
+    (r"\dagger", "†"),
+    (r"\hbar", "ℏ"),
+    (r"\ell", "ℓ"),
+    (r"\propto", "∝"),
+    (r"\sim", "∼"),
+    (r"\simeq", "≃"),
+    (r"\ll", "≪"),
+    (r"\gg", "≫"),
+    (r"\cap", "∩"),
+    (r"\cup", "∪"),
+    (r"\emptyset", "∅"),
+    (r"\Leftrightarrow", "⇔"),
+    (r"\uparrow", "↑"),
+    (r"\downarrow", "↓"),
+    (r"\mapsto", "↦"),
+    (r"\xi", "ξ"),
+    (r"\zeta", "ζ"),
+    (r"\kappa", "κ"),
+    (r"\nu", "ν"),
+    (r"\chi", "χ"),
+    (r"\Sigma", "Σ"),
+    (r"\Pi", "Π"),
+    (r"\Gamma", "Γ"),
+    (r"\Psi", "Ψ"),
+    (r"\vartheta", "ϑ"),
+    (r"\varphi", "φ"),
+]
+
+# Alphabetic commands must match on a word boundary (so `\to` never eats `\top`, `\le` never eats `\leftarrow`).
+_MATH_SYMBOL_RES: List[Tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(re.escape(k) + (r"(?![A-Za-z])" if k[1:].isalpha() else "")),
+        v,
+    )
+    for k, v in sorted(_MATH_SYMBOLS, key=lambda kv: -len(kv[0]))
 ]
 
 
@@ -154,8 +201,10 @@ def _latex_expr_to_html(expr: str) -> str:
     s = _replace_text_wrappers(s)
     s = _replace_frac_commands(s)
     s = _replace_sqrt_commands(s)
-    for k, v in _MATH_SYMBOLS:
-        s = s.replace(k, v)
+    for pat, v in _MATH_SYMBOL_RES:
+        s = pat.sub(lambda _m, _v=v: _v, s)
+    # Transpose written as ^\top / ^T after symbol replacement: drop the redundant caret
+    s = s.replace("^ᵀ", "ᵀ").replace("^{ᵀ}", "ᵀ")
     # Remove any leftover unknown backslash before plain word tokens cleanly
     s = re.sub(r"\\([A-Za-z]+)", r"\1", s)
     s = html.escape(s)
@@ -215,6 +264,22 @@ def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
         work,
     )
 
+    # Bare scientific subscripts/superscripts left un-delimited by LLM (e.g. K_m^{app}, V_{max}, V_T, 4K_m)
+    work = re.sub(
+        r"\b([A-Za-z0-9]+(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?\^\{[^{}]+\}|[A-Za-z0-9]+_\{[^{}]+\})",
+        lambda m: _stash(_latex_expr_to_html(m.group(1))),
+        work,
+    )
+    work = re.sub(
+        r"(?<![A-Za-z_])([0-9]*[A-Z]_[A-Za-z0-9]{1,3}|[0-9]*[a-z]_[0-9]{1,2})(?![A-Za-z0-9_])",
+        lambda m: _stash(_latex_expr_to_html(m.group(1))),
+        work,
+    )
+
+    # Clean stray LaTeX escapes in non-math prose (e.g. 57.1\%, 150\ mL, \|)
+    work = work.replace(r"\%", "%").replace(r"\|", "|")
+    work = re.sub(r"\\(?=[ \t])", "", work)
+
     escaped = html.escape(work)
     # Bold & Italic
     escaped = re.sub(r"\*\*([^\*\n]+?)\*\*", r"<strong>\1</strong>", escaped)
@@ -227,16 +292,16 @@ def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
     return escaped
 
 
-def _markdown_to_print_html(
+def _markdown_to_block_list(
     md_text: str,
     *,
     assets_dir: Optional[Path] = None,
     highlight_examples: bool = False,
-) -> str:
-    """Convert Markdown (including tables, $$ math blocks, callouts, images) into clean print HTML."""
+) -> List[Tuple[str, str]]:
+    """Parse normalized Markdown into typed HTML blocks shared by prose and question stem renderers."""
     norm = normalize_markdown_math(md_text or "")
     lines = norm.splitlines()
-    out: List[str] = []
+    blocks: List[Tuple[str, str]] = []
     i = 0
     n = len(lines)
 
@@ -247,6 +312,10 @@ def _markdown_to_print_html(
         if s.endswith("|"):
             s = s[:-1]
         return [cell.strip() for cell in s.split("|")]
+
+    def _is_table_sep(sep_line: str) -> bool:
+        st = sep_line.strip()
+        return "--" in st and bool(re.match(r"^\|?[\s:\-|]+\|[\s:\-|]*$", st))
 
     while i < n:
         line = lines[i]
@@ -265,7 +334,7 @@ def _markdown_to_print_html(
                 i += 1
             i += 1
             code_body = html.escape("\n".join(code_lines))
-            out.append(f"<pre class='code-box'>{code_body}</pre>")
+            blocks.append(("block", f"<pre class='code-box'>{code_body}</pre>"))
             continue
 
         # Display math $$ ... $$
@@ -287,12 +356,12 @@ def _markdown_to_print_html(
                         math_lines.append(tail)
                     i += 1
                 expr = "\n".join(math_lines)
-            out.append(f'<div class="math-block">{_latex_expr_to_html(expr)}</div>')
+            blocks.append(("block", f'<div class="math-block">{_latex_expr_to_html(expr)}</div>'))
             continue
 
         # Horizontal rule
         if re.match(r"^[-*_]{3,}$", stripped):
-            out.append('<hr class="section-rule" />')
+            blocks.append(("block", '<hr class="section-rule" />'))
             i += 1
             continue
 
@@ -307,12 +376,12 @@ def _markdown_to_print_html(
                 if highlight_examples and ("例题" in heading_txt or "典型例" in heading_txt)
                 else ""
             )
-            out.append(f'<{tag} class="md-{tag}{extra_cls}">{_format_inline_text(heading_txt, assets_dir)}</{tag}>')
+            blocks.append(("block", f'<{tag} class="md-{tag}{extra_cls}">{_format_inline_text(heading_txt, assets_dir)}</{tag}>'))
             i += 1
             continue
 
         # GFM Table
-        if stripped.startswith("|") and i + 1 < n and re.match(r"^\|?[\s:\-|]+\|[\s:\-|]*$", lines[i + 1].strip()):
+        if stripped.startswith("|") and i + 1 < n and _is_table_sep(lines[i + 1]):
             headers = _split_table_row(lines[i])
             i += 2
             rows: List[List[str]] = []
@@ -328,8 +397,11 @@ def _markdown_to_print_html(
                     for cell in padded[: len(headers)]
                 )
                 trs.append(f"<tr>{tds}</tr>")
-            out.append(
-                f'<table class="print-table"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table>'
+            blocks.append(
+                (
+                    "table",
+                    f'<table class="print-table"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody></table>',
+                )
             )
             continue
 
@@ -344,7 +416,7 @@ def _markdown_to_print_html(
                 tag in "\n".join(q_lines) for tag in ("【答", "【解", "【审题", "【详细解答", "【易错", "【题目分析", "【规范解答")
             )
             box_cls = "example-sol-box" if is_example_ans else "quote-box"
-            out.append(f'<div class="{box_cls}">{joined_q}</div>')
+            blocks.append(("block", f'<div class="{box_cls}">{joined_q}</div>'))
             continue
 
         # Unordered list
@@ -354,7 +426,7 @@ def _markdown_to_print_html(
                 item_txt = re.sub(r"^[-*•]\s+", "", lines[i].strip())
                 items.append(f"<li>{_format_inline_text(item_txt, assets_dir)}</li>")
                 i += 1
-            out.append(f'<ul class="print-list">{"".join(items)}</ul>')
+            blocks.append(("block", f'<ul class="print-list">{"".join(items)}</ul>'))
             continue
 
         # Ordered list
@@ -364,12 +436,12 @@ def _markdown_to_print_html(
                 item_txt = re.sub(r"^\d+\.\s+", "", lines[i].strip())
                 items_ol.append(f"<li>{_format_inline_text(item_txt, assets_dir)}</li>")
                 i += 1
-            out.append(f'<ol class="print-list">{"".join(items_ol)}</ol>')
+            blocks.append(("block", f'<ol class="print-list">{"".join(items_ol)}</ol>'))
             continue
 
         # Standalone image line
         if re.match(r"^!\[[^\]]*\]\([^)]+\)$", stripped):
-            out.append(_format_inline_text(stripped, assets_dir))
+            blocks.append(("block", _format_inline_text(stripped, assets_dir)))
             i += 1
             continue
 
@@ -398,9 +470,74 @@ def _markdown_to_print_html(
             or para_text.startswith("**【综合例")
             or para_text.startswith("【例")
         ):
-            out.append(f'<div class="example-stem-box">{_format_inline_text(para_text, assets_dir)}</div>')
+            blocks.append(("block", f'<div class="example-stem-box">{_format_inline_text(para_text, assets_dir)}</div>'))
         else:
-            out.append(f"<p>{_format_inline_text(para_text, assets_dir)}</p>")
+            blocks.append(("p", _format_inline_text(para_text, assets_dir)))
+
+    return blocks
+
+
+def _markdown_to_print_html(
+    md_text: str,
+    *,
+    assets_dir: Optional[Path] = None,
+    highlight_examples: bool = False,
+) -> str:
+    """Convert Markdown (including tables, $$ math blocks, callouts, images) into clean print HTML."""
+    blocks = _markdown_to_block_list(
+        md_text, assets_dir=assets_dir, highlight_examples=highlight_examples
+    )
+    return "\n".join(f"<p>{content}</p>" if kind == "p" else content for kind, content in blocks)
+
+
+def _render_question_stem_html(
+    raw: str,
+    *,
+    prefix_html: str,
+    tail_html: str = "",
+    assets_dir: Optional[Path] = None,
+    underline_blanks: bool = False,
+) -> str:
+    """Render a question stem supporting inline text as well as embedded GFM tables and blocks."""
+    blocks = _markdown_to_block_list(raw, assets_dir=assets_dir)
+    if underline_blanks:
+        blocks = [
+            (
+                kind,
+                re.sub(
+                    r"_{2,}",
+                    "<u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u>",
+                    content,
+                )
+                if kind == "p"
+                else content,
+            )
+            for kind, content in blocks
+        ]
+
+    if not blocks:
+        return f'<div class="q-stem">{prefix_html}{tail_html}</div>'
+
+    p_indices = [idx for idx, (kind, _) in enumerate(blocks) if kind == "p"]
+    last_p_idx = p_indices[-1] if p_indices else -1
+    out: List[str] = []
+
+    if blocks[0][0] != "p":
+        out.append(f'<div class="q-stem">{prefix_html}</div>')
+
+    for idx, (kind, content) in enumerate(blocks):
+        tail = tail_html if idx == last_p_idx else ""
+        if idx == 0 and kind == "p":
+            out.append(f'<div class="q-stem">{prefix_html}{content}{tail}</div>')
+        elif kind == "p":
+            out.append(f'<div class="q-stem-cont">{content}{tail}</div>')
+        elif kind == "table":
+            out.append(f'<div class="q-stem-table-wrap">{content}</div>')
+        else:
+            out.append(f'<div class="q-stem-cont">{content}</div>')
+
+    if last_p_idx == -1 and tail_html:
+        out.append(f'<div class="q-stem-cont">{tail_html}</div>')
 
     return "\n".join(out)
 
@@ -600,6 +737,17 @@ body {
   margin: 0 0 3.5pt 0;
   font-size: 9.8pt;
 }
+.q-stem-cont {
+  margin: 2pt 0 3.5pt 14pt;
+  font-size: 9.8pt;
+}
+.q-stem-table-wrap {
+  margin: 4pt 0 5pt 14pt;
+}
+.q-stem-table-wrap .print-table {
+  margin: 0;
+  font-size: 8.4pt;
+}
 .q-num {
   font-weight: 700;
   color: #111827;
@@ -625,12 +773,7 @@ body {
 }
 .answer-lines {
   margin: 5pt 0 4pt 14pt;
-  border: 0.7pt dashed #9ca3af;
   height: 64pt;
-  background-color: #fcfcfd;
-  padding: 4pt 6pt;
-  font-size: 8pt;
-  color: #9ca3af;
 }
 .ans-header {
   text-align: center;
@@ -886,12 +1029,20 @@ def _build_quiz_exam_html(
     q_global_num = 0
 
     def _render_question_block(q: QuizQuestion, num: int) -> str:
-        stem_html = _format_inline_text(q.question, assets_dir)
-        if q.type == "fill_blank":
-            stem_html = re.sub(r"_{2,}", "<u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u>", stem_html)
+        prefix = f'<span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {html.escape(q.tier)}]</span> '
         if q.type == "mcq":
             # Add right-hand parenthesis if question lacks one
-            paren_tail = "" if ("（）" in q.question or "（ ）" in q.question or "( )" in q.question) else " &nbsp;（ &nbsp;&nbsp;&nbsp; ）"
+            paren_tail = (
+                ""
+                if ("（）" in q.question or "（ ）" in q.question or "( )" in q.question)
+                else " &nbsp;（ &nbsp;&nbsp;&nbsp; ）"
+            )
+            stem_block_html = _render_question_stem_html(
+                q.question,
+                prefix_html=prefix,
+                tail_html=paren_tail,
+                assets_dir=assets_dir,
+            )
             opt_cells = ""
             if q.options:
                 max_len = max(len(o) for o in q.options)
@@ -909,20 +1060,31 @@ def _build_quiz_exam_html(
                     )
             return (
                 '<div class="q-item">'
-                f'<div class="q-stem"><span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {html.escape(q.tier)}]</span> {stem_html}{paren_tail}</div>'
+                f"{stem_block_html}"
                 f"{opt_cells}"
                 "</div>"
             )
         if q.type == "fill_blank":
+            stem_block_html = _render_question_stem_html(
+                q.question,
+                prefix_html=prefix,
+                assets_dir=assets_dir,
+                underline_blanks=True,
+            )
             return (
                 '<div class="q-item">'
-                f'<div class="q-stem"><span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {html.escape(q.tier)}]</span> {stem_html}</div>'
+                f"{stem_block_html}"
                 "</div>"
             )
+        stem_block_html = _render_question_stem_html(
+            q.question,
+            prefix_html=prefix,
+            assets_dir=assets_dir,
+        )
         return (
             '<div class="q-item">'
-            f'<div class="q-stem"><span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {html.escape(q.tier)}]</span> {stem_html}</div>'
-            '<div class="answer-lines">作答区：</div>'
+            f"{stem_block_html}"
+            '<div class="answer-lines">&nbsp;</div>'
             "</div>"
         )
 
@@ -998,6 +1160,11 @@ def _build_quiz_answers_html(
     parts.append('<div class="part-title">逐题详细解析与教材出处溯源</div>')
     for idx, q in enumerate(ordered_qs, start=1):
         type_cn = "单选" if q.type == "mcq" else ("填空" if q.type == "fill_blank" else "简答")
+        norm_exp = normalize_markdown_math(q.explanation or "")
+        if "\n" in norm_exp and "|" in norm_exp:
+            exp_html = f'<div style="margin-top:3pt;">{_markdown_to_print_html(q.explanation, assets_dir=assets_dir)}</div>'
+        else:
+            exp_html = _format_inline_text(q.explanation, assets_dir)
         parts.append(
             f"""
             <div class="ans-item">
@@ -1005,7 +1172,7 @@ def _build_quiz_answers_html(
                 <span style="color:#475569;"> — 来源：{html.escape(q.source_chapter)} {html.escape(q.source_page)}</span>
               </div>
               <div style="margin-top:2pt;"><strong>参考答案：</strong>{_format_inline_text(q.answer, assets_dir)}</div>
-              <div style="margin-top:2pt;"><strong>详细解析：</strong>{_format_inline_text(q.explanation, assets_dir)}</div>
+              <div style="margin-top:2pt;"><strong>详细解析：</strong>{exp_html}</div>
             </div>
             """
         )

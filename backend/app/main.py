@@ -22,11 +22,17 @@ from app.config import (
     resolve_safe_project_dir,
     save_settings,
 )
-from app.parsers import SUPPORTED_EXTENSIONS, parse_uploaded_file
+from app.parsers import (
+    SUPPORTED_EXAM_EXTENSIONS,
+    SUPPORTED_EXTENSIONS,
+    parse_uploaded_exam_file,
+    parse_uploaded_file,
+)
 from app.parsers.ocr_engine import (
     detect_gpu_vram,
     get_ocr_engines_status,
     is_rapidocr_available,
+    probe_local_oxr_only,
     setup_ocr_engine,
     stream_setup_ocr_engine,
 )
@@ -42,6 +48,7 @@ from app.router import (
 from app.schemas import (
     CloudConfig,
     DocumentIR,
+    ExamGenerateRequest,
     FreeAiAuthConfig,
     GenerateRequest,
     NegotiateRequest,
@@ -60,8 +67,11 @@ from app.workflows import (
     PRESET_TEMPLATES,
     ai_fill_study_blueprint,
     build_default_blueprint_from_ir,
+    create_demo_exam_paper_project,
+    generate_exam_study_package,
     generate_study_package,
     generate_variant_question,
+    get_exam_agent_souls_payload,
     get_preset,
     negotiate_study_blueprint,
 )
@@ -80,8 +90,8 @@ from app.workflows.updater import (
 
 app = FastAPI(
     title="Auto Study Guidance API",
-    description="智能课本/课件学习资料生成系统后端服务",
-    version="1.0.0",
+    description="智能课本/课件与试卷分析学习资料生成系统后端服务",
+    version="1.1.0",
 )
 
 ALLOWED_ORIGINS = [
@@ -185,6 +195,18 @@ async def detect_ocr_vram_tier(vram_override_gb: Optional[float] = None) -> Dict
         "gpu_vram": gpu_vram.model_dump(),
         "ocr_engines": [item.model_dump() for item in ocr_engines],
     }
+
+
+@app.get("/api/ocr/probe-oxr")
+async def probe_oxr_status() -> Dict[str, Any]:
+    """Read-only probe for local OXR availability; never downloads or installs anything."""
+    settings = load_settings()
+    return await probe_local_oxr_only(settings)
+
+
+@app.get("/api/exam-agents/souls")
+async def get_exam_agent_souls() -> Dict[str, Any]:
+    return {"souls": get_exam_agent_souls_payload()}
 
 
 @app.post("/api/ocr/setup")
@@ -345,6 +367,7 @@ async def list_projects() -> List[ProjectSummary]:
             items.append(
                 ProjectSummary(
                     project_id=ir.project_id,
+                    project_type=ir.project_type,
                     filename=ir.filename,
                     file_type=ir.file_type,
                     created_at=ir.created_at,
@@ -492,6 +515,99 @@ async def load_demo_project_stream():
             yield f"data: {json.dumps({'type': 'progress', 'percent': 86, 'stage': 'ocr_done', 'message': f'已提取 {len(doc_ir.chapters)} 个章节与核心关键词，正在生成目录大纲...'}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.12)
             preset = get_preset("A_beginner")
+            blueprint = build_default_blueprint_from_ir(doc_ir, preset)
+            _save_blueprint(doc_ir.project_id, blueprint)
+            detail = ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+            yield f"data: {json.dumps({'type': 'complete', 'percent': 100, 'detail': detail.model_dump()}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/projects/upload-exam-stream")
+async def upload_exam_stream(file: UploadFile = File(...)):
+    """Upload an exam paper and extract text layer via forced OXR probing (local probe only -> Cloud OXR)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="试卷文件名不能为空")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in SUPPORTED_EXAM_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"试卷暂不支持格式 {suffix}，支持: {', '.join(sorted(SUPPORTED_EXAM_EXTENSIONS))}",
+        )
+
+    project_id = f"exam_{uuid.uuid4().hex[:8]}"
+    pdir = get_project_dir(project_id)
+    assets_dir = pdir / "assets"
+    safe_name = Path(file.filename).name
+    dest_path = pdir / safe_name
+    content = await file.read()
+    dest_path.write_bytes(content)
+    settings = load_settings()
+
+    async def event_stream():
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_oxr_progress(percent: int, stage: str, message: str):
+            payload = json.dumps(
+                {"type": "progress", "percent": percent, "stage": stage, "message": message},
+                ensure_ascii=False,
+            )
+            await queue.put(f"data: {payload}\n\n")
+
+        async def runner():
+            try:
+                await on_oxr_progress(2, "oxr_probe", f"试卷《{safe_name}》已接收（{len(content) // 1024} KB），正在探查本地 OXR 状态...")
+                doc_ir = await parse_uploaded_exam_file(
+                    dest_path, project_id, assets_dir, settings, progress_cb=on_oxr_progress
+                )
+                _save_project_ir(doc_ir)
+                preset = get_preset("B_consolidate")
+                blueprint = build_default_blueprint_from_ir(doc_ir, preset)
+                _save_blueprint(project_id, blueprint)
+                detail = ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
+                done_payload = json.dumps(
+                    {"type": "complete", "percent": 100, "detail": detail.model_dump()},
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {done_payload}\n\n")
+            except Exception as exc:
+                shutil.rmtree(pdir, ignore_errors=True)
+                err_payload = json.dumps({"type": "error", "message": f"试卷 OXR 提取失败: {exc}"}, ensure_ascii=False)
+                await queue.put(f"data: {err_payload}\n\n")
+            finally:
+                await queue.put("__END__")
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item == "__END__":
+                    break
+                yield item
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/projects/demo-exam-stream")
+async def load_demo_exam_stream():
+    """Load built-in physiology/biophysics sample exam paper after running read-only OXR probe."""
+    settings = load_settings()
+
+    async def event_stream():
+        try:
+            yield f"data: {json.dumps({'type': 'progress', 'percent': 12, 'stage': 'oxr_probe', 'message': '正在探查本地 OXR 服务状态（仅探查不下载）...'}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.14)
+            doc_ir = await create_demo_exam_paper_project(settings)
+            _save_project_ir(doc_ir)
+            yield f"data: {json.dumps({'type': 'progress', 'percent': 65, 'stage': 'oxr_scanning', 'message': doc_ir.oxr_probe_summary}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.14)
+            preset = get_preset("B_consolidate")
             blueprint = build_default_blueprint_from_ir(doc_ir, preset)
             _save_blueprint(doc_ir.project_id, blueprint)
             detail = ProjectDetailResponse(document_ir=doc_ir, blueprint=blueprint, study_package=None)
@@ -693,6 +809,115 @@ async def generate_materials(project_id: str, req: GenerateRequest):
                 err_payload = json.dumps(
                     {"type": "error", "message": str(exc)}, ensure_ascii=False
                 )
+                await queue.put(f"data: {err_payload}\n\n")
+            finally:
+                cur = _ACTIVE_GENERATIONS.get(project_id)
+                if cur and cur[0] is cancel_token:
+                    _ACTIVE_GENERATIONS.pop(project_id, None)
+                await queue.put("__END__")
+
+        task = asyncio.create_task(runner())
+        _ACTIVE_GENERATIONS[project_id] = (cancel_token, task)
+        try:
+            while True:
+                item = await queue.get()
+                if item == "__END__":
+                    break
+                yield item
+            await task
+        finally:
+            if not task.done():
+                cancel_token.cancel()
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+            cur = _ACTIVE_GENERATIONS.get(project_id)
+            if cur and cur[0] is cancel_token:
+                _ACTIVE_GENERATIONS.pop(project_id, None)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/projects/{project_id}/generate-exam")
+async def generate_exam_materials(project_id: str, req: ExamGenerateRequest):
+    """Execute Exam Paper Direction 1 (original_to_bank), Direction 2 (similar_paper via A/B/C/D), or Direction 3 (both)."""
+    doc_ir = _load_project_ir(project_id)
+    pdir = _safe_project_dir(project_id)
+    if req.raw_exam_text_override and req.raw_exam_text_override.strip() != (doc_ir.raw_exam_text or "").strip():
+        doc_ir = doc_ir.model_copy(
+            update={
+                "raw_exam_text": req.raw_exam_text_override.strip(),
+                "total_chars": len(req.raw_exam_text_override.strip()),
+            }
+        )
+        _save_project_ir(doc_ir)
+
+    settings = load_settings()
+    _cancel_active_generation(project_id)
+    cancel_token = HarnessCancelToken()
+    router = ModelRouter(settings, cancel_token=cancel_token)
+
+    if not req.stream:
+        task = asyncio.current_task()
+        _ACTIVE_GENERATIONS[project_id] = (cancel_token, task)
+        try:
+            package = await generate_exam_study_package(
+                doc_ir=doc_ir,
+                direction=req.direction,
+                user_requirements=req.user_requirements,
+                project_dir=pdir,
+                router=router,
+                raw_exam_text_override=req.raw_exam_text_override,
+            )
+            cancel_token.raise_if_cancelled()
+            _save_blueprint(project_id, package.blueprint_used)
+            _save_package(project_id, package)
+            return package
+        except asyncio.CancelledError:
+            cancel_token.cancel()
+            raise HTTPException(status_code=499, detail="试卷生成任务已取消")
+        finally:
+            cur = _ACTIVE_GENERATIONS.get(project_id)
+            if cur and cur[0] is cancel_token:
+                _ACTIVE_GENERATIONS.pop(project_id, None)
+
+    async def event_stream():
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_exam_progress(evt: Dict[str, Any]):
+            payload = json.dumps({"type": "progress", **evt}, ensure_ascii=False)
+            await queue.put(f"data: {payload}\n\n")
+
+        async def runner():
+            try:
+                package = await generate_exam_study_package(
+                    doc_ir=doc_ir,
+                    direction=req.direction,
+                    user_requirements=req.user_requirements,
+                    project_dir=pdir,
+                    router=router,
+                    raw_exam_text_override=req.raw_exam_text_override,
+                    progress_cb=on_exam_progress,
+                )
+                cancel_token.raise_if_cancelled()
+                _save_blueprint(project_id, package.blueprint_used)
+                _save_package(project_id, package)
+                done_payload = json.dumps(
+                    {"type": "complete", "percent": 100, "package": package.model_dump()},
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {done_payload}\n\n")
+            except asyncio.CancelledError:
+                cancel_token.cancel()
+                cancel_payload = json.dumps(
+                    {"type": "cancelled", "message": "试卷生成任务已取消，后台 Agent 子进程已终止"},
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {cancel_payload}\n\n")
+            except Exception as exc:
+                err_payload = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
                 await queue.put(f"data: {err_payload}\n\n")
             finally:
                 cur = _ACTIVE_GENERATIONS.get(project_id)

@@ -372,7 +372,7 @@ export const RouterConfigModal: React.FC<Props> = ({
                       className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.0.0
+                      v1.1.0
                     </span>
                   </div>
                   <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>

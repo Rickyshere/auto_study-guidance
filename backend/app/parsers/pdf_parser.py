@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import fitz  # PyMuPDF
 
-from app.parsers.ocr_engine import extract_text_from_image_vision
+from app.parsers.ocr_engine import (
+    extract_exam_page_with_forced_oxr,
+    extract_text_from_image_vision,
+    probe_local_oxr_only,
+)
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
 
 OcrProgressCallback = Optional[Callable[[int, str, str], Awaitable[None]]]
@@ -237,6 +241,122 @@ async def parse_pdf(
         total_pages_or_slides=total_pages,
         total_chars=total_chars,
         ocr_applied=ocr_applied,
+        chapters=chapters,
+        all_assets=all_assets,
+    )
+
+
+async def parse_exam_pdf(
+    file_path: Path,
+    project_id: str,
+    assets_dir: Path,
+    settings: RouterSettings,
+    progress_cb: OcrProgressCallback = None,
+) -> DocumentIR:
+    """Parse an exam PDF by probing local OXR (without downloading) and falling back directly to Cloud OXR."""
+    if progress_cb:
+        await progress_cb(4, "oxr_probe", "正在探查本机是否安装并运行 OXR 模型（仅探查不下载）...")
+    probe = await probe_local_oxr_only(settings)
+    prefer_local_oxr = bool(probe["local_oxr_ready"])
+    selected_engine = str(probe["selected_engine"])
+    probe_summary = str(probe["summary"])
+
+    if progress_cb:
+        await progress_cb(10, "oxr_probe", probe_summary)
+
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open(str(file_path))
+    total_pages = len(doc)
+    page_texts: Dict[int, str] = {}
+    all_assets: List[AssetItem] = []
+    actual_engines: List[str] = []
+
+    for page_idx in range(total_pages):
+        page_num = page_idx + 1
+        page = doc[page_idx]
+        native_text = page.get_text("text").strip()
+        pct = 14 + int(76 * page_num / max(1, total_pages))
+        if progress_cb:
+            mode_label = "本地 OXR" if prefer_local_oxr else "云端 OXR (SoMark Free-OXR)"
+            await progress_cb(
+                pct,
+                "oxr_scanning",
+                f"正在使用 {mode_label} 提取试卷第 {page_num}/{total_pages} 页版面与公式...",
+            )
+
+        scan_filename = f"exam_p{page_num}.png"
+        scan_path = assets_dir / scan_filename
+        pix = page.get_pixmap(dpi=170)
+        pix.save(str(scan_path))
+
+        oxr_text, used_label = await extract_exam_page_with_forced_oxr(
+            scan_path, settings, prefer_local_oxr=prefer_local_oxr
+        )
+        if used_label and used_label not in actual_engines:
+            actual_engines.append(used_label)
+
+        if oxr_text and native_text:
+            combined = oxr_text if len(oxr_text) >= len(native_text) * 0.65 else f"{native_text}\n\n{oxr_text}"
+        else:
+            combined = oxr_text or native_text
+
+        page_texts[page_num] = combined.strip()
+        all_assets.append(
+            AssetItem(
+                asset_id=f"exam_p{page_num}",
+                filename=scan_filename,
+                url=f"/api/projects/{project_id}/assets/{scan_filename}",
+                page_or_slide=page_num,
+                caption=f"试卷第 {page_num} 页图像",
+                ocr_text=oxr_text,
+            )
+        )
+
+    doc.close()
+
+    chapters: List[ChapterNode] = []
+    full_sections: List[str] = []
+    for p in range(1, total_pages + 1):
+        pt = page_texts.get(p, "").strip()
+        if not pt:
+            continue
+        section_text = f"[试卷第 {p} 页]\n{pt}"
+        full_sections.append(section_text)
+        chapters.append(
+            ChapterNode(
+                chapter_id=f"exam_p{p}",
+                title=f"试卷第 {p} 页",
+                start_page=p,
+                end_page=p,
+                char_count=len(pt),
+                summary_preview=pt[:180].replace("\n", " "),
+                content_text=pt,
+                assets=[a for a in all_assets if a.page_or_slide == p],
+                key_terms=extract_key_terms(pt),
+            )
+        )
+
+    raw_exam_text = "\n\n".join(full_sections).strip()
+    total_chars = len(raw_exam_text)
+    engine_label = actual_engines[0] if actual_engines else selected_engine
+    if progress_cb:
+        await progress_cb(
+            100,
+            "oxr_done",
+            f"试卷 OXR 文本层提取完成（{engine_label}），共 {total_pages} 页、{total_chars:,} 字。",
+        )
+
+    return DocumentIR(
+        project_id=project_id,
+        project_type="exam_paper",
+        filename=file_path.name,
+        file_type="exam_pdf",
+        total_pages_or_slides=total_pages,
+        total_chars=total_chars,
+        ocr_applied=True,
+        oxr_engine_used=engine_label,
+        oxr_probe_summary=probe_summary,
+        raw_exam_text=raw_exam_text,
         chapters=chapters,
         all_assets=all_assets,
     )

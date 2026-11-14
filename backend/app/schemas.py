@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 ProviderType = Literal["harness", "cloud"]
 UiVisualMode = Literal["academic_pure", "liquid_glass"]
 ScenarioType = Literal["A_beginner", "B_consolidate", "C_sprint"]
+ProjectType = Literal["courseware", "exam_paper"]
+ExamDirectionType = Literal["original_to_bank", "similar_paper", "both"]
 StageName = Literal[
     "vision_ocr",
     "requirement_negotiation",
@@ -171,12 +173,16 @@ class ChapterNode(BaseModel):
 
 class DocumentIR(BaseModel):
     project_id: str
+    project_type: ProjectType = "courseware"
     filename: str
     file_type: str
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     total_pages_or_slides: int = 0
     total_chars: int = 0
     ocr_applied: bool = False
+    oxr_engine_used: str = ""
+    oxr_probe_summary: str = ""
+    raw_exam_text: str = ""
     chapters: List[ChapterNode] = Field(default_factory=list)
     all_assets: List[AssetItem] = Field(default_factory=list)
 
@@ -274,6 +280,83 @@ class QuizQuestion(BaseModel):
     explanation: str
     source_chapter: str = ""
     source_page: str = ""
+    knowledge_tags: List[str] = Field(default_factory=list)
+    applied_strategies: List[str] = Field(default_factory=list)
+    reverse_design: str = ""
+    blind_review_summary: str = ""
+
+
+class ExamToneAndPersona(BaseModel):
+    stem_style: str = ""
+    phrasing_habits: List[str] = Field(default_factory=list)
+    option_length_style: str = ""
+
+
+class ExamAgentStyleProfile(BaseModel):
+    subject_and_level: str = ""
+    overall_difficulty: str = ""
+    tone_and_persona: ExamToneAndPersona = Field(default_factory=ExamToneAndPersona)
+    formatting_rules: str = ""
+    user_override_directives: List[str] = Field(default_factory=list)
+
+
+class ExamDistractorRecipeItem(BaseModel):
+    item: str = ""
+    trap_type: str = ""
+    detail: str = ""
+
+
+class ExamQuestionBlueprintItem(BaseModel):
+    question_id: int
+    target_question_type: str = "单选题"
+    target_difficulty: str = "中档"
+    knowledge_points: List[str] = Field(default_factory=list)
+    original_skeleton: str = ""
+    distractor_recipe: List[ExamDistractorRecipeItem] = Field(default_factory=list)
+    assigned_strategies: List[str] = Field(default_factory=list)
+    generation_directive: str = ""
+
+
+class ExamGeneratedQuestionItem(BaseModel):
+    question_id: int
+    question_type: str = "单选题"
+    knowledge_tags: List[str] = Field(default_factory=list)
+    applied_strategies: List[str] = Field(default_factory=list)
+    reverse_design: str = ""
+    correct_answer: str = ""
+    detailed_analysis: str = ""
+    stem: str = ""
+    options: Optional[Dict[str, str]] = None
+
+
+class ExamBlindReviewResult(BaseModel):
+    question_id: int
+    attempt: int = 1
+    reasoning_process: str = ""
+    my_answer: str = ""
+    expected_answer: str = ""
+    is_valid: bool = True
+    passed: bool = True
+    defect_report: Optional[str] = None
+
+
+class ExamPipelineMetadata(BaseModel):
+    direction: ExamDirectionType = "similar_paper"
+    user_requirements: str = ""
+    oxr_engine_used: str = ""
+    oxr_probe_summary: str = ""
+    soul_files_uploaded: List[str] = Field(default_factory=list)
+    style_profile: Optional[ExamAgentStyleProfile] = None
+    question_blueprints: List[ExamQuestionBlueprintItem] = Field(default_factory=list)
+    generated_items: List[ExamGeneratedQuestionItem] = Field(default_factory=list)
+    blind_reviews: List[ExamBlindReviewResult] = Field(default_factory=list)
+
+
+class ExamGenerateRequest(BaseModel):
+    direction: ExamDirectionType = "similar_paper"
+    user_requirements: str = ""
+    raw_exam_text_override: Optional[str] = None
+    stream: bool = True
 
 
 class QuizPaper(BaseModel):
@@ -287,6 +370,15 @@ class QuizPaper(BaseModel):
     questions: List[QuizQuestion] = Field(default_factory=list)
 
 
+class KnowledgeFlashcard(BaseModel):
+    id: str
+    category: str = "核心概念"
+    front: str
+    answer: str
+    explanation: str = ""
+    source: str = ""
+
+
 class StudyPackage(BaseModel):
     project_id: str
     blueprint_used: StudyBlueprint
@@ -297,7 +389,9 @@ class StudyPackage(BaseModel):
     cheatsheet_markdown: str = ""
     quiz_paper: QuizPaper
     extra_quiz_papers: List[QuizPaper] = Field(default_factory=list)
+    flashcards: List[KnowledgeFlashcard] = Field(default_factory=list)
     mindmap_mermaid: str = ""
+    exam_pipeline_metadata: Optional[ExamPipelineMetadata] = None
 
 
 class VariantQuestionRequest(BaseModel):
@@ -307,6 +401,7 @@ class VariantQuestionRequest(BaseModel):
 
 class ProjectSummary(BaseModel):
     project_id: str
+    project_type: ProjectType = "courseware"
     filename: str
     file_type: str
     created_at: str
