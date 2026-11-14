@@ -13,6 +13,7 @@ import {
   DownloadCloud,
   Moon,
   Sun,
+  Droplets,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -100,6 +101,14 @@ export function App() {
       return false;
     }
   });
+  const [liquidGlass, setLiquidGlass] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('asg_liquid_glass_v1');
+      return saved === null ? true : saved === '1';
+    } catch {
+      return true;
+    }
+  });
 
   useEffect(() => {
     try {
@@ -115,6 +124,21 @@ export function App() {
       document.body.classList.remove('dark-theme');
     }
   }, [darkMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('asg_liquid_glass_v1', liquidGlass ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    if (liquidGlass) {
+      document.documentElement.classList.add('liquid-glass');
+      document.body.classList.add('liquid-glass');
+    } else {
+      document.documentElement.classList.remove('liquid-glass');
+      document.body.classList.remove('liquid-glass');
+    }
+  }, [liquidGlass]);
 
   const [uploading, setUploading] = useState(false);
   const [negotiating, setNegotiating] = useState(false);
@@ -565,12 +589,19 @@ export function App() {
               compact
               springLabel="视图模式"
               value={viewMode}
-              onChange={(m) => setViewMode(m)}
+              onChange={(m) => {
+                if (m === 'swiftui') {
+                  setLiquidGlass(true);
+                  setViewMode('functional');
+                  return;
+                }
+                setViewMode(m);
+              }}
               options={[
                 { value: 'functional', label: '← 返回 ASG 生产工作台' },
+                { value: 'swiftui', label: 'Liquid Glass 工作台' },
                 { value: 'apple_audited', label: 'Apple 审计版' },
                 { value: 'impeccable_audited', label: 'Impeccable 审计版' },
-                { value: 'swiftui', label: 'SwiftUI' },
                 { value: 'apple', label: 'Apple 原版' },
                 { value: 'impeccable', label: 'Impeccable' },
                 { value: 'emil', label: 'Emil' },
@@ -590,7 +621,18 @@ export function App() {
 
   return (
     <SpringTelemetryProvider onReport={reportPhysics}>
-      <div className={`mac-asg-root ${darkMode ? 'dark-theme' : ''}`}>
+      <div
+        className={`mac-asg-root ${darkMode ? 'dark-theme' : ''} ${
+          liquidGlass ? 'liquid-glass' : ''
+        }`}
+      >
+        {liquidGlass && (
+          <div className="lg-ambient-canvas no-print" aria-hidden="true">
+            <div className="lg-orb lg-orb-1" />
+            <div className="lg-orb lg-orb-2" />
+            <div className="lg-orb lg-orb-3" />
+          </div>
+        )}
         <style>{`
           .mac-asg-root {
             --bg-grouped: #F2F2F7;
@@ -771,6 +813,34 @@ export function App() {
 
           {/* Right: First-Time Guide + Push Receiver + VRAM Badge + Spotlight + 3-Tier Router */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+            <SpringButton
+              springLabel="液态玻璃切换"
+              onClick={() => setLiquidGlass((v) => !v)}
+              maxShift={4}
+              style={{
+                borderRadius: '999px',
+                border: liquidGlass
+                  ? '1px solid rgba(0, 122, 255, 0.36)'
+                  : '1px solid rgba(60, 60, 67, 0.14)',
+                backgroundColor: liquidGlass
+                  ? 'rgba(0, 122, 255, 0.14)'
+                  : 'rgba(255, 255, 255, 0.88)',
+                padding: '5px 9px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: liquidGlass ? '#007AFF' : '#475569',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+              title={liquidGlass ? '当前为 Liquid Glass 液态玻璃界面（点击切换标准界面）' : '切换为 Apple Liquid Glass 液态玻璃界面'}
+            >
+              <Droplets className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">{liquidGlass ? '液态玻璃' : '标准材质'}</span>
+            </SpringButton>
+
             <SpringButton
               springLabel="深浅色切换"
               onClick={() => setDarkMode((d) => !d)}
@@ -1002,6 +1072,11 @@ export function App() {
                   value={viewMode}
                   onChange={(m) => {
                     setRouterPopoverOpen(false);
+                    if (m === 'swiftui') {
+                      setLiquidGlass(true);
+                      setViewMode('functional');
+                      return;
+                    }
                     setViewMode(m);
                   }}
                   options={[
@@ -1265,6 +1340,14 @@ export function App() {
                 ⌘K 聚焦快捷指令 (0ms 瞬时响应)
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <SpotlightRow
+                  label={liquidGlass ? '🫧 切换为标准经典界面材质' : '💧 切换为 Apple Liquid Glass 液态玻璃界面'}
+                  hint="Glass"
+                  onClick={() => {
+                    setLiquidGlass((v) => !v);
+                    setSpotlightOpen(false);
+                  }}
+                />
                 <SpotlightRow
                   label={darkMode ? '☀️ 切换为浅色模式' : '🌙 切换为深色模式'}
                   hint="Theme"
