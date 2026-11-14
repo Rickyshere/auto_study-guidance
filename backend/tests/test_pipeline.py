@@ -617,3 +617,114 @@ time.sleep(30)
                     raise AssertionError("Grandchild process still alive")
                 except ProcessLookupError:
                     pass
+
+
+
+def test_refined_quiz_and_cli_prompts_and_latex_json_parsing():
+    from app.router.harness_provider import _build_cli_prompt
+    from app.router.routing_engine import extract_json_payload
+    from app.schemas import ChapterNode, DeliverableConfig, DocumentIR, StudyBlueprint
+    from app.workflows.generator import build_notes_prompts, build_quiz_prompts
+
+    chapters = [
+        ChapterNode(
+            chapter_id="ch_1",
+            title="梯度下降与反向传播",
+            start_page=1,
+            end_page=8,
+            char_count=1800,
+            key_terms=["梯度下降", "学习率", "链式法则", "局部极小值"],
+            summary_preview="探讨参数更新规则与链式求导推导。",
+            content_text="梯度下降更新公式为 $\\theta_{t+1} = \\theta_t - \\eta \\nabla L(\\theta_t)$。",
+        ),
+        ChapterNode(
+            chapter_id="ch_2",
+            title="正则化与泛化边界",
+            start_page=9,
+            end_page=16,
+            char_count=1600,
+            key_terms=["L2正则化", "过拟合", "偏差-方差权衡"],
+            summary_preview="分析正则化系数对权重范数与泛化误差的影响。",
+            content_text="L2 正则项为 $\\frac{\\lambda}{2} \\parallel W \\parallel^2$。",
+        ),
+    ]
+    doc_ir = DocumentIR(
+        project_id="proj_prompt_test",
+        filename="ml_optimization.pdf",
+        file_type="pdf",
+        total_pages_or_slides=16,
+        total_chars=3400,
+        chapters=chapters,
+    )
+    bp = StudyBlueprint(
+        blueprint_id="bp_test",
+        blueprint_title="机器学习优化专题精练",
+        preset_id="self_study_guide",
+        preset_name="自学案",
+        parsed_intent_summary="聚焦优化收敛性与正则化辨析",
+        ai_feedback_message="ok",
+        target_difficulty="intermediate",
+        selected_chapter_ids=["ch_1", "ch_2"],
+        deliverables=DeliverableConfig(
+            include_study_guide_notes=True,
+            notes_style="guided_learning",
+            include_cheatsheet=True,
+            cheatsheet_density="comprehensive",
+            include_quiz=True,
+            quiz_mode="sync_layered",
+            mcq_count=4,
+            fill_blank_count=2,
+            short_answer_count=2,
+            total_score=60,
+            suggested_minutes=40,
+        ),
+        focus_topics=["学习率收敛条件", "L2权重衰减机理"],
+        custom_instructions="注重公式推导与反例辨析",
+    )
+
+    quiz_sys, quiz_user = build_quiz_prompts(doc_ir, chapters, bp, "正文内容")
+    assert "基础达标" in quiz_sys and "能力提升" in quiz_sys and "拓展探究" in quiz_sys
+    assert "干扰项" in quiz_sys and "真实高频误区" in quiz_sys
+    assert "【考点定位】" in quiz_sys and "【详解与推导】" in quiz_sys and "【易错点拨】" in quiz_sys
+    assert "\\\\frac" in quiz_sys and "\\\\theta" in quiz_sys
+    assert "[ch_1] 《梯度下降与反向传播》" in quiz_user and "P1-8" in quiz_user
+    assert "[ch_2] 《正则化与泛化边界》" in quiz_user and "P9-16" in quiz_user
+    assert "单选题 4 道" in quiz_user and "填空题 2 道" in quiz_user and "简答/分析题 2 道" in quiz_user
+    assert "60 分" in quiz_user
+    assert "基础达标约" in quiz_user and "拓展探究约" in quiz_user
+
+    notes_sys, notes_user = build_notes_prompts(doc_ir, chapters, bp, "正文内容")
+    for tag in ("【题目】", "【命题意图】", "【思路引导】", "【详细解答】", "【易错点拨与变式】"):
+        assert tag in notes_sys
+    assert "[ch_1]" in notes_user and "[ch_2]" in notes_user
+
+    cli_wrapped = _build_cli_prompt(quiz_sys, quiz_user)
+    assert "[Execution Mode & Output Contract]" in cli_wrapped
+    assert "Do NOT invoke filesystem search, shell commands, git, or web tools" in cli_wrapped
+    assert "[System Instructions]" in cli_wrapped and "[Task]" in cli_wrapped
+
+    # Single-backslash LaTeX commands inside JSON response must NOT be corrupted into \x0c or <TAB> or raise JSONDecodeError
+    raw_single_slash_json = (
+        '```json\n'
+        '{\n'
+        '  "title": "优化练习",\n'
+        '  "questions": [\n'
+        '    {\n'
+        '      "id": "q_1",\n'
+        '      "question": "计算 $\\frac{1}{2} \\theta - \\alpha \\nabla L$ 以及 $\\|W\\|^2$",\n'
+        '      "explanation": "利用 \\\\frac{a}{b} 与 \\times 完成推导"\n'
+        '    }\n'
+        '  ]\n'
+        '}\n'
+        '```'
+    )
+    parsed = extract_json_payload(raw_single_slash_json)
+    q0 = parsed["questions"][0]
+    assert "\\frac{1}{2}" in q0["question"]
+    assert "\\theta" in q0["question"]
+    assert "\\alpha" in q0["question"]
+    assert "\\nabla" in q0["question"]
+    assert "\x0c" not in q0["question"]
+    assert "\t" not in q0["question"]
+    assert "\\frac{a}{b}" in q0["explanation"]
+    assert "\\times" in q0["explanation"]

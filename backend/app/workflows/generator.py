@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from app.router.fallback_provider import HeuristicStudyEngine
 from app.router.routing_engine import ModelRouter
 from app.schemas import (
     ChapterNode,
+    DeliverableConfig,
     DocumentIR,
     QuizPaper,
     QuizQuestion,
@@ -120,6 +121,234 @@ def _sanitize_mermaid_code(raw: str) -> str:
     return "\n".join(fixed_lines)
 
 
+def _build_chapter_anchor_table(chapters: List[ChapterNode]) -> str:
+    """Format selected chapter metadata as explicit knowledge anchors for prompt grounding."""
+    lines: List[str] = []
+    for ch in chapters:
+        terms = "、".join(ch.key_terms[:6]) if ch.key_terms else "详见章节正文"
+        lines.append(
+            f"- [{ch.chapter_id}] 《{ch.title}》 | 页码/幻灯片: P{ch.start_page}-{ch.end_page} | 核心术语: {terms}"
+        )
+    return "\n".join(lines) if lines else "- [ch_all] 全文内容"
+
+
+def _compute_quiz_allocation(
+    d: DeliverableConfig,
+    target_difficulty: str,
+) -> Dict[str, object]:
+    """Compute exact per-type score breakdown and 3-tier cognitive targets."""
+    mcq = max(0, int(d.mcq_count))
+    fill = max(0, int(d.fill_blank_count))
+    short = max(0, int(d.short_answer_count))
+    total_qs = mcq + fill + short
+
+    # Per-type integer score allocation weighted 1 : 1 : 2 (mcq : fill_blank : short_answer)
+    total_score = max(total_qs, int(d.total_score)) if total_qs > 0 else int(d.total_score)
+    w_total = mcq * 1 + fill * 1 + short * 2
+    if total_qs == 0 or w_total == 0:
+        score_plan_text = f"共 0 题，总分 {d.total_score} 分"
+    else:
+        unit = total_score / w_total
+        mcq_pt = max(1, round(unit * 1)) if mcq > 0 else 0
+        fill_pt = max(1, round(unit * 1)) if fill > 0 else 0
+        short_pt = max(1, round(unit * 2)) if short > 0 else 0
+        # Prevent over-allocation when rounding up
+        while mcq * mcq_pt + fill * fill_pt + short * short_pt > total_score:
+            if short > 0 and short_pt > 1:
+                short_pt -= 1
+            elif fill > 0 and fill_pt > 1:
+                fill_pt -= 1
+            elif mcq > 0 and mcq_pt > 1:
+                mcq_pt -= 1
+            else:
+                break
+        assigned = mcq * mcq_pt + fill * fill_pt + short * short_pt
+        rem = total_score - assigned
+        parts: List[str] = []
+        if mcq > 0:
+            parts.append(f"单选题 {mcq} 道（约 {mcq_pt} 分/题）")
+        if fill > 0:
+            parts.append(f"填空题 {fill} 道（约 {fill_pt} 分/题）")
+        if short > 0:
+            parts.append(f"简答/计算/综合题 {short} 道（约 {short_pt} 分/题）")
+        tail_note = f"；差额 {rem:+d} 分可加在压轴题上" if rem != 0 else ""
+        score_plan_text = "、".join(parts) + f"，合计严格等于 {total_score} 分{tail_note}"
+
+    # Cognitive tier targets (基础达标 / 能力提升 / 拓展探究)
+    ratio_map = {
+        "beginner": (0.60, 0.30, 0.10),
+        "intermediate": (0.40, 0.40, 0.20),
+        "advanced": (0.20, 0.45, 0.35),
+        "exam_sprint": (0.30, 0.45, 0.25),
+    }
+    r_basic, r_improve, r_explore = ratio_map.get(target_difficulty, (0.40, 0.40, 0.20))
+    if d.quiz_mode == "in_class" and target_difficulty != "beginner":
+        r_basic = (r_basic + 0.55) / 2
+        r_improve = (r_improve + 0.35) / 2
+        r_explore = (r_explore + 0.10) / 2
+
+    if total_qs <= 0:
+        t_basic = t_improve = t_explore = 0
+    else:
+        t_basic = round(total_qs * r_basic)
+        t_explore = round(total_qs * r_explore)
+        t_improve = total_qs - t_basic - t_explore
+        if t_improve < 0:
+            t_basic = max(0, t_basic + t_improve)
+            t_improve = total_qs - t_basic - t_explore
+
+    return {
+        "total_qs": total_qs,
+        "total_score": total_score,
+        "score_plan_text": score_plan_text,
+        "tier_basic": t_basic,
+        "tier_improve": t_improve,
+        "tier_explore": t_explore,
+    }
+
+
+def build_notes_prompts(
+    document_ir: DocumentIR,
+    selected_chapters: List[ChapterNode],
+    blueprint: StudyBlueprint,
+    context_text: str,
+) -> Tuple[str, str]:
+    """Construct refined system & user prompts for study notes and worked examples."""
+    d = blueprint.deliverables
+    focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
+    chapter_anchors = _build_chapter_anchor_table(selected_chapters)
+
+    notes_sys = (
+        "你是一位顶尖学科导师、命题研究专家与教材主编。请严格依据提供的教材/课件原文内容，编写高水准的结构化学习讲义/导学案。\n"
+        "一、内容真实性与格式规范：\n"
+        "1. 严格忠于原文事实、符号体系与推导逻辑，切勿编造教材未出现的定理或数据；若原文附有配图 Markdown 链接（如 `![...](...)`），请在对应知识点段落自然内联引用。\n"
+        "2. 规范使用 Markdown 层级标题、对比表格与要点清单；所有行内数学公式必须严格使用 `$...$`，独立公式块使用 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；Markdown 表格内的范数请写 `\\parallel W \\parallel` 而非 `\\|W\\|`。\n"
+        f"二、教学风格与【典型例题】深度设计（当前模板：【{blueprint.preset_name}】｜风格：{d.notes_style}｜目标难度：{blueprint.target_difficulty}）：\n"
+        "   - 若为【自学案】（或 `guided_learning`）：必须完整包含以下模块：\n"
+        "     (1) 学习目标与重难点拆解；(2) 前置概念导读与直觉类比；(3) 核心概念与定理公式精讲；\n"
+        "     (4) 不少于 4 道高质量、难度递进的【典型例题与深度解析】（须覆盖「概念辨析型 → 公式推导/定量计算型 → 综合应用/反例探究型」，每道例题均须包含完整条件/数据或选项，并严格按以下五个加粗标签分节：\n"
+        "         - **【题目】**：交代清晰条件、待求目标或完整情景；\n"
+        "         - **【命题意图】**：一句话点明本题考察的核心能力与知识陷阱；\n"
+        "         - **【思路引导】**：给出切入突破口与关键转化步骤，不直接剧透答案；\n"
+        "         - **【详细解答】**：逐步推导计算并给出严谨结论；\n"
+        "         - **【易错点拨与变式】**：剖析学生最易混淆的错误做法，并附 1 句简短变式思考）；\n"
+        "     (5) 易混概念对比表与自学自检 Checklist。\n"
+        "   - 若为【随堂练习】：输出精炼的“当堂核心要点速览”、易错预警及 2 道课堂示范例题（须含 **【题目】**、**【思路引导】**、**【详细解答】**、**【易错点拨】**）。\n"
+        "   - 若为【同步练习】：输出“章节知识框架梳理、高频题型示范例题（含上述结构化解析）与避坑清单”。\n"
+        "   - 若为【自测卷】：输出“考前核心考点复盘提纲、高频压轴母题示例与答题规范模板”。"
+    )
+    notes_user = (
+        f"文档名称: {document_ir.filename}\n"
+        f"方案标题: {blueprint.blueprint_title}\n"
+        f"核心考点: {focus_str}\n"
+        f"用户定制指令: {blueprint.custom_instructions or '无额外指令'}\n\n"
+        f"选中章节与页码锚点：\n{chapter_anchors}\n\n"
+        f"教材/课件原文内容：\n{context_text}"
+    )
+    return notes_sys, notes_user
+
+
+def build_quiz_prompts(
+    document_ir: DocumentIR,
+    selected_chapters: List[ChapterNode],
+    blueprint: StudyBlueprint,
+    context_text: str,
+) -> Tuple[str, str]:
+    """Construct fine-grained system & user prompts for high-quality exercise generation."""
+    d = blueprint.deliverables
+    focus_str = "、".join(blueprint.focus_topics) if blueprint.focus_topics else "全章核心概念"
+    chapter_anchors = _build_chapter_anchor_table(selected_chapters)
+    alloc = _compute_quiz_allocation(d, blueprint.target_difficulty)
+
+    quiz_sys = (
+        "你是一位兼具学科深度与教育测量学素养的资深命题专家。请严格依据教材/课件原文与知识锚点，命制一套高区分度、零歧义、解析透彻的高质量习题，并只输出一个合法 JSON 对象。\n\n"
+        "一、命题质量铁律（严禁低质“送分题/纯抄书题”）：\n"
+        "1. 禁止出现“什么是 XX？”“教材第几章讲了什么？”或原文整句挖空式的浅层记忆题；每道题都必须考查**机理辨析、条件适用边界、定量计算/公式推导、步骤因果排序、反例判断或具体情境迁移应用**。\n"
+        "2. 单选题（`type=\"mcq\"`）选项与干扰项工程：\n"
+        "   - 必须提供严格 4 个选项：`[\"A. ...\", \"B. ...\", \"C. ...\", \"D. ...\"]`，四选项长度、句式和专业深度应保持均衡（禁止出现过短、幽默或明显荒谬的凑数选项）；`answer` 仅填写单个大写字母 `\"A\"`/`\"B\"`/`\"C\"`/`\"D\"`。\n"
+        "   - 3 个错误干扰项必须各自对应真实高频误区：如公式符号/系数/量纲错误、混淆充分条件与必要条件、忽略定理前提约束、因果颠倒或边界条件越界。\n"
+        "3. 填空题（`type=\"fill_blank\"`）：\n"
+        "   - 题干必须在最核心的结论、临界条件或数学表达式位置使用下划线 `______` 标记；`options` 固定为空数组 `[]`；`answer` 必须简明、唯一、客观可判分（禁止开放性长句）。\n"
+        "4. 简答/计算/综合探究题（`type=\"short_answer\"`）：\n"
+        "   - 必须创设具体问题情景、待推导命题或对比分析任务，适当采用 `(1) ... (2) ...` 分步设问；`options` 固定为空数组 `[]`；`answer` 必须按采分点结构化列出（格式如 `【得分点1】...（X分）；【得分点2】...（Y分）`）。\n"
+        "5. 三层认知梯度（`tier`）与难度（`difficulty`）协同：\n"
+        "   - `基础达标`（`easy` 或 `medium`）：核心机理理解、关键前提辨析与公式直接应用；\n"
+        "   - `能力提升`（`medium`）：跨概念综合对比、中间步骤推导计算或错误方案诊断；\n"
+        "   - `拓展探究`（`hard`）：极限/边界情形分析、多步建模或复杂场景权衡推理。\n"
+        "6. 解析字段（`explanation`）结构化强制标准：\n"
+        "   - 每道题的 `explanation` 必须完整包含三部分：`【考点定位】...` + `【详解与推导】...` + `【易错点拨】...`。\n"
+        "   - 对于单选题，**`【详解与推导】` 必须先论证正确选项为何成立，再逐一指出其余 3 个干扰项分别错在何处**；对于计算/简答题，必须写出完整中间推导与得分依据。\n"
+        "7. 章节溯源与 LaTeX / JSON 转义契约：\n"
+        "   - 题目应尽量均匀覆盖所有选中章节，并准确填写 `source_chapter`（对应章节标题）与 `source_page`（页码/幻灯片范围，如 `P3-5`）。\n"
+        "   - 所有行内公式使用 `$...$`，独立公式使用 `$$...$$`，禁止 `\\(...\\)` / `\\[...\\]`；**所有 JSON 字符串内部的 LaTeX 反斜杠必须双写转义**（例如写 `\"$\\\\frac{a}{b}$\"`、`\"$\\\\theta$\"`、`\"$\\\\nabla$\"`、`\"$\\\\times$\"`）。\n"
+        "   - 只输出纯 JSON 对象，不要包含 Markdown 说明或前后寒暄文字。\n\n"
+        "JSON 结构契约：\n"
+        "{\n"
+        '  "title": "试卷/练习标题",\n'
+        '  "instructions": "作答说明（含题型题量、总分、建议用时及答题要求）",\n'
+        '  "questions": [\n'
+        "    {\n"
+        '      "id": "q_1",\n'
+        '      "type": "mcq" | "fill_blank" | "short_answer",\n'
+        '      "difficulty": "easy" | "medium" | "hard",\n'
+        '      "tier": "基础达标" | "能力提升" | "拓展探究",\n'
+        '      "score": 5,\n'
+        '      "question": "题干内容（含具体情境或公式 $...$）",\n'
+        '      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
+        '      "answer": "单选填 A/B/C/D；填空填唯一标准答案；简答按【得分点1】...列出",\n'
+        '      "explanation": "【考点定位】... \\n【详解与推导】... \\n【易错点拨】...",\n'
+        '      "source_chapter": "对应章节名称",\n'
+        '      "source_page": "P1-3"\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    quiz_user = (
+        f"## 命题蓝图与契约\n"
+        f"- 文档名称: {document_ir.filename}\n"
+        f"- 方案名称: {blueprint.blueprint_title}\n"
+        f"- 模板类型: {blueprint.preset_name} (quiz_mode={d.quiz_mode})\n"
+        f"- 目标难度: {blueprint.target_difficulty} | 建议用时: {d.suggested_minutes} 分钟\n"
+        f"- 严格题量契约: 单选题 {d.mcq_count} 道 + 填空题 {d.fill_blank_count} 道 + 简答/分析题 {d.short_answer_count} 道（共 {alloc['total_qs']} 道，切勿少出或多出）\n"
+        f"- 分值分配建议: {alloc['score_plan_text']}\n"
+        f"- 认知分层配比目标: 基础达标约 {alloc['tier_basic']} 题 / 能力提升约 {alloc['tier_improve']} 题 / 拓展探究约 {alloc['tier_explore']} 题\n"
+        f"- 重点考察主题: {focus_str}\n"
+        f"- 用户定制指令: {blueprint.custom_instructions or '重点突出机制理解、公式推演与典型误区辨析'}\n\n"
+        f"## 选中章节与知识锚点（请均衡覆盖并准确溯源）\n{chapter_anchors}\n\n"
+        f"## 教材/课件原文内容\n{context_text[:20000]}"
+    )
+    return quiz_sys, quiz_user
+
+
+def _format_quiz_samples_for_audit(quiz_paper: QuizPaper) -> str:
+    """Format up to 3 representative quiz items across types for global quality audit."""
+    if not quiz_paper.questions:
+        return "无试题"
+    picked: List[QuizQuestion] = []
+    seen_types = set()
+    for q in quiz_paper.questions:
+        if q.type not in seen_types:
+            picked.append(q)
+            seen_types.add(q.type)
+        if len(picked) >= 3:
+            break
+    for q in quiz_paper.questions:
+        if len(picked) >= 3:
+            break
+        if q not in picked:
+            picked.append(q)
+
+    blocks: List[str] = []
+    for q in picked:
+        opts = " | ".join(q.options[:4]) if q.options else "(无选项)"
+        blocks.append(
+            f"- [{q.id} | {q.type} | {q.tier} | {q.score}分 | {q.source_chapter}] "
+            f"题干: {q.question[:120]} || 选项: {opts[:160]} || 答案: {q.answer[:80]} || 解析: {q.explanation[:180]}"
+        )
+    return "\n".join(blocks)
+
+
 async def generate_study_package(
     document_ir: DocumentIR,
     blueprint: StudyBlueprint,
@@ -181,22 +410,8 @@ async def _run_generate_study_package(
         current_stage_state["percent"] = 20
         if progress_cb:
             await progress_cb("notes", 20, f"正在生成【{blueprint.preset_name}】讲义与精要笔记...")
-        notes_sys = (
-            "你是一位顶尖学科导师与教研专家。请严格依据提供的教材/课件原文内容，生成结构化学习笔记/导学案。\n"
-            "要求：\n"
-            "1. 使用规范的 Markdown 排版（标题层级、对比表格、要点列表）；所有数学公式必须严格使用 `$...$`（行内）或 `$$...$$`（独立成行），切勿使用 `\\(...\\)` 或 `\\[...\\]`；表格内范数请写 `\\parallel W \\parallel`。\n"
-            "2. 忠于原文，切勿编造教材中没有的结论；若原文附有配图 Markdown 链接，请在合适段落直接内联引用。\n"
-            f"3. 严格贴合模板类型【{blueprint.preset_name}】（风格：{d.notes_style}，难度：{blueprint.target_difficulty}）。\n"
-            "   - 若为【自学案】（或 guided_learning）：必须包含 学习目标与重难点、前置导读、核心概念精讲（带通俗类比）、不少于 4 道结构化的【典型例题与深度解析】（涵盖概念辨析/公式推导或计算/应用分析，每道例题均须严格包含：**【题目】**、**【思路引导】**、**【详细解答】**、**【易错点拨】**）、以及易错辨析清单与自学自检清单。\n"
-            "   - 若为【随堂练习】：输出简明扼要的“当堂核心要点速览”及 1-2 道课堂示范例题与解析。\n"
-            "   - 若为【同步练习】：输出“章节知识框架梳理、典型例题示范与易错点清单”。\n"
-            "   - 若为【自测卷】：输出“考前核心考点复盘提纲”。"
-        )
-        notes_user = (
-            f"方案标题: {blueprint.blueprint_title}\n"
-            f"重点关注主题: {focus_str}\n"
-            f"用户定制指令: {blueprint.custom_instructions or '无额外指令'}\n\n"
-            f"教材/课件原文内容：\n{context_text}"
+        notes_sys, notes_user = build_notes_prompts(
+            document_ir, selected_chapters, blueprint, context_text
         )
         res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
         study_notes_md = normalize_markdown_math(
@@ -206,22 +421,20 @@ async def _run_generate_study_package(
     # 2. Cheat Sheet
     cheatsheet_md = ""
     if d.include_cheatsheet:
+        router.check_cancelled()
+        current_stage_state["stage"] = "cheatsheet"
+        current_stage_state["percent"] = 45
         if progress_cb:
             await progress_cb("cheatsheet", 45, "正在浓缩考前速记表 (Cheat Sheet)...")
         cs_sys = (
             "请根据以下教材/课件原文，提炼一份高密度、适合考前突击复盘的《考前速记表 (Cheat Sheet)》。\n"
             "格式严格要求：所有行内/块级数学公式必须使用 `$...$` 或 `$$...$$`，严禁使用 `\\(...\\)` 或 `\\[...\\]`；"
             "Markdown 表格内的范数请用 `\\parallel W \\parallel^2` 而非 `\\|W\\|^2`，并控制单元格文本紧凑以免表格过宽溢出。\n"
-            "内容要求包含：1) 核心概念/公式速查 Markdown 表格；2) 易混概念对比；3) 考前必背 Checklist。"
+            "内容要求包含：1) 核心概念/公式与适用边界速查 Markdown 表格；2) 高频易混概念/公式对比表；3) 考前必背与常见计算陷阱 Checklist。"
         )
         cs_user = (
             f"密度要求: {d.cheatsheet_density} | 重点主题: {focus_str}\n\n原文：\n{context_text[:18000]}"
         )
-        router.check_cancelled()
-        current_stage_state["stage"] = "cheatsheet"
-        current_stage_state["percent"] = 45
-        if progress_cb:
-            await progress_cb("cheatsheet", 45, "正在提炼核心公式与概念速记表...")
         res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
         cheatsheet_md = normalize_markdown_math(
             res_cs or HeuristicStudyEngine.generate_cheatsheet_from_ir(document_ir, blueprint)
@@ -235,36 +448,8 @@ async def _run_generate_study_package(
         current_stage_state["percent"] = 70
         if progress_cb:
             await progress_cb("quiz", 70, f"正在命制【{blueprint.preset_name}】配套题库与详细解析...")
-        quiz_sys = (
-            "你是一位严谨的命题教师。请严格依据教材原文命制高质量练习题/试卷，并输出合法 JSON。\n"
-            "JSON 结构必须如下：\n"
-            "{\n"
-            '  "title": "试卷/练习标题",\n'
-            '  "instructions": "作答说明",\n'
-            '  "questions": [\n'
-            "    {\n"
-            '      "id": "q_1",\n'
-            '      "type": "mcq" | "fill_blank" | "short_answer",\n'
-            '      "difficulty": "easy" | "medium" | "hard",\n'
-            '      "tier": "基础达标" | "能力提升" | "拓展探究",\n'
-            '      "score": 5,\n'
-            '      "question": "题干内容",\n'
-            '      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
-            '      "answer": "标准答案（单选题请填 A/B/C/D，填空和简答填参考答案）",\n'
-            '      "explanation": "详细解析与易错点说明",\n'
-            '      "source_chapter": "对应章节名称",\n'
-            '      "source_page": "P1-3"\n'
-            "    }\n"
-            "  ]\n"
-            "}"
-        )
-        quiz_user = (
-            f"模板类型: {blueprint.preset_name} (quiz_mode={d.quiz_mode})\n"
-            f"题量要求: 单选题 {d.mcq_count} 道、填空题 {d.fill_blank_count} 道、简答/分析题 {d.short_answer_count} 道。\n"
-            f"目标总分: {d.total_score} 分 | 建议用时: {d.suggested_minutes} 分钟 | 难度: {blueprint.target_difficulty}\n"
-            f"重点关注: {focus_str}\n"
-            f"用户特别指令: {blueprint.custom_instructions or '无'}\n\n"
-            f"教材原文：\n{context_text[:20000]}"
+        quiz_sys, quiz_user = build_quiz_prompts(
+            document_ir, selected_chapters, blueprint, context_text
         )
         quiz_data, _ = await router.execute_json("quiz_generation", quiz_sys, quiz_user)
         if isinstance(quiz_data, dict) and isinstance(quiz_data.get("questions"), list) and quiz_data["questions"]:
@@ -431,18 +616,27 @@ async def _run_generate_study_package(
 
         # 5.3 Invoke non-heuristic engine for semantic global quality verification
         audit_sys = (
-            "你是教学资料总审校专家（Global Quality Auditor）。请审查生成成果是否符合教学方案契约与排版规范，并输出合法 JSON：\n"
-            '{"passed": true, "score": 96, "summary": "一句简明中文验收结论", "issues": []}'
+            "你是教学资料总审校与命题测量专家（Global Quality Auditor）。请重点审查以下质量维度，并输出合法 JSON：\n"
+            "1. 题量与总分契约是否对齐，三级认知梯队（基础达标 / 能力提升 / 拓展探究）分布是否合理；\n"
+            "2. 抽检试题质量：单选题干扰项是否具有真实迷惑性、填空题答案是否唯一客观、解析是否涵盖【考点定位】【详解与推导】【易错点拨】；\n"
+            "3. 讲义例题完整性与 `$...$` / `$$...$$` LaTeX 公式排版合规性。\n"
+            '输出格式：{"passed": true, "score": 96, "summary": "一句简明中文验收结论（包含试题区分度与解析质量评价）", "issues": []}'
         )
+        quiz_samples = _format_quiz_samples_for_audit(quiz_paper)
+        tier_counts = {
+            t: sum(1 for q in quiz_paper.questions if q.tier == t)
+            for t in ("基础达标", "能力提升", "拓展探究")
+        }
         audit_user = (
             f"方案名称: {blueprint.blueprint_title} | 预设: {blueprint.preset_name}\n"
-            f"目标题量: 单选 {d.mcq_count} + 填空 {d.fill_blank_count} + 简答 {d.short_answer_count}\n"
-            f"实际题量: {len(quiz_paper.questions)} 道 | 总分: {quiz_paper.total_score}\n"
+            f"目标题量: 单选 {d.mcq_count} + 填空 {d.fill_blank_count} + 简答 {d.short_answer_count} (目标总分 {d.total_score})\n"
+            f"实际题量: {len(quiz_paper.questions)} 道 | 实际总分: {quiz_paper.total_score} | 梯度分布: {tier_counts}\n"
             f"讲义含典型例题: {'是' if '典型例题' in study_notes_md else '否'} | "
             f"讲义长度: {len(study_notes_md)} 字 | 速记表长度: {len(cheatsheet_md)} 字\n"
             f"Mermaid 语法前缀: {mindmap_mermaid.splitlines()[0] if mindmap_mermaid else '无'}\n"
             f"已执行自动修正: {', '.join(repairs) if repairs else '无'}\n"
-            f"讲义前400字摘要:\n{study_notes_md[:400]}"
+            f"代表性试题抽检（最多3题）：\n{quiz_samples}\n"
+            f"讲义前350字摘要:\n{study_notes_md[:350]}"
         )
         audit_data, audit_label = await router.execute_json("global_quality_audit", audit_sys, audit_user)
         if isinstance(audit_data, dict):

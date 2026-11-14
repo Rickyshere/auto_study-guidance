@@ -11,6 +11,40 @@ from app.router.local_provider import call_local_llm
 from app.schemas import ProviderSelection, ProviderType, RouterSettings, StageName
 
 
+_LATEX_JSON_CMD_RE = re.compile(
+    r"(\\+)("
+    r"(?:frac|dfrac|tfrac|theta|tau|tanh|times|text|textbf|textit|texttt|"
+    r"nabla|neq|nu|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|iota|"
+    r"kappa|lambda|mu|xi|pi|rho|sigma|upsilon|phi|varphi|chi|psi|omega|"
+    r"Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|"
+    r"sqrt|sum|prod|int|oint|lim|log|ln|exp|sin|cos|tan|cot|sec|csc|"
+    r"le|leq|ge|geq|approx|equiv|propto|infty|partial|cdot|cdots|ldots|vdots|"
+    r"parallel|perp|angle|triangle|leftarrow|rightarrow|Leftarrow|Rightarrow|"
+    r"leftrightarrow|in|notin|subset|subseteq|cup|cap|emptyset|forall|exists|"
+    r"hat|bar|vec|tilde|dot|ddot|overline|underline|left|right|lfloor|rfloor|"
+    r"lceil|rceil|mathrm|mathbf|mathit|mathcal|mathbb|operatorname|stackrel|binom)(?![A-Za-z])"
+    r"|[\{\}\|_,;:])"
+)
+
+
+def _repair_json_latex_escapes(raw_json: str) -> str:
+    """Protect single-backslash LaTeX commands from being corrupted or rejected by json.loads."""
+    return _LATEX_JSON_CMD_RE.sub(
+        lambda m: (m.group(1) + "\\" + m.group(2)) if len(m.group(1)) % 2 == 1 else m.group(0),
+        raw_json,
+    )
+
+
+def _loads_with_latex_repair(candidate: str) -> Any:
+    repaired = _repair_json_latex_escapes(candidate)
+    try:
+        return json.loads(repaired)
+    except Exception:
+        if repaired != candidate:
+            return json.loads(candidate)
+        raise
+
+
 def extract_json_payload(raw_text: str) -> Any:
     text = raw_text.strip()
     # Try fenced code blocks first
@@ -18,13 +52,13 @@ def extract_json_payload(raw_text: str) -> Any:
     if fence:
         candidate = fence.group(1).strip()
         try:
-            return json.loads(candidate)
+            return _loads_with_latex_repair(candidate)
         except Exception:
             text = candidate
 
     # Try direct JSON
     try:
-        return json.loads(text)
+        return _loads_with_latex_repair(text)
     except Exception:
         pass
 
@@ -42,7 +76,7 @@ def extract_json_payload(raw_text: str) -> Any:
 
     for cand in sorted(candidates, key=len, reverse=True):
         try:
-            return json.loads(cand)
+            return _loads_with_latex_repair(cand)
         except Exception:
             continue
     raise ValueError("无法从模型输出中解析合法 JSON")

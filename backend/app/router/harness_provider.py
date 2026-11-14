@@ -912,6 +912,19 @@ async def _run_cli_attempt(
     return out_text
 
 
+def _build_cli_prompt(system_prompt: str, user_prompt: str) -> str:
+    """Wrap system and task prompts for non-interactive local CLI agents with strict format & quality rules."""
+    return (
+        "[Execution Mode & Output Contract]\n"
+        "You are running inside an automated non-interactive study-material generation pipeline.\n"
+        "1. Rely strictly on the document context and instructions below. Do NOT invoke filesystem search, shell commands, git, or web tools, and do NOT ask follow-up questions.\n"
+        "2. Output ONLY the final deliverable in the exact requested format (pure valid JSON when JSON is requested, or clean Markdown when Markdown is requested), with zero conversational preamble or closing remarks.\n"
+        "3. Prioritize high academic rigor: multi-step reasoning, misconception-grounded distractors, complete step-by-step explanations, and strict LaTeX formatting (`$...$` / `$$...$$`; double-escape all backslashes inside JSON strings).\n\n"
+        f"[System Instructions]\n{system_prompt}\n\n"
+        f"[Task]\n{user_prompt}"
+    )
+
+
 async def run_cli_harness(
     system_prompt: str,
     user_prompt: str,
@@ -923,7 +936,7 @@ async def run_cli_harness(
     if cancel_token:
         cancel_token.raise_if_cancelled()
 
-    combined_prompt = f"[System Instructions]\n{system_prompt}\n\n[Task]\n{user_prompt}"
+    combined_prompt = _build_cli_prompt(system_prompt, user_prompt)
     detected = {item.name: item for item in detect_installed_harnesses()}
     preferred = harness_config.preferred_cli
 

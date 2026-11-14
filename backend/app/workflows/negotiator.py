@@ -65,8 +65,9 @@ async def negotiate_study_blueprint(
         '    "mindmap_depth": 3\n'
         "  },\n"
         '  "focus_topics": ["重点概念1", "重点概念2"],\n'
-        '  "custom_instructions": "供后续生成阶段执行的详细指令"\n'
-        "}"
+        '  "custom_instructions": "给后续【阶段二】出题与讲义生成的具体教学指令：明确学科侧重点（如概念辨析/公式推导/定量计算/案例分析/边界条件）、高频易错点与干扰项设计方向"\n'
+        "}\n"
+        "请确保 `custom_instructions` 结合上传文档的学科特点给出可落地的出题导向，而非空泛复述。"
     )
 
     user_msg = (
