@@ -59,6 +59,7 @@ type AppViewMode =
 type MainViewKey = 'stage1_negotiate' | StudioTabKey;
 
 const OCR_SHORT_LABEL: Record<string, string> = {
+  auto_recommend: '自动OCR',
   mineru_pipeline: 'MinerU Pipeline',
   somark_free_api: 'Free-OXR API',
   paddleocr: 'PaddleOCR',
@@ -721,7 +722,16 @@ export function App() {
         {/* Top Liquid Glass Window Toolbar */}
         <header className="mac-sp-topbar mac-sp-glass no-print">
           {/* Left: Brand Logo + Collapsible Sidebar Toggle + Title */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              minWidth: 0,
+              overflow: 'hidden',
+              flex: '0 1 auto',
+            }}
+          >
             <img
               src="/logo.svg"
               alt="Auto Study Guidance Logo"
@@ -742,7 +752,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.12)',
                 backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 11px',
+                padding: '5px 10px',
                 fontSize: '12px',
                 fontWeight: 600,
                 color: '#1C1C1E',
@@ -750,20 +760,47 @@ export function App() {
                 alignItems: 'center',
                 gap: '5px',
                 cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
-              <PanelLeft className="w-3.5 h-3.5 text-[#007AFF]" />
-              <span>{sidebarOpen ? '收起边栏' : '展开边栏'}</span>
+              <PanelLeft className="w-3.5 h-3.5 text-[#007AFF] shrink-0" />
+              <span className="hidden sm:inline">{sidebarOpen ? '收起边栏' : '展开边栏'}</span>
             </SpringButton>
 
-            <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className="mac-sp-display" style={{ fontSize: '14.5px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+            <div
+              style={{
+                minWidth: 0,
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <span
+                className="mac-sp-display hidden 2xl:inline"
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 Auto Study Guidance
+              </span>
+              <span
+                className="mac-sp-display inline 2xl:hidden"
+                style={{
+                  fontSize: '13.5px',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                ASG
               </span>
               {documentIr && (
                 <span
-                  className="truncate hidden xl:inline"
-                  style={{ fontSize: '12px', color: '#636366', maxWidth: '180px' }}
+                  className="truncate hidden 2xl:inline"
+                  style={{ fontSize: '12px', color: '#636366', maxWidth: '150px' }}
                   title={documentIr.filename}
                 >
                   — {documentIr.filename}
@@ -773,7 +810,15 @@ export function App() {
           </div>
 
           {/* Center: Contextual ζ=1.0 Spring Stage / Studio Switcher + Undo Generation */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              flexShrink: 0,
+            }}
+          >
             <SpringSegmentedControl<MainViewKey>
               compact
               springLabel="工作区阶段"
@@ -794,7 +839,7 @@ export function App() {
                   border: '1px solid rgba(255, 149, 0, 0.35)',
                   backgroundColor: 'rgba(255, 149, 0, 0.1)',
                   color: '#B45309',
-                  padding: '5px 11px',
+                  padding: '5px 10px',
                   fontSize: '11.5px',
                   fontWeight: 700,
                   display: 'inline-flex',
@@ -802,17 +847,26 @@ export function App() {
                   gap: '4px',
                   cursor: 'pointer',
                   whiteSpace: 'nowrap',
+                  flexShrink: 0,
                 }}
                 title="撤销当前生成的 Stage 2 学习资料，返回 Stage 1 方案定制页面"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                 <span>撤销生成</span>
               </SpringButton>
             )}
           </div>
 
           {/* Right: First-Time Guide + Push Receiver + VRAM Badge + Spotlight + 3-Tier Router */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              position: 'relative',
+              flexShrink: 0,
+            }}
+          >
             <SpringButton
               springLabel="液态玻璃切换"
               onClick={() => setLiquidGlass((v) => !v)}
@@ -825,7 +879,7 @@ export function App() {
                 backgroundColor: liquidGlass
                   ? 'rgba(0, 122, 255, 0.14)'
                   : 'rgba(255, 255, 255, 0.88)',
-                padding: '5px 9px',
+                padding: '5px 8px',
                 fontSize: '11px',
                 fontWeight: 700,
                 color: liquidGlass ? '#007AFF' : '#475569',
@@ -834,11 +888,12 @@ export function App() {
                 gap: '4px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
               title={liquidGlass ? '当前为 Liquid Glass 液态玻璃界面（点击切换标准界面）' : '切换为 Apple Liquid Glass 液态玻璃界面'}
             >
-              <Droplets className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">{liquidGlass ? '液态玻璃' : '标准材质'}</span>
+              <Droplets className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden 2xl:inline">{liquidGlass ? '液态玻璃' : '标准材质'}</span>
             </SpringButton>
 
             <SpringButton
@@ -849,7 +904,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.14)',
                 backgroundColor: darkMode ? 'rgba(30, 41, 59, 0.92)' : 'rgba(255, 255, 255, 0.88)',
-                padding: '5px 9px',
+                padding: '5px 8px',
                 fontSize: '11px',
                 fontWeight: 700,
                 color: darkMode ? '#F8FAFC' : '#1C1C1E',
@@ -858,15 +913,16 @@ export function App() {
                 gap: '4px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
               title={darkMode ? '切换为浅色模式' : '切换为深色模式'}
             >
               {darkMode ? (
-                <Sun className="w-3.5 h-3.5 text-[#FBBF24]" />
+                <Sun className="w-3.5 h-3.5 text-[#FBBF24] shrink-0" />
               ) : (
-                <Moon className="w-3.5 h-3.5 text-[#475569]" />
+                <Moon className="w-3.5 h-3.5 text-[#475569] shrink-0" />
               )}
-              <span className="hidden lg:inline">{darkMode ? '浅色' : '深色'}</span>
+              <span className="hidden 2xl:inline">{darkMode ? '浅色' : '深色'}</span>
             </SpringButton>
 
             <SpringButton
@@ -877,7 +933,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(0, 122, 255, 0.25)',
                 backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                padding: '5px 10px',
+                padding: '5px 9px',
                 fontSize: '11px',
                 fontWeight: 700,
                 color: '#007AFF',
@@ -886,11 +942,12 @@ export function App() {
                 gap: '4px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
               title="查看新手指引与 3 分钟快速上手配置"
             >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">第一次使用？</span>
+              <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden lg:inline">第一次使用？</span>
             </SpringButton>
 
             <SpringButton
@@ -914,11 +971,12 @@ export function App() {
                 gap: '4px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
               title="检查并随时接收远端 Git Push 新版本"
             >
-              <DownloadCloud className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">
+              <DownloadCloud className="w-3.5 h-3.5 shrink-0" />
+              <span className={updateStatus?.has_update ? 'hidden xl:inline' : 'hidden 2xl:inline'}>
                 {updateStatus?.has_update
                   ? `新 Push (+${updateStatus.behind_count})`
                   : '版本同步'}
@@ -942,11 +1000,15 @@ export function App() {
                   alignItems: 'center',
                   gap: '4px',
                   cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
                 }}
                 title={providerStatus?.gpu_vram?.recommendation_reason || '查看显存检测与 OCR 部署配置'}
               >
-                <ScanText className="w-3 h-3 text-[#2E7D32]" />
-                <span className="mac-sp-tabular hidden lg:inline">{vramPillLabel()}</span>
+                <ScanText className="w-3 h-3 text-[#2E7D32] shrink-0" />
+                <span className="mac-sp-tabular hidden xl:inline max-w-[110px] truncate">
+                  {vramPillLabel()}
+                </span>
               </SpringButton>
             )}
 
@@ -958,7 +1020,7 @@ export function App() {
                 borderRadius: '999px',
                 border: '1px solid rgba(60, 60, 67, 0.12)',
                 backgroundColor: 'rgba(255, 255, 255, 0.88)',
-                padding: '6px 9px',
+                padding: '5px 8px',
                 fontSize: '11.5px',
                 fontWeight: 600,
                 color: '#1C1C1E',
@@ -966,9 +1028,11 @@ export function App() {
                 alignItems: 'center',
                 gap: '4px',
                 cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
-              <Search className="w-3 h-3 text-[#636366]" />
+              <Search className="w-3 h-3 text-[#636366] shrink-0" />
               <span className="hidden md:inline">⌘K</span>
             </SpringButton>
 
@@ -988,6 +1052,8 @@ export function App() {
                 alignItems: 'center',
                 gap: '6px',
                 cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
               <span
@@ -996,9 +1062,10 @@ export function App() {
                   height: 7,
                   borderRadius: '999px',
                   backgroundColor: activeProviderTint(),
+                  flexShrink: 0,
                 }}
               />
-              <span className="max-w-[130px] truncate">{activeEngineLabel()}</span>
+              <span className="max-w-[125px] truncate">{activeEngineLabel()}</span>
             </SpringButton>
 
             <SpringButton
@@ -1014,6 +1081,7 @@ export function App() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
+                flexShrink: 0,
               }}
               title="路由、CLI Harness 与显存分级 OCR 配置"
             >
