@@ -212,14 +212,7 @@ class HeuristicStudyEngine:
                     lines.append(f"- {p}")
                 lines.append("")
 
-            if ch.assets:
-                lines.append("### 原书 / 课件关键配图")
-                for asset in ch.assets[:3]:
-                    lines.append(f"![{asset.caption}]({asset.url})")
-                    lines.append(f"*{asset.caption}*")
-                    if asset.ocr_text:
-                        lines.append(f"> 图片文字提取：{asset.ocr_text[:200]}")
-                    lines.append("")
+            # 讲义不附教材原图：这里不再输出任何图片链接或配图清单。
 
             if preset_id in ("self_study_guide", "sync_practice") or blueprint.deliverables.notes_style == "guided_learning":
                 ex_term = defs[0][0] if defs else (ch.key_terms[0] if ch.key_terms else ch.title)

@@ -4,217 +4,33 @@ import html
 import io
 import re
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import pymupdf
 
 from app.schemas import DocumentIR, QuizQuestion, StudyPackage
-from app.workflows.generator import normalize_markdown_math
+from app.workflows.generator import normalize_markdown_math, strip_document_images
+from app.workflows.latex_render import render_math
 
 PaperSize = Literal["a4", "a3"]
 PdfDocType = Literal["quiz", "study_guide", "cheatsheet"]
 
-_MATH_SYMBOLS: List[Tuple[str, str]] = [
-    (r"\partial", "∂"),
-    (r"\nabla", "∇"),
-    (r"\infty", "∞"),
-    (r"\sigma", "σ"),
-    (r"\theta", "θ"),
-    (r"\Theta", "Θ"),
-    (r"\eta", "η"),
-    (r"\lambda", "λ"),
-    (r"\Lambda", "Λ"),
-    (r"\alpha", "α"),
-    (r"\beta", "β"),
-    (r"\gamma", "γ"),
-    (r"\delta", "δ"),
-    (r"\Delta", "Δ"),
-    (r"\epsilon", "ε"),
-    (r"\varepsilon", "ε"),
-    (r"\phi", "φ"),
-    (r"\Phi", "Φ"),
-    (r"\psi", "ψ"),
-    (r"\omega", "ω"),
-    (r"\Omega", "Ω"),
-    (r"\mu", "μ"),
-    (r"\pi", "π"),
-    (r"\rho", "ρ"),
-    (r"\tau", "τ"),
-    (r"\sum", "∑"),
-    (r"\prod", "∏"),
-    (r"\int", "∫"),
-    (r"\cdot", "·"),
-    (r"\times", "×"),
-    (r"\div", "÷"),
-    (r"\pm", "±"),
-    (r"\mp", "∓"),
-    (r"\le", "≤"),
-    (r"\leq", "≤"),
-    (r"\ge", "≥"),
-    (r"\geq", "≥"),
-    (r"\neq", "≠"),
-    (r"\approx", "≈"),
-    (r"\equiv", "≡"),
-    (r"\in", "∈"),
-    (r"\notin", "∉"),
-    (r"\subset", "⊂"),
-    (r"\subseteq", "⊆"),
-    (r"\forall", "∀"),
-    (r"\exists", "∃"),
-    (r"\leftarrow", "←"),
-    (r"\rightarrow", "→"),
-    (r"\Rightarrow", "⇒"),
-    (r"\leftrightarrow", "↔"),
-    (r"\to", "→"),
-    (r"\lfloor", "⌊"),
-    (r"\rfloor", "⌋"),
-    (r"\lceil", "⌈"),
-    (r"\rceil", "⌉"),
-    (r"\parallel", "‖"),
-    (r"\|", "‖"),
-    (r"\mid", "|"),
-    (r"\ldots", "…"),
-    (r"\cdots", "⋯"),
-    (r"\quad", "  "),
-    (r"\qquad", "    "),
-    (r"\;", " "),
-    (r"\,", " "),
-    (r"\%", "%"),
-    (r"\ ", " "),
-    (r"\_", "_"),
-    (r"\odot", "⊙"),
-    (r"\otimes", "⊗"),
-    (r"\oplus", "⊕"),
-    (r"\top", "ᵀ"),
-    (r"\intercal", "ᵀ"),
-    (r"\circ", "∘"),
-    (r"\star", "⋆"),
-    (r"\ast", "∗"),
-    (r"\prime", "′"),
-    (r"\dagger", "†"),
-    (r"\hbar", "ℏ"),
-    (r"\ell", "ℓ"),
-    (r"\propto", "∝"),
-    (r"\sim", "∼"),
-    (r"\simeq", "≃"),
-    (r"\ll", "≪"),
-    (r"\gg", "≫"),
-    (r"\cap", "∩"),
-    (r"\cup", "∪"),
-    (r"\emptyset", "∅"),
-    (r"\Leftrightarrow", "⇔"),
-    (r"\uparrow", "↑"),
-    (r"\downarrow", "↓"),
-    (r"\mapsto", "↦"),
-    (r"\xi", "ξ"),
-    (r"\zeta", "ζ"),
-    (r"\kappa", "κ"),
-    (r"\nu", "ν"),
-    (r"\chi", "χ"),
-    (r"\Sigma", "Σ"),
-    (r"\Pi", "Π"),
-    (r"\Gamma", "Γ"),
-    (r"\Psi", "Ψ"),
-    (r"\vartheta", "ϑ"),
-    (r"\varphi", "φ"),
-]
-
-# Alphabetic commands must match on a word boundary (so `\to` never eats `\top`, `\le` never eats `\leftarrow`).
-_MATH_SYMBOL_RES: List[Tuple[re.Pattern[str], str]] = [
-    (
-        re.compile(re.escape(k) + (r"(?![A-Za-z])" if k[1:].isalpha() else "")),
-        v,
-    )
-    for k, v in sorted(_MATH_SYMBOLS, key=lambda kv: -len(kv[0]))
-]
-
-
-def _extract_brace_arg(s: str, pos: int) -> Tuple[str, int]:
-    """Read `{...}` starting at s[pos]=='{', returning (inner, next_pos)."""
-    if pos >= len(s) or s[pos] != "{":
-        return "", pos
-    depth = 1
-    i = pos + 1
-    n = len(s)
-    while i < n and depth > 0:
-        if s[i] == "{":
-            depth += 1
-        elif s[i] == "}":
-            depth -= 1
-        i += 1
-    return s[pos + 1 : i - 1], i
-
-
-def _replace_frac_commands(expr: str) -> str:
-    """Convert \\frac{num}{den} and \\dfrac{num}{den} into clear printable fractions."""
-    for _ in range(4):
-        m = re.search(r"\\d?frac\s*\{", expr)
-        if not m:
-            break
-        start = m.start()
-        num, p1 = _extract_brace_arg(expr, m.end() - 1)
-        while p1 < len(expr) and expr[p1].isspace():
-            p1 += 1
-        if p1 < len(expr) and expr[p1] == "{":
-            den, p2 = _extract_brace_arg(expr, p1)
-        else:
-            den, p2 = (expr[p1 : p1 + 1], p1 + 1) if p1 < len(expr) else ("", p1)
-        num_clean = num.strip()
-        den_clean = den.strip()
-        if len(num_clean) > 3 or " " in num_clean or "+" in num_clean or "-" in num_clean:
-            num_fmt = f"({num_clean})"
-        else:
-            num_fmt = num_clean
-        if len(den_clean) > 3 or " " in den_clean or "+" in den_clean or "-" in den_clean or "√" in den_clean:
-            den_fmt = f"({den_clean})"
-        else:
-            den_fmt = den_clean
-        expr = expr[:start] + f"{num_fmt}/{den_fmt}" + expr[p2:]
-    return expr
-
-
-def _replace_sqrt_commands(expr: str) -> str:
-    for _ in range(4):
-        m = re.search(r"\\sqrt\s*\{", expr)
-        if not m:
-            break
-        inner, p_end = _extract_brace_arg(expr, m.end() - 1)
-        expr = expr[: m.start()] + f"√({inner.strip()})" + expr[p_end:]
-    return expr
-
-
-def _replace_text_wrappers(expr: str) -> str:
-    for cmd in ("text", "mathrm", "mathbf", "boldsymbol", "operatorname"):
-        pattern = re.compile(rf"\\{cmd}\s*\{{")
-        for _ in range(6):
-            m = pattern.search(expr)
-            if not m:
-                break
-            inner, p_end = _extract_brace_arg(expr, m.end() - 1)
-            expr = expr[: m.start()] + inner + expr[p_end:]
-    return expr
+# ---------------------------------------------------------------------------
+# Math rendering
+# ---------------------------------------------------------------------------
+# The print pipeline feeds HTML to PyMuPDF Story, which has no TeX engine, so the
+# LaTeX subset used by the prompts is converted by `latex_render` (real <sup>/<sub>,
+# staged fractions in display math, a full symbol table, no leaked control words).
 
 
 def _latex_expr_to_html(expr: str) -> str:
-    s = expr.strip()
-    s = s.replace(r"\left", "").replace(r"\right", "")
-    s = _replace_text_wrappers(s)
-    s = _replace_frac_commands(s)
-    s = _replace_sqrt_commands(s)
-    for pat, v in _MATH_SYMBOL_RES:
-        s = pat.sub(lambda _m, _v=v: _v, s)
-    # Transpose written as ^\top / ^T after symbol replacement: drop the redundant caret
-    s = s.replace("^ᵀ", "ᵀ").replace("^{ᵀ}", "ᵀ")
-    # Remove any leftover unknown backslash before plain word tokens cleanly
-    s = re.sub(r"\\([A-Za-z]+)", r"\1", s)
-    s = html.escape(s)
-    # Render ^{...} / ^x and _{...} / _x using HTML sup/sub tags
-    for _ in range(4):
-        s = re.sub(r"\^\{([^{}]+)\}", r"<sup>\1</sup>", s)
-        s = re.sub(r"_\{([^{}]+)\}", r"<sub>\1</sub>", s)
-    s = re.sub(r"\^([A-Za-z0-9\+\-\*])", r"<sup>\1</sup>", s)
-    s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
-    return f'<span class="math">{s}</span>'
+    """Render inline LaTeX math ($…$) as printable HTML."""
+    return render_math(expr, display=False)
+
+
+def _latex_display_to_html(expr: str) -> str:
+    """Render display LaTeX math ($$…$$) as printable HTML (staged fractions)."""
+    return render_math(expr, display=True)
 
 
 def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
@@ -248,7 +64,7 @@ def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
     # Display math inside line
     work = re.sub(
         r"\$\$([\s\S]*?)\$\$",
-        lambda m: _stash(f'<div class="math-block">{_latex_expr_to_html(m.group(1))}</div>'),
+        lambda m: _stash(f'<div class="math-block">{_latex_display_to_html(m.group(1))}</div>'),
         work,
     )
     # Inline math $...$
@@ -292,6 +108,78 @@ def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
     return escaped
 
 
+_MERMAID_ARROW_RE = re.compile(r"\s*(?:-{2,}>|={2,}>|-\.->|-{3}|={3}|--[ox])\s*(?:\|[^|]*\|)?")
+_MERMAID_NODE_RE = re.compile(r"([A-Za-z0-9_]+)\s*(?:\[|\(|\{)+([^\]\)\}]*)[\]\)\}]+")
+
+
+def _mermaid_to_outline_html(code: str) -> str:
+    """Turn a Mermaid flowchart into a printable outline tree.
+
+    Story cannot run Mermaid, and printing the raw source is noise for a learner, so the
+    diagram is flattened into the same hierarchy as an indented list (root → children).
+    """
+    labels: Dict[str, str] = {}
+    edges: List[Tuple[str, str]] = []
+    order: List[str] = []
+
+    def _clean(text: str) -> str:
+        text = re.sub(r"<br\s*/?>", " ", text)
+        text = text.replace('"', "").replace("'", "").strip()
+        return re.sub(r"\s+", " ", text)
+
+    for raw_line in code.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("flowchart", "graph", "mindmap", "%%", "direction", "classDef", "style", "subgraph", "end")):
+            continue
+        for match in _MERMAID_NODE_RE.finditer(line):
+            node_id, label = match.group(1), _clean(match.group(2))
+            if node_id not in labels:
+                labels[node_id] = label or node_id
+                order.append(node_id)
+        flattened = _MERMAID_NODE_RE.sub(lambda m: m.group(1), line)
+        parts = [p.strip() for p in _MERMAID_ARROW_RE.split(flattened) if p.strip()]
+        ids = [p for p in parts if re.fullmatch(r"[A-Za-z0-9_]+", p)]
+        for left, right in zip(ids, ids[1:]):
+            if left != right:
+                edges.append((left, right))
+
+    if not labels or not edges:
+        return ""
+
+    children: Dict[str, List[str]] = {}
+    has_parent = set()
+    for left, right in edges:
+        bucket = children.setdefault(left, [])
+        if right not in bucket:
+            bucket.append(right)
+            has_parent.add(right)
+    roots = [node for node in order if node not in has_parent]
+
+    def _node_html(node_id: str, depth: int, trail: Tuple[str, ...]) -> str:
+        label = html.escape(labels.get(node_id, node_id))
+        kids = [k for k in children.get(node_id, []) if k not in trail]
+        if not kids or depth >= 5:
+            return f"<li>{label}</li>"
+        inner = "".join(_node_html(kid, depth + 1, trail + (kid,)) for kid in kids)
+        return f"<li>{label}<ul class=\"map-list\">{inner}</ul></li>"
+
+    items: List[str] = []
+    covered = set()
+    for root in roots or order[:1]:
+        items.append(_node_html(root, 0, (root,)))
+        covered.add(root)
+    for node in order:
+        if node not in covered and node not in has_parent:
+            items.append(_node_html(node, 0, (node,)))
+
+    if not items:
+        return ""
+    return (
+        '<div class="map-title">知识脉络导图（图谱结构）</div>'
+        f'<ul class="map-list">{"".join(items)}</ul>'
+    )
+
+
 def _markdown_to_block_list(
     md_text: str,
     *,
@@ -325,15 +213,22 @@ def _markdown_to_block_list(
             i += 1
             continue
 
-        # Code block ```
+        # Code block ```  (a Mermaid diagram is flattened into a printable outline)
         if stripped.startswith("```"):
+            fence_lang = stripped[3:].strip().lower()
             code_lines: List[str] = []
             i += 1
             while i < n and not lines[i].strip().startswith("```"):
                 code_lines.append(lines[i])
                 i += 1
             i += 1
-            code_body = html.escape("\n".join(code_lines))
+            raw_code = "\n".join(code_lines)
+            if fence_lang.startswith("mermaid"):
+                outline = _mermaid_to_outline_html(raw_code)
+                if outline:
+                    blocks.append(("block", outline))
+                    continue
+            code_body = html.escape(raw_code)
             blocks.append(("block", f"<pre class='code-box'>{code_body}</pre>"))
             continue
 
@@ -356,7 +251,7 @@ def _markdown_to_block_list(
                         math_lines.append(tail)
                     i += 1
                 expr = "\n".join(math_lines)
-            blocks.append(("block", f'<div class="math-block">{_latex_expr_to_html(expr)}</div>'))
+            blocks.append(("block", f'<div class="math-block">{_latex_display_to_html(expr)}</div>'))
             continue
 
         # Horizontal rule
@@ -931,10 +826,29 @@ body {
 .math {
   font-family: "Cambria Math", "Times New Roman", "Microsoft YaHei", serif;
 }
+.math sup, .math sub {
+  font-size: 66%;
+}
+.math-display {
+  font-size: 10.5pt;
+}
 .math-block {
   text-align: center;
   margin: 5pt 0;
   font-size: 10pt;
+}
+.map-list {
+  margin: 3pt 0 4pt 12pt;
+  padding-left: 8pt;
+  font-size: 9.2pt;
+}
+.map-list li {
+  margin-bottom: 1.5pt;
+}
+.map-title {
+  font-size: 8.6pt;
+  color: #475569;
+  margin: 5pt 0 2pt 0;
 }
 .section-rule {
   border: none;
@@ -1301,7 +1215,7 @@ def export_study_guide_pdf_bytes(
     </table>
     """
 
-    notes_md = package.study_notes_markdown or "暂无导学笔记正文。"
+    notes_md = strip_document_images(package.study_notes_markdown or "暂无导学笔记正文。")
     notes_html = _markdown_to_print_html(notes_md, assets_dir=assets_dir, highlight_examples=True)
     examples_html = (
         _build_study_guide_companion_examples_html(package, assets_dir=assets_dir)
@@ -1335,7 +1249,7 @@ def export_cheatsheet_pdf_bytes(
     assets_dir: Optional[Path] = None,
 ) -> bytes:
     """Export Cheat Sheet as a crisp printable A4 or A3 reference card PDF."""
-    cs_md = package.cheatsheet_markdown or "暂无考前速记表内容。"
+    cs_md = strip_document_images(package.cheatsheet_markdown or "暂无考前速记表内容。")
     header = f"""
     <div class="guide-masthead">
       <div class="guide-badge">HIGH-DENSITY EXAM CHEAT SHEET · 考前冲刺速记手册</div>

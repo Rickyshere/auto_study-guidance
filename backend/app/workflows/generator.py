@@ -159,6 +159,22 @@ def _unescape_non_math_percent_and_space(line: str) -> str:
     return "".join(parts)
 
 
+def strip_document_images(text: str) -> str:
+    """Remove embedded 教材/课件原图 links from generated prose.
+
+    The learner asked for hand-outs that explain concepts in words, tables and LaTeX
+    instead of pasting screenshots of the source pages, so every `![alt](url)` is
+    dropped here (generation) and again at export time as a safety net.
+    """
+    if not text or "![" not in text:
+        return text
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)\s]*\)", "", text)
+    cleaned = re.sub(r"!\[[^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip("\n")
+
+
 def normalize_markdown_math(text: str) -> str:
     """Normalize LaTeX delimiters for remark-math/rehype-katex, expand inline tables, and escape table math pipes."""
     if not text:
@@ -239,14 +255,11 @@ def _collect_chapters_context(chapters: List[ChapterNode], max_chars: int = 2400
     blocks: List[str] = []
     budget_per_ch = max(1200, max_chars // max(1, len(chapters)))
     for ch in chapters:
-        asset_note = ""
-        if ch.assets:
-            asset_links = ", ".join(f"![{a.caption}]({a.url})" for a in ch.assets[:3])
-            asset_note = f"\n[本节可引用的原书/课件配图 Markdown]: {asset_links}"
+        # 讲义不引用教材/课件原图：只喂养文字内容，避免生成的正文里出现原书截图链接。
         snippet = ch.content_text[:budget_per_ch]
         blocks.append(
             f"=== 章节 [{ch.chapter_id}] {ch.title} (页码/幻灯片: {ch.start_page}-{ch.end_page}) ===\n"
-            f"{snippet}{asset_note}"
+            f"{snippet}"
         )
     return "\n\n".join(blocks)
 
@@ -809,7 +822,7 @@ async def _run_generate_study_package(
             res_notes, _ = await router.execute_text("notes_and_cheatsheet", notes_sys, notes_user)
             if not res_notes or not res_notes.strip():
                 raise RuntimeError(f"AI 未生成有效的{notes_label}内容，请检查模型配置后重试。")
-            study_notes_md = normalize_markdown_math(res_notes)
+            study_notes_md = strip_document_images(normalize_markdown_math(res_notes))
             await _advance_progress("notes", f"✓ 已完成【{notes_label}】")
 
     async def _task_cheatsheet() -> None:
@@ -828,7 +841,7 @@ async def _run_generate_study_package(
             res_cs, _ = await router.execute_text("notes_and_cheatsheet", cs_sys, cs_user)
             if not res_cs or not res_cs.strip():
                 raise RuntimeError("AI 未生成有效的考前速记表内容，请重试。")
-            cheatsheet_md = normalize_markdown_math(res_cs)
+            cheatsheet_md = strip_document_images(normalize_markdown_math(res_cs))
             await _advance_progress("cheatsheet", "✓ 已完成【考前速记表】")
 
     async def _task_paper(pid: str) -> None:

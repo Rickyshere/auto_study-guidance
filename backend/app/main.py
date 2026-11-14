@@ -76,7 +76,7 @@ from app.workflows import (
     negotiate_study_blueprint,
 )
 from app.workflows.demo_project import create_demo_courseware_project
-from app.workflows.generator import normalize_markdown_math
+from app.workflows.generator import normalize_markdown_math, strip_document_images
 from app.workflows.pdf_exporter import (
     export_cheatsheet_pdf_bytes,
     export_quiz_pdf_bytes,
@@ -147,8 +147,13 @@ def _load_package(project_id: str) -> Optional[StudyPackage]:
         pkg = StudyPackage.model_validate_json(pkg_path.read_text(encoding="utf-8"))
         return pkg.model_copy(
             update={
-                "study_notes_markdown": normalize_markdown_math(pkg.study_notes_markdown),
-                "cheatsheet_markdown": normalize_markdown_math(pkg.cheatsheet_markdown),
+                # 讲义/速记不附教材原图：老项目在读盘时也一并清理内联截图链接。
+                "study_notes_markdown": strip_document_images(
+                    normalize_markdown_math(pkg.study_notes_markdown)
+                ),
+                "cheatsheet_markdown": strip_document_images(
+                    normalize_markdown_math(pkg.cheatsheet_markdown)
+                ),
             }
         )
     return None
