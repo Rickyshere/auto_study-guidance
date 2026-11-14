@@ -178,8 +178,7 @@ class ModelRouter:
             # Default & only other engine: Magpie + DeepSeek Harness (or CLI harness)
             free_auth = self.settings.free_ai_auth
             if (
-                self.settings.harness_config.preferred_cli == "dsh"
-                and free_auth.preferred_proxy_mode == "magpie_dsh"
+                free_auth.preferred_proxy_mode == "magpie_dsh"
                 and not free_auth.authorized_use_local_ai
             ):
                 raise RuntimeError(
@@ -194,7 +193,7 @@ class ModelRouter:
                 status_cb=lambda msg: self._emit_stage_status(stage, msg),
                 free_ai_auth=free_auth,
             )
-            if self.settings.harness_config.preferred_cli == "dsh" and free_auth.preferred_proxy_mode == "magpie_dsh":
+            if free_auth.preferred_proxy_mode == "magpie_dsh":
                 label = f"harness/magpie-dsh ({free_auth.selected_free_model})"
             else:
                 label = f"harness/{self.settings.harness_config.preferred_cli}-cli"

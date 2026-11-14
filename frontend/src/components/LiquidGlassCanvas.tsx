@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 export interface LiquidGlassOptics {
   ior: number;        // 1.00 - 2.50 (default 1.46)
@@ -10,18 +10,7 @@ export interface LiquidGlassOptics {
 interface LiquidGlassCanvasProps {
   isDark: boolean;
   optics: LiquidGlassOptics;
-  resetTrigger?: number;
-  onSelectFlashcards?: () => void;
   onWebglUnavailable?: () => void;
-}
-
-interface PillState {
-  x: number;
-  y: number;
-  tx: number;
-  ty: number;
-  halfLen: number;
-  radius: number;
 }
 
 const BLOBS = [
@@ -66,13 +55,9 @@ const GLASS_FRAG_SRC = `
   uniform sampler2D uBackdrop;
 
   uniform vec4 uView;
-  uniform vec4 uGlassA;
-  uniform vec4 uGlassB;
-  uniform vec4 uDroplet;   // Unused / 0.0 (no cursor glass)
   uniform vec4 uOptics;    // x=ior, y=disp, z=smoothK, w=blur
   uniform vec4 uSurface;   // x=bezel, y=depth, z=specIntensity, w=tintStrength
   uniform float uLightMode;
-  uniform float uLayer;    // 0.0=panels, 1.0=metaballs
 
   uniform vec4 uPanelRects[16];
   uniform vec4 uPanelMeta[16];
@@ -85,15 +70,6 @@ const GLASS_FRAG_SRC = `
     if (abs(den) < EPS) den = den < 0.0 ? -EPS : EPS;
     float t = clamp((x - e0) / den, 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
-  }
-
-  float sdCapsule(vec2 p, vec4 cap) {
-    vec2 q = p - cap.xy;
-    float hl = max(cap.z, EPS);
-    vec2 pa = vec2(q.x + hl, q.y);
-    vec2 ba = vec2(2.0 * hl, 0.0);
-    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-    return length(pa - ba * h) - cap.w;
   }
 
   float sdRoundBox(vec2 p, vec2 c, vec2 b, float r) {
@@ -109,49 +85,27 @@ const GLASS_FRAG_SRC = `
     return mix(b, a, h) - kk * h * (1.0 - h);
   }
 
-  float blobsSdf(vec2 p) {
-    return smin(sdCapsule(p, uGlassA), sdCapsule(p, uGlassB), uOptics.z);
-  }
-
-  float hardSdf(vec2 p) {
-    return min(sdCapsule(p, uGlassA), sdCapsule(p, uGlassB));
-  }
-
   float uiPanelsSdf(vec2 p, out float outBezel, out float outBodyMix) {
     float d = 10000.0;
     outBezel = uSurface.x;
     outBodyMix = 0.0;
+    float k = clamp(uOptics.z, 0.0, 90.0) * 0.35;
     for (int i = 0; i < 16; i++) {
       if (uPanelMeta[i].w > 0.5) {
         float pd = sdRoundBox(p, uPanelRects[i].xy, uPanelRects[i].zw, uPanelMeta[i].x);
         if (pd < d) {
-          d = pd;
           outBezel = uPanelMeta[i].y;
           outBodyMix = uPanelMeta[i].z;
         }
+        d = smin(d, pd, k);
       }
     }
     return d;
   }
 
-  float sceneSdf(vec2 p, out float outBezel, out float outBodyMix, out float isBlob) {
-    if (uLayer > 0.5) {
-      outBezel = uSurface.x;
-      outBodyMix = 0.0;
-      isBlob = 1.0;
-      return blobsSdf(p);
-    }
-    float bBezel, bMix;
-    float dp = uiPanelsSdf(p, bBezel, bMix);
-    outBezel = bBezel;
-    outBodyMix = bMix;
-    isBlob = 0.0;
-    return dp;
-  }
-
   float sceneOnlyDist(vec2 p) {
-    float dummy1, dummy2, dummy3;
-    return sceneSdf(p, dummy1, dummy2, dummy3);
+    float dummy1, dummy2;
+    return uiPanelsSdf(p, dummy1, dummy2);
   }
 
   vec2 gradAt(vec2 p) {
@@ -166,12 +120,12 @@ const GLASS_FRAG_SRC = `
 
   void main() {
     vec2 p = vDip;
-    float bezel, bodyMix, isBlob;
-    float d = sceneSdf(p, bezel, bodyMix, isBlob);
+    float bezel, bodyMix;
+    float d = uiPanelsSdf(p, bezel, bodyMix);
 
     float aa = 1.15;
     float cover = 1.0 - sstep(-aa, aa, d);
-    float shadowOpacity = uLightMode > 0.5 ? (isBlob > 0.5 ? 0.22 : 0.10) : 0.45;
+    float shadowOpacity = uLightMode > 0.5 ? 0.10 : 0.45;
     float shadow = (1.0 - sstep(0.0, 38.0, d)) * (1.0 - cover) * shadowOpacity;
 
     if (cover <= 0.0008 && shadow <= 0.0008) {
@@ -184,19 +138,19 @@ const GLASS_FRAG_SRC = `
       return;
     }
 
-    float bz = max(bezel, 2.0);
+    float bz = max(bezel, 2.0) * (1.0 + clamp(uOptics.z, 0.0, 90.0) / 180.0);
     float inner = clamp(-d / bz, 0.0, 1.0);
     float slope = pow(max(0.0, 1.0 - inner * inner), 0.78);
 
     vec2 n = gradAt(p);
     vec2 ripple = vec2(sin(p.y * 0.047 + uView.z * 1.9),
-                       cos(p.x * 0.041 - uView.z * 1.6)) * 0.05 * slope * (0.45 + 0.55 * isBlob);
+                       cos(p.x * 0.041 - uView.z * 1.6)) * 0.032 * slope;
     vec2 nn = normalize(n + ripple);
 
     float ior = clamp(uOptics.x, 1.0, 2.5);
     float depth = max(uSurface.y, 0.0);
     float flow = 0.72 + 0.28 * sin(uView.z * 1.15 + (p.x + p.y) * 0.010);
-    float amp = slope * depth * ((ior - 1.0) / 0.5) * flow * (isBlob > 0.5 ? 1.0 : 0.75);
+    float amp = slope * depth * ((ior - 1.0) / 0.5) * flow * 0.85;
     float disp = clamp(uOptics.y, 0.0, 1.0) * 0.30;
     float blurMix = clamp(uOptics.w, 0.0, 1.0) * (0.28 + 0.72 * pow(1.0 - inner, 1.4));
 
@@ -235,7 +189,7 @@ const GLASS_FRAG_SRC = `
     float edgeLine = pow(clamp(1.0 - abs(d + 0.9) / 2.4, 0.0, 1.0), 2.2);
     col += edgeLine * (uLightMode > 0.5 ? 0.38 : 0.16) * iceRim;
     if (uLightMode > 0.5) {
-      col = mix(col, vec3(0.74, 0.82, 0.94), edgeLine * (isBlob > 0.5 ? 0.44 : 0.24));
+      col = mix(col, vec3(0.74, 0.82, 0.94), edgeLine * 0.24);
       col.r -= disp * rim * 0.20 * (0.35 + 0.65 * max(nn.x, 0.0));
       col.g -= disp * rim * 0.07;
       col.b -= disp * rim * 0.13 * (0.35 + 0.65 * max(-nn.x, 0.0));
@@ -244,12 +198,6 @@ const GLASS_FRAG_SRC = `
       col.b += disp * rim * 0.24;
     }
     col += specular * (uLightMode > 0.5 ? vec3(1.0) * 0.72 : vec3(0.92, 0.95, 1.0) * 0.85);
-
-    if (isBlob > 0.5) {
-      float glue = hardSdf(p) - blobsSdf(p);
-      float bridge = clamp(glue * 0.42, 0.0, 1.0) * clamp(uOptics.z / 24.0, 0.0, 1.0);
-      col += bridge * (uLightMode > 0.5 ? -0.05 * vec3(0.45, 0.18, 0.0) : 0.22 * vec3(0.72, 0.84, 1.0));
-    }
 
     float aOut = cover + (1.0 - cover) * shadow;
     vec3 pm = clamp(col, 0.0, 1.0) * cover + shadowTint * (1.0 - cover) * shadow;
@@ -260,56 +208,14 @@ const GLASS_FRAG_SRC = `
 export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
   isDark,
   optics,
-  resetTrigger = 0,
-  onSelectFlashcards,
   onWebglUnavailable,
 }) => {
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pill0Ref = useRef<HTMLDivElement | null>(null);
-  const pill1Ref = useRef<HTMLDivElement | null>(null);
-  const [pillsReady, setPillsReady] = useState(false);
 
   const darkRef = useRef(isDark);
   darkRef.current = isDark;
   const opticsRef = useRef(optics);
   opticsRef.current = optics;
-  const onFlashcardsRef = useRef(onSelectFlashcards);
-  onFlashcardsRef.current = onSelectFlashcards;
-
-  const pillsStateRef = useRef<{
-    pills: [PillState, PillState];
-    initialised: boolean;
-    manuallyMoved: boolean;
-    lastW: number;
-    lastH: number;
-  }>({
-    pills: [
-      { x: 0, y: 0, tx: 0, ty: 0, halfLen: 64, radius: 22 },
-      { x: 0, y: 0, tx: 0, ty: 0, halfLen: 36, radius: 20 },
-    ],
-    initialised: false,
-    manuallyMoved: false,
-    lastW: 0,
-    lastH: 0,
-  });
-
-  useEffect(() => {
-    if (resetTrigger > 0) {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const dockY = Math.max(220, h - 44);
-      const x0 = Math.max(220, w - 220);
-      const x1 = Math.max(x0 + 150, w - 70);
-      const st = pillsStateRef.current;
-      st.manuallyMoved = false;
-      st.lastW = w;
-      st.lastH = h;
-      st.pills[0].tx = x0;
-      st.pills[0].ty = dockY;
-      st.pills[1].tx = x1;
-      st.pills[1].ty = dockY;
-    }
-  }, [resetTrigger]);
 
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
@@ -405,13 +311,9 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
       uBackground: gl.getUniformLocation(glassCompiled.prog, 'uBackground'),
       uBackdrop: gl.getUniformLocation(glassCompiled.prog, 'uBackdrop'),
       uView: gl.getUniformLocation(glassCompiled.prog, 'uView'),
-      uGlassA: gl.getUniformLocation(glassCompiled.prog, 'uGlassA'),
-      uGlassB: gl.getUniformLocation(glassCompiled.prog, 'uGlassB'),
-      uDroplet: gl.getUniformLocation(glassCompiled.prog, 'uDroplet'),
       uOptics: gl.getUniformLocation(glassCompiled.prog, 'uOptics'),
       uSurface: gl.getUniformLocation(glassCompiled.prog, 'uSurface'),
       uLightMode: gl.getUniformLocation(glassCompiled.prog, 'uLightMode'),
-      uLayer: gl.getUniformLocation(glassCompiled.prog, 'uLayer'),
       uPanelRects: Array.from({ length: 16 }, (_, i) =>
         gl.getUniformLocation(glassCompiled.prog, `uPanelRects[${i}]`)
       ),
@@ -429,58 +331,6 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
       onWebglUnavailable?.();
       return;
     }
-
-    setPillsReady(true);
-
-    // Drag interactions for bottom-right metaball capsules
-    let dragIdx = -1;
-    let dragGrabX = 0;
-    let dragGrabY = 0;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let movedThisPress = false;
-
-    const onPtrMove = (e: PointerEvent) => {
-      if (dragIdx >= 0) {
-        if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 4) {
-          movedThisPress = true;
-          pillsStateRef.current.manuallyMoved = true;
-        }
-        const p = pillsStateRef.current.pills[dragIdx];
-        p.tx = e.clientX - dragGrabX;
-        p.ty = e.clientY - dragGrabY;
-      }
-    };
-
-    const onPtrUp = () => {
-      if (dragIdx === 1 && !movedThisPress) {
-        onFlashcardsRef.current?.();
-      }
-      dragIdx = -1;
-    };
-
-    const makeDownHandler = (idx: 0 | 1) => (e: PointerEvent) => {
-      const p = pillsStateRef.current.pills[idx];
-      dragIdx = idx;
-      dragStartX = e.clientX;
-      dragStartY = e.clientY;
-      movedThisPress = false;
-      dragGrabX = e.clientX - p.x;
-      dragGrabY = e.clientY - p.y;
-      (e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId);
-      e.preventDefault();
-    };
-
-    const down0 = makeDownHandler(0);
-    const down1 = makeDownHandler(1);
-    const p0El = pill0Ref.current;
-    const p1El = pill1Ref.current;
-
-    p0El?.addEventListener('pointerdown', down0);
-    p1El?.addEventListener('pointerdown', down1);
-    window.addEventListener('pointermove', onPtrMove);
-    window.addEventListener('pointerup', onPtrUp);
-    window.addEventListener('pointercancel', onPtrUp);
 
     const gatherDomPanels = () => {
       const els = document.querySelectorAll<HTMLElement>('[data-glass-panel]');
@@ -581,7 +431,7 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
       });
       c.restore();
 
-      // Architectural 46px coordinate grid for visible lens refraction
+      // Architectural 46px coordinate grid for subtle lens refraction
       const step = 46;
       c.lineWidth = 1;
       for (let x = 0, i = 0; x <= w; x += step, i += 1) {
@@ -604,19 +454,6 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
         c.lineTo(w, y);
         c.stroke();
       }
-
-      // Concentric refraction calibration rings in bottom-right dock
-      const mbCx = w - 150;
-      const mbCy = h - 46;
-      for (let i = 0; i < 6; i += 1) {
-        c.strokeStyle = lightMode
-          ? `rgba(59, 91, 219, ${(0.085 + i * 0.015).toFixed(3)})`
-          : `rgba(92, 124, 250, ${(0.14 + i * 0.025).toFixed(3)})`;
-        c.lineWidth = 1.25;
-        c.beginPath();
-        c.arc(mbCx, mbCy, 30 + i * 24, 0, Math.PI * 2);
-        c.stroke();
-      }
       c.restore();
 
       // Generate 1/3 downsampled blurred uBackdrop
@@ -629,44 +466,13 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
     };
 
     const startTime = performance.now();
-    let lastFrame = startTime;
     let rafId = 0;
 
     const tick = (now: number) => {
-      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000));
-      lastFrame = now;
       const t = (now - startTime) / 1000;
       const w = window.innerWidth;
       const h = window.innerHeight;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-
-      const st = pillsStateRef.current;
-      if (!st.initialised || (!st.manuallyMoved && (w !== st.lastW || h !== st.lastH))) {
-        st.initialised = true;
-        st.lastW = w;
-        st.lastH = h;
-        const dockY = Math.max(220, h - 44);
-        const x0 = Math.max(220, w - 220);
-        const x1 = Math.max(x0 + 150, w - 70);
-        st.pills[0].x = st.pills[0].tx = x0;
-        st.pills[0].y = st.pills[0].ty = dockY;
-        st.pills[1].x = st.pills[1].tx = x1;
-        st.pills[1].y = st.pills[1].ty = dockY;
-      }
-
-      const pillEase = 1 - Math.exp(-20.0 * dt);
-      const pillEls = [pill0Ref.current, pill1Ref.current];
-      st.pills.forEach((p, idx) => {
-        p.tx = Math.max(p.halfLen + p.radius + 8, Math.min(w - p.halfLen - p.radius - 8, p.tx));
-        p.ty = Math.max(p.radius + 114, Math.min(h - p.radius - 8, p.ty));
-        p.x += (p.tx - p.x) * pillEase;
-        p.y += (p.ty - p.y) * pillEase;
-        const el = pillEls[idx];
-        if (el) {
-          el.style.left = `${p.x.toFixed(1)}px`;
-          el.style.top = `${p.y.toFixed(1)}px`;
-        }
-      });
 
       const curOpt = opticsRef.current;
       const lightMode = !darkRef.current;
@@ -708,21 +514,6 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
       gl.uniform1i(glassLocs.uBackground, 0);
       gl.uniform1i(glassLocs.uBackdrop, 1);
       gl.uniform4f(glassLocs.uView, w, h, t, dpr);
-      gl.uniform4f(
-        glassLocs.uGlassA,
-        st.pills[0].x,
-        st.pills[0].y,
-        st.pills[0].halfLen,
-        st.pills[0].radius
-      );
-      gl.uniform4f(
-        glassLocs.uGlassB,
-        st.pills[1].x,
-        st.pills[1].y,
-        st.pills[1].halfLen,
-        st.pills[1].radius
-      );
-      gl.uniform4f(glassLocs.uDroplet, 0, 0, 0, 0.0);
       gl.uniform4f(glassLocs.uOptics, curOpt.ior, curOpt.dispersion, curOpt.smoothK, curOpt.blur);
       gl.uniform4f(glassLocs.uSurface, 28.0, 42.0, 1.15, 0.85);
       gl.uniform1f(glassLocs.uLightMode, lightMode ? 1.0 : 0.0);
@@ -737,10 +528,6 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
           gl.uniform4f(glassLocs.uPanelMeta[i], 0, 0, 0, 0.0);
         }
       }
-      gl.uniform1f(glassLocs.uLayer, 0.0);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-      gl.uniform1f(glassLocs.uLayer, 1.0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
       rafId = requestAnimationFrame(tick);
@@ -750,11 +537,6 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
 
     return () => {
       cancelAnimationFrame(rafId);
-      p0El?.removeEventListener('pointerdown', down0);
-      p1El?.removeEventListener('pointerdown', down1);
-      window.removeEventListener('pointermove', onPtrMove);
-      window.removeEventListener('pointerup', onPtrUp);
-      window.removeEventListener('pointercancel', onPtrUp);
       gl.deleteTexture(texBg);
       gl.deleteTexture(texBlur);
       gl.deleteProgram(bgCompiled.prog);
@@ -768,38 +550,18 @@ export const LiquidGlassCanvas: React.FC<LiquidGlassCanvasProps> = ({
   }, [onWebglUnavailable]);
 
   return (
-    <>
-      <canvas
-        ref={glCanvasRef}
-        aria-hidden="true"
-        style={{
-          position: 'fixed',
-          inset: 0,
-          width: '100vw',
-          height: '100vh',
-          display: 'block',
-          zIndex: 0,
-          pointerEvents: 'none',
-        }}
-      />
-      {/* Two Draggable Liquid Glass Metaball Pills (no cursor-following droplet) */}
-      <div
-        ref={pill0Ref}
-        className="floating-pill-label"
-        style={{ opacity: pillsReady ? 1 : 0 }}
-        title="按住拖拽主胶囊即可与旁边胶囊融合产生液桥"
-      >
-        <span className="floating-pill-title">Liquid Glass</span>
-        <span className="floating-pill-sub">按住拖拽 · 光学融球</span>
-      </div>
-      <div
-        ref={pill1Ref}
-        className="floating-pill-label"
-        style={{ opacity: pillsReady ? 1 : 0 }}
-        title="点击前往练习 / 闪卡记忆，或拖拽靠近主胶囊融合"
-      >
-        <span className="floating-pill-title">◎ 键盘闪卡</span>
-      </div>
-    </>
+    <canvas
+      ref={glCanvasRef}
+      aria-hidden="true"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        width: '100vw',
+        height: '100vh',
+        display: 'block',
+        zIndex: 0,
+        pointerEvents: 'none',
+      }}
+    />
   );
 };

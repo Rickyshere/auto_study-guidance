@@ -98,6 +98,14 @@ def _migrate_raw_settings(raw: dict) -> tuple[dict, bool]:
     if data.get("ui_visual_mode") not in ("academic_pure", "liquid_glass"):
         data["ui_visual_mode"] = "academic_pure"
         changed = True
+    free_auth = data.get("free_ai_auth")
+    proxy_mode = free_auth.get("preferred_proxy_mode", "magpie_dsh") if isinstance(free_auth, dict) else "magpie_dsh"
+    harness_cfg = data.get("harness_config")
+    if proxy_mode == "magpie_dsh" and (
+        not isinstance(harness_cfg, dict) or harness_cfg.get("preferred_cli") != "dsh"
+    ):
+        data.setdefault("harness_config", {})["preferred_cli"] = "dsh"
+        changed = True
     stage_map = data.get("stage_mapping")
     if isinstance(stage_map, dict):
         for stage_key, sel in list(stage_map.items()):

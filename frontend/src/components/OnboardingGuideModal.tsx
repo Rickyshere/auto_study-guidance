@@ -1,661 +1,403 @@
-import React, { useEffect, useState } from 'react';
-import {
-  CheckCircle2,
-  Cpu,
-  FileText,
-  HelpCircle,
-  Layers,
-  ScanText,
-  Settings,
-  Sparkles,
-  X,
-} from 'lucide-react';
-import { api } from '../api';
-import {
-  OcrEngineType,
-  ProviderStatusResponse,
-  ProviderType,
-  RouterSettings,
-} from '../types';
-import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Settings, Sparkles, X } from 'lucide-react';
+import { SpringButton } from '../utils/springPhysics';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  status: ProviderStatusResponse | null;
-  onSavedSettings: (settings: RouterSettings) => void;
   onOpenFullConfig: () => void;
   onLoadDemo: () => void;
+  onEnsureSidebarOpen?: () => void;
 }
 
-type GuideStep = 'walkthrough' | 'ocr_quick' | 'ai_quick';
+interface TourStep {
+  targetId: string;
+  badge: string;
+  title: string;
+  description: string;
+  preferredPlacement: 'right' | 'bottom' | 'bottom-left' | 'inside-bottom';
+  tip?: string;
+}
+
+const TOUR_STEPS: TourStep[] = [
+  {
+    targetId: 'upload-panel',
+    badge: '步骤 1 / 5 · 资料上传与范围',
+    title: '上传课本 / 课件并勾选章节',
+    description:
+      '在这里拖拽或选择 PDF、PPTX、Word、Markdown 或图片。没有现成文件时，可直接点击「载入示例课件」立刻体验。上传解析后可在下方勾选出题章节范围。',
+    preferredPlacement: 'right',
+    tip: '提示：多章教材可先勾选 1～2 章测试生成速度。',
+  },
+  {
+    targetId: 'main-workspace',
+    badge: '步骤 2 / 5 · OCR 识别与场景定制',
+    title: '实时 OCR 进度与 A / B / C 场景设置',
+    description:
+      '上传资料后这里会实时显示 OCR 识别进度，随后进入「A 入门自学 / B 巩固提高 / C 考前冲刺」场景选择。勾选需要的资料并确认参数后流式生成，生成中可随时二次确认打断。',
+    preferredPlacement: 'inside-bottom',
+    tip: '支持手动填参或一键「AI 智能填参」。',
+  },
+  {
+    targetId: 'topbar-views',
+    badge: '步骤 3 / 5 · 学习成果工作台',
+    title: '讲义、单题卡片练习与键盘闪卡',
+    description:
+      '资料生成后，可在顶部切换讲义、单题卡片式在线练习、键盘控制的 3D 翻转闪卡（← / → 切题、Space 翻转，一轮结束可复习错题或打乱重来）、考前速记与思维导图，全部支持公式渲染与 PDF 导出。',
+    preferredPlacement: 'bottom',
+  },
+  {
+    targetId: 'visual-mode-btn',
+    badge: '步骤 4 / 5 · 视觉渲染模式',
+    title: '标准界面与 Liquid Glass 切换',
+    description:
+      '首次使用默认采用温和护眼的「标准界面」。若检测到本机配备独立 GPU，可点击此处一键开启具有实时光学折射、色散与磨砂效果的 Liquid Glass 液态玻璃外观。',
+    preferredPlacement: 'bottom-left',
+  },
+  {
+    targetId: 'settings-btn',
+    badge: '步骤 5 / 5 · 系统设置中心',
+    title: 'AI 出题引擎、显存 OCR 与光学调节',
+    description:
+      '点开设置可执行三项核心配置：① 配置 Magpie + DeepSeek Harness（经您授权后利用本机免费 AI 软件出题）或云端 API；② 按显卡显存一键部署 OCR 引擎；③ 调节 Liquid Glass 的折射率、色散、融合度与磨砂模糊度。',
+    preferredPlacement: 'bottom-left',
+  },
+];
+
+interface HighlightRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 export const OnboardingGuideModal: React.FC<Props> = ({
   open,
   onClose,
-  status,
-  onSavedSettings,
   onOpenFullConfig,
   onLoadDemo,
+  onEnsureSidebarOpen,
 }) => {
-  const [step, setStep] = useState<GuideStep>('walkthrough');
-  const [ocrEngine, setOcrEngine] = useState<OcrEngineType>('auto_recommend');
-  const [provider, setProvider] = useState<ProviderType>('harness');
-  const [cloudBaseUrl, setCloudBaseUrl] = useState('https://api.deepseek.com/v1');
-  const [cloudModel, setCloudModel] = useState('deepseek-chat');
-  const [cloudKey, setCloudKey] = useState('');
-  const [preferredCli, setPreferredCli] = useState<'dsh' | 'claude' | 'codex' | 'gemini' | 'custom'>('dsh');
-  const [saving, setSaving] = useState(false);
-  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [stepIdx, setStepIdx] = useState(0);
+  const [targetRect, setTargetRect] = useState<HighlightRect | null>(null);
 
-  useEffect(() => {
-    if (!status) return;
-    setOcrEngine(status.settings.ocr_config.active_engine);
-    setProvider(status.settings.active_provider);
-    setCloudBaseUrl(status.settings.cloud_config.base_url);
-    setCloudModel(status.settings.cloud_config.model);
-    setCloudKey(status.settings.cloud_config.api_key);
-    setPreferredCli(status.settings.harness_config.preferred_cli);
-  }, [status, open]);
+  const currentStep = TOUR_STEPS[stepIdx];
 
-  if (!open) return null;
-
-  const markSeenAndClose = () => {
+  const markSeenAndClose = useCallback(() => {
     try {
       localStorage.setItem('asg_onboarding_seen_v1', '1');
     } catch {
       // ignore storage errors
     }
     onClose();
-  };
+  }, [onClose]);
 
-  const handleSaveQuickSetup = async (loadDemoAfter = false) => {
-    if (!status) {
-      if (loadDemoAfter) onLoadDemo();
-      markSeenAndClose();
-      return;
-    }
-    setSaving(true);
-    setSavedNotice(null);
-    try {
-      const next: RouterSettings = {
-        ...status.settings,
-        routing_mode: 'single',
-        active_provider: provider,
-        cloud_config: {
-          ...status.settings.cloud_config,
-          base_url: cloudBaseUrl.trim() || status.settings.cloud_config.base_url,
-          model: cloudModel.trim() || status.settings.cloud_config.model,
-          api_key: cloudKey.trim(),
-        },
-        harness_config: {
-          ...status.settings.harness_config,
-          preferred_cli: preferredCli,
-        },
-        ocr_config: {
-          ...status.settings.ocr_config,
-          active_engine: ocrEngine,
-        },
-      };
-      const saved = await api.saveProviderSettings(next);
-      onSavedSettings(saved);
-      setSavedNotice('快速设置已保存生效！');
-      if (loadDemoAfter) {
-        markSeenAndClose();
-        onLoadDemo();
+  const measureTarget = useCallback(() => {
+    if (!open) return;
+    const step = TOUR_STEPS[stepIdx];
+    const el = document.querySelector<HTMLElement>(`[data-tour-id="${step.targetId}"]`);
+    if (el) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 8 && r.height > 8) {
+        setTargetRect({
+          left: r.left,
+          top: r.top,
+          width: r.width,
+          height: r.height,
+        });
+        return;
       }
-    } catch {
-      setSavedNotice('保存失败，请检查后端连接');
-    } finally {
-      setSaving(false);
     }
-  };
+    setTargetRect(null);
+  }, [open, stepIdx]);
 
-  const gpu = status?.gpu_vram;
+  useEffect(() => {
+    if (!open) return;
+    setStepIdx(0);
+    onEnsureSidebarOpen?.();
+  }, [open, onEnsureSidebarOpen]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (stepIdx === 0) {
+      onEnsureSidebarOpen?.();
+    }
+    const raf = requestAnimationFrame(measureTarget);
+    const timer = window.setTimeout(measureTarget, 120);
+    window.addEventListener('resize', measureTarget);
+    window.addEventListener('scroll', measureTarget, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+      window.removeEventListener('resize', measureTarget);
+      window.removeEventListener('scroll', measureTarget, true);
+    };
+  }, [open, stepIdx, measureTarget, onEnsureSidebarOpen]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        markSeenAndClose();
+      } else if (e.key === 'ArrowRight') {
+        setStepIdx((i) => (i < TOUR_STEPS.length - 1 ? i + 1 : i));
+      } else if (e.key === 'ArrowLeft') {
+        setStepIdx((i) => (i > 0 ? i - 1 : i));
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, markSeenAndClose]);
+
+  if (!open) return null;
+
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const pad = 6;
+  const cardWidth = Math.min(360, vw - 32);
+  const estCardHeight = 250;
+
+  const box: HighlightRect = targetRect
+    ? {
+        left: Math.max(4, targetRect.left - pad),
+        top: Math.max(4, targetRect.top - pad),
+        width: Math.min(vw - 8, targetRect.width + pad * 2),
+        height: Math.min(vh - 8, targetRect.height + pad * 2),
+      }
+    : {
+        left: vw * 0.5 - 160,
+        top: vh * 0.5 - 90,
+        width: 320,
+        height: 180,
+      };
+
+  // Compute callout position strictly within viewport
+  let cardLeft = vw * 0.5 - cardWidth * 0.5;
+  let cardTop = vh * 0.5 - estCardHeight * 0.5;
+
+  if (targetRect) {
+    if (currentStep.preferredPlacement === 'right') {
+      cardLeft = box.left + box.width + 18;
+      cardTop = Math.max(24, box.top + 16);
+      if (cardLeft + cardWidth > vw - 16) {
+        cardLeft = Math.max(16, vw - cardWidth - 16);
+      }
+    } else if (currentStep.preferredPlacement === 'inside-bottom') {
+      cardLeft = box.left + Math.max(16, (box.width - cardWidth) * 0.5);
+      cardTop = Math.min(vh - estCardHeight - 24, box.top + box.height * 0.42);
+    } else if (currentStep.preferredPlacement === 'bottom-left') {
+      cardLeft = Math.max(16, box.left + box.width - cardWidth);
+      cardTop = box.top + box.height + 14;
+    } else {
+      cardLeft = box.left + (box.width - cardWidth) * 0.5;
+      cardTop = box.top + box.height + 14;
+    }
+  }
+
+  cardLeft = Math.max(16, Math.min(vw - cardWidth - 16, cardLeft));
+  cardTop = Math.max(16, Math.min(vh - estCardHeight - 16, cardTop));
+
+  const isLast = stepIdx === TOUR_STEPS.length - 1;
 
   return (
     <div
-      className="no-print"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 75,
-        backgroundColor: 'rgba(15, 23, 42, 0.5)',
-        backdropFilter: 'blur(8px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '18px',
-      }}
-      onClick={markSeenAndClose}
+      className="no-print fixed inset-0 z-[80]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="新手指引"
     >
-      <div
-        style={{
-          width: 'min(860px, 95vw)',
-          maxHeight: '90vh',
-          borderRadius: '22px',
-          backgroundColor: '#FFFFFF',
-          border: '1px solid rgba(60, 60, 67, 0.14)',
-          boxShadow: '0 32px 80px -16px rgba(0, 0, 0, 0.34)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-        onClick={(e) => e.stopPropagation()}
+      {/* Dimmed Backdrop with Rounded Spotlight Cutout */}
+      <svg
+        className="fixed inset-0 w-full h-full pointer-events-none"
+        xmlns="http://www.w3.org/2000/svg"
       >
-        {/* Header */}
-        <div
-          style={{
-            padding: '16px 22px',
-            borderBottom: '1px solid rgba(60, 60, 67, 0.1)',
-            background: 'linear-gradient(135deg, #F0F7FF 0%, #FFFFFF 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <img
-              src="/logo.svg"
-              alt="Logo"
-              style={{ width: 34, height: 34, borderRadius: '9px' }}
-            />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 800, color: '#0F172A' }}>
-                快速上手指南 · v1.0.0
-              </div>
-              <div style={{ fontSize: '12px', color: '#64748B', marginTop: '1px' }}>
-                快速完成 OCR 文本识别与 AI 模型通道配置
-              </div>
-            </div>
-          </div>
+        <defs>
+          <mask id="asg-tour-spotlight-mask">
+            <rect x="0" y="0" width="100%" height="100%" fill="white" />
+            {targetRect && (
+              <rect
+                x={box.left}
+                y={box.top}
+                width={box.width}
+                height={box.height}
+                rx="16"
+                ry="16"
+                fill="black"
+              />
+            )}
+          </mask>
+        </defs>
+        <rect
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          fill="rgba(15, 23, 42, 0.56)"
+          mask="url(#asg-tour-spotlight-mask)"
+        />
+      </svg>
 
-          <button
-            onClick={markSeenAndClose}
-            style={{
-              borderRadius: '999px',
-              border: '1px solid rgba(60, 60, 67, 0.14)',
-              backgroundColor: '#FFFFFF',
-              padding: '6px',
-              cursor: 'pointer',
-              display: 'inline-flex',
-            }}
-            title="关闭引导"
+      {/* Highlight Frame Outline around Target UI Region */}
+      {targetRect && (
+        <div
+          aria-hidden="true"
+          className="fixed pointer-events-none transition-all duration-300"
+          style={{
+            left: `${box.left}px`,
+            top: `${box.top}px`,
+            width: `${box.width}px`,
+            height: `${box.height}px`,
+            borderRadius: '16px',
+            border: '2px solid #3B5BDB',
+            boxShadow: '0 0 0 4px rgba(59, 91, 219, 0.25), 0 0 24px rgba(59, 91, 219, 0.35)',
+          }}
+        />
+      )}
+
+      {/* Floating Explanation Callout Card */}
+      <div
+        className="asg-card fixed p-4 space-y-3 asg-drawer-enter shadow-2xl"
+        style={{
+          left: `${cardLeft}px`,
+          top: `${cardTop}px`,
+          width: `${cardWidth}px`,
+          backgroundColor: 'var(--bg-surface)',
+          color: 'var(--text-primary)',
+          borderColor: '#3B5BDB',
+          boxShadow: '0 18px 42px rgba(15, 23, 42, 0.28)',
+          transition: 'left 0.28s var(--spring-drawer), top 0.28s var(--spring-drawer)',
+        }}
+      >
+        {/* Top Row: Step Badge + Close */}
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="text-[11px] font-bold px-2.5 py-0.5 rounded-full"
+            style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
           >
-            <X className="w-4 h-4 text-[#636366]" />
+            {currentStep.badge}
+          </span>
+          <button
+            type="button"
+            onClick={markSeenAndClose}
+            className="p-1 rounded-lg hover:bg-black/5 transition flex items-center gap-1 text-[11px]"
+            style={{ color: 'var(--text-secondary)' }}
+            title="跳过指引 (Esc)"
+          >
+            <span>跳过</span>
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Step Navigation */}
-        <div
-          style={{
-            padding: '10px 22px',
-            backgroundColor: '#F8FAFC',
-            borderBottom: '1px solid rgba(60, 60, 67, 0.08)',
-            display: 'flex',
-            justifyContent: 'center',
-          }}
-        >
-          <SpringSegmentedControl<GuideStep>
-            springLabel="新手引导步骤"
-            value={step}
-            onChange={setStep}
-            options={[
-              { value: 'walkthrough', label: '1. 核心功能导览' },
-              { value: 'ocr_quick', label: '2. 显存与 OCR 速配' },
-              { value: 'ai_quick', label: '3. AI 生成通道上手' },
-            ]}
-          />
-        </div>
-
-        {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-          {step === 'walkthrough' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-                  gap: '12px',
-                }}
-              >
-                <FeatureGuideCard
-                  badge="STEP 1"
-                  color="#007AFF"
-                  icon={<FileText className="w-4 h-4 text-[#007AFF]" />}
-                  title="导入课本 / PPTX 与划范围"
-                  desc="左侧栏支持拖拽上传 PDF、PPTX、Word、Markdown，自动切分章节并支持逐章勾选；也可一键加载内置演示课件。"
-                />
-                <FeatureGuideCard
-                  badge="STEP 2"
-                  color="#5856D6"
-                  icon={<Layers className="w-4 h-4 text-[#5856D6]" />}
-                  title="Stage 1 定制方案与随时暂停"
-                  desc="选择 6 种教学预设，可直接输入题量或点「AI 一键填充参数」。点击生成后可随时点「暂停生成」（含二次确认）中止。"
-                />
-                <FeatureGuideCard
-                  badge="STEP 3"
-                  color="#34C759"
-                  icon={<CheckCircle2 className="w-4 h-4 text-[#248A3D]" />}
-                  title="Stage 2 交付、A4/A3 排版与撤销"
-                  desc="生成后自动进入导学笔记（含典型例题解析）、互动题库、考前速记与图谱。支持纯预览及 A4/A3 PDF 导出；如需重选方案，点顶栏「撤销生成」。"
-                />
-              </div>
-
-              <div
-                style={{
-                  borderRadius: '14px',
-                  border: '1px solid rgba(0, 122, 255, 0.16)',
-                  backgroundColor: '#F0F7FF',
-                  padding: '13px 16px',
-                  fontSize: '12.5px',
-                  color: '#1E3A8A',
-                  lineHeight: 1.65,
-                }}
-              >
-                <div style={{ fontWeight: 700, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <HelpCircle className="w-4 h-4" />
-                  <span>上手建议</span>
-                </div>
-                <div>
-                  • 如果想零配置立即体验：保持默认的 <strong>内置规则引擎 + RapidOCR/免费 API</strong>，直接加载示例 PPTX 即可完整跑通。
-                  <br />
-                  • 如果有扫描版教材 PDF 或 DeepSeek / OpenAI / Claude 等模型密钥，可切换上方第 2、3 步完成快速绑定。
-                </div>
-              </div>
+        {/* Title & Explanation */}
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-bold leading-snug">{currentStep.title}</h3>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+            {currentStep.description}
+          </p>
+          {currentStep.tip && (
+            <div
+              className="text-[11px] px-2.5 py-1.5 rounded-lg font-medium"
+              style={{ backgroundColor: 'var(--bg-subtle)', color: '#3B5BDB' }}
+            >
+              {currentStep.tip}
             </div>
           )}
+        </div>
 
-          {step === 'ocr_quick' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div
-                style={{
-                  borderRadius: '14px',
-                  backgroundColor: '#F8FAFC',
-                  border: '1px solid rgba(60, 60, 67, 0.12)',
-                  padding: '12px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '10px',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ScanText className="w-5 h-5 text-[#007AFF]" />
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>
-                      本机显卡：{gpu?.gpu_name || '探测中...'}（有效显存 {gpu?.effective_vram_gb?.toFixed(1) ?? '0.0'} GB）
-                    </div>
-                    <div style={{ fontSize: '11.5px', color: '#64748B' }}>
-                      {gpu?.recommendation_reason || '已根据本机显存自动匹配推荐 OCR 方案'}
-                    </div>
-                  </div>
-                </div>
-                <SpringButton
-                  springLabel="打开完整OCR安装面板"
+        {/* Progress Dots */}
+        <div className="flex items-center gap-1.5 pt-0.5">
+          {TOUR_STEPS.map((st, idx) => (
+            <button
+              key={st.targetId}
+              type="button"
+              onClick={() => setStepIdx(idx)}
+              aria-label={`跳转到${st.badge}`}
+              className="h-1.5 rounded-full transition-all"
+              style={{
+                width: idx === stepIdx ? '20px' : '7px',
+                backgroundColor: idx === stepIdx ? '#3B5BDB' : 'var(--border-default)',
+                cursor: 'pointer',
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Action Buttons */}
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t"
+          style={{ borderColor: 'var(--border-default)' }}
+        >
+          <button
+            type="button"
+            disabled={stepIdx === 0}
+            onClick={() => setStepIdx((i) => Math.max(0, i - 1))}
+            className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--bg-subtle)',
+              opacity: stepIdx === 0 ? 0.45 : 1,
+              cursor: stepIdx === 0 ? 'default' : 'pointer',
+            }}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>上一步</span>
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            {isLast ? (
+              <>
+                <button
+                  type="button"
                   onClick={() => {
                     markSeenAndClose();
                     onOpenFullConfig();
                   }}
-                  maxShift={4}
+                  className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1"
+                  style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+                >
+                  <Settings className="w-3.5 h-3.5 text-[#3B5BDB]" />
+                  <span>打开设置</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    markSeenAndClose();
+                    onLoadDemo();
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1"
                   style={{
-                    borderRadius: '999px',
-                    border: '1px solid rgba(0, 122, 255, 0.3)',
-                    backgroundColor: '#FFFFFF',
-                    color: '#007AFF',
-                    padding: '6px 12px',
-                    fontSize: '11.5px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
+                    borderColor: '#3B5BDB',
+                    backgroundColor: 'var(--brand-tint)',
+                    color: '#3B5BDB',
                   }}
                 >
-                  打开一键安装 / 卸载中心 →
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>示例课件</span>
+                </button>
+                <SpringButton
+                  springLabel="完成引导"
+                  onClick={markSeenAndClose}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1"
+                  style={{ backgroundColor: '#2B8A3E', cursor: 'pointer' }}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>开始使用</span>
                 </SpringButton>
-              </div>
-
-              <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A' }}>
-                快速选择默认文档识图 / 公式 OCR 引擎：
-              </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                  gap: '10px',
-                }}
-              >
-                {[
-                  {
-                    id: 'auto_recommend' as OcrEngineType,
-                    title: '按显存自动推荐（默认）',
-                    desc: '启动自动根据显卡显存分档选择最佳引擎。',
-                  },
-                  {
-                    id: 'somark_free_api' as OcrEngineType,
-                    title: 'SoMark Free-OXR 开放 API',
-                    desc: '≤8GB 零显存占用，免本地安装直接识别公式与版面。',
-                  },
-                  {
-                    id: 'mineru_pipeline' as OcrEngineType,
-                    title: 'MinerU 2 Pipeline（无 vLLM）',
-                    desc: '≤8GB 显卡首选本地部署，可在设置中一键安装启动。',
-                  },
-                  {
-                    id: 'paddleocr' as OcrEngineType,
-                    title: 'PaddleOCR 极速备选',
-                    desc: '轻量本地 CPU/低显存 OCR，适合常规文字页面。',
-                  },
-                  {
-                    id: 'mineru_full' as OcrEngineType,
-                    title: 'MinerU 2 全量本地（8–48GB）',
-                    desc: '适合中大显存显卡的全量高精度版面与公式识别。',
-                  },
-                  {
-                    id: 'oxr_full' as OcrEngineType,
-                    title: 'SoMark OXR 全量（≥48GB）',
-                    desc: '大显存旗舰全量部署方案，面向复杂教材。',
-                  },
-                ].map((opt) => {
-                  const selected = ocrEngine === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => setOcrEngine(opt.id)}
-                      style={{
-                        textAlign: 'left',
-                        borderRadius: '12px',
-                        padding: '11px 12px',
-                        border: selected ? '1.5px solid #007AFF' : '1px solid rgba(60, 60, 67, 0.14)',
-                        backgroundColor: selected ? 'rgba(0, 122, 255, 0.07)' : '#FFFFFF',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <div style={{ fontSize: '12.5px', fontWeight: 700, color: selected ? '#007AFF' : '#1E293B' }}>
-                        {opt.title}
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '3px', lineHeight: 1.45 }}>
-                        {opt.desc}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {step === 'ai_quick' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A' }}>
-                选择您希望使用的 AI 生成后端：
-              </div>
-
-              <SpringSegmentedControl<ProviderType>
-                springLabel="快速选择AI通道"
-                value={provider}
-                onChange={setProvider}
-                options={[
-                  { value: 'harness', label: '① 免费 AI 反代 (Magpie + DSH)' },
-                  { value: 'cloud', label: '② 云端 OpenAI/DeepSeek API' },
-                ]}
-              />
-
-              {provider === 'cloud' && (
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: '#F8FAFC',
-                    border: '1px solid rgba(60, 60, 67, 0.14)',
-                    padding: '14px',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                    gap: '10px',
-                  }}
-                >
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
-                    API Base URL
-                    <input
-                      value={cloudBaseUrl}
-                      onChange={(e) => setCloudBaseUrl(e.target.value)}
-                      placeholder="https://api.deepseek.com/v1"
-                      style={{
-                        marginTop: '4px',
-                        width: '100%',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        padding: '7px 10px',
-                        fontSize: '12px',
-                      }}
-                    />
-                  </label>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
-                    模型名称
-                    <input
-                      value={cloudModel}
-                      onChange={(e) => setCloudModel(e.target.value)}
-                      placeholder="deepseek-chat / gpt-4o-mini"
-                      style={{
-                        marginTop: '4px',
-                        width: '100%',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        padding: '7px 10px',
-                        fontSize: '12px',
-                      }}
-                    />
-                  </label>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155', gridColumn: '1 / -1' }}>
-                    API Key
-                    <input
-                      type="password"
-                      value={cloudKey}
-                      onChange={(e) => setCloudKey(e.target.value)}
-                      placeholder="sk-..."
-                      style={{
-                        marginTop: '4px',
-                        width: '100%',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        padding: '7px 10px',
-                        fontSize: '12px',
-                      }}
-                    />
-                  </label>
-                </div>
-              )}
-
-              {provider === 'harness' && (
-                <div
-                  style={{
-                    borderRadius: '12px',
-                    backgroundColor: '#F8FAFC',
-                    border: '1px solid rgba(60, 60, 67, 0.14)',
-                    padding: '14px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                  }}
-                >
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
-                    选择默认 CLI Harness 工具（支持 DeepSeek Harness / Claude / Codex / Gemini）：
-                  </div>
-                  <SpringSegmentedControl<'dsh' | 'claude' | 'codex' | 'gemini'>
-                    compact
-                    springLabel="默认CLI"
-                    value={preferredCli === 'custom' ? 'dsh' : preferredCli}
-                    onChange={(cli) => setPreferredCli(cli)}
-                    options={[
-                      { value: 'dsh', label: 'DeepSeek DSH' },
-                      { value: 'claude', label: 'Claude Code' },
-                      { value: 'codex', label: 'Codex CLI' },
-                      { value: 'gemini', label: 'Gemini CLI' },
-                    ]}
-                  />
-                  <div style={{ fontSize: '11.5px', color: '#64748B' }}>
-                    若尚未在本机安装 CLI，可在顶栏「设置图标」中一键安装。
-                  </div>
-                </div>
-              )}
-
-              {savedNotice && (
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#16A34A' }}>
-                  ✓ {savedNotice}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div
-          style={{
-            padding: '13px 22px',
-            borderTop: '1px solid rgba(60, 60, 67, 0.1)',
-            backgroundColor: '#F8FAFC',
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '10px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {step !== 'walkthrough' && (
-              <SpringButton
-                springLabel="上一步引导"
-                onClick={() => setStep(step === 'ai_quick' ? 'ocr_quick' : 'walkthrough')}
-                maxShift={4}
-                style={{
-                  borderRadius: '999px',
-                  border: '1px solid rgba(60, 60, 67, 0.16)',
-                  backgroundColor: '#FFFFFF',
-                  color: '#1C1C1E',
-                  padding: '7px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                上一步
-              </SpringButton>
-            )}
-            {step !== 'ai_quick' && (
+              </>
+            ) : (
               <SpringButton
                 springLabel="下一步引导"
-                onClick={() => setStep(step === 'walkthrough' ? 'ocr_quick' : 'ai_quick')}
-                maxShift={4}
-                style={{
-                  borderRadius: '999px',
-                  border: '1px solid rgba(0, 122, 255, 0.3)',
-                  backgroundColor: 'rgba(0, 122, 255, 0.08)',
-                  color: '#007AFF',
-                  padding: '7px 14px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
+                onClick={() => setStepIdx((i) => Math.min(TOUR_STEPS.length - 1, i + 1))}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1"
+                style={{ backgroundColor: '#3B5BDB', cursor: 'pointer' }}
               >
-                下一步：快速配置 →
+                <span>下一步 ({stepIdx + 1}/{TOUR_STEPS.length})</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </SpringButton>
             )}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <SpringButton
-              springLabel="保存并体验Demo"
-              disabled={saving}
-              onClick={() => handleSaveQuickSetup(true)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: '1px solid rgba(0, 122, 255, 0.3)',
-                backgroundColor: '#FFFFFF',
-                color: '#007AFF',
-                padding: '7px 14px',
-                fontSize: '12px',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                cursor: 'pointer',
-              }}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>保存配置并加载示例课件体验</span>
-            </SpringButton>
-            <SpringButton
-              springLabel="完成新手引导"
-              disabled={saving}
-              onClick={() => handleSaveQuickSetup(false).then(markSeenAndClose)}
-              maxShift={5}
-              style={{
-                borderRadius: '999px',
-                border: 'none',
-                backgroundColor: '#007AFF',
-                color: '#FFFFFF',
-                padding: '8px 18px',
-                fontSize: '12.5px',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                cursor: 'pointer',
-              }}
-            >
-              <Cpu className="w-3.5 h-3.5" />
-              <span>{saving ? '保存中...' : '保存并开始使用'}</span>
-            </SpringButton>
           </div>
         </div>
       </div>
     </div>
   );
 };
-
-function FeatureGuideCard({
-  badge,
-  color,
-  icon,
-  title,
-  desc,
-}: {
-  badge: string;
-  color: string;
-  icon: React.ReactNode;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <div
-      style={{
-        borderRadius: '14px',
-        border: '1px solid rgba(60, 60, 67, 0.1)',
-        backgroundColor: '#FAFAFC',
-        padding: '14px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span
-          style={{
-            fontSize: '10px',
-            fontWeight: 800,
-            color,
-            backgroundColor: '#FFFFFF',
-            border: '1px solid rgba(60, 60, 67, 0.1)',
-            borderRadius: '999px',
-            padding: '2px 8px',
-          }}
-        >
-          {badge}
-        </span>
-        {icon}
-      </div>
-      <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>{title}</div>
-      <div style={{ fontSize: '12px', color: '#475569', lineHeight: 1.55 }}>{desc}</div>
-    </div>
-  );
-}

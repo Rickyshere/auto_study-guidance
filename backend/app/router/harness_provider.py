@@ -23,7 +23,12 @@ VENV_SCRIPTS = Path(r"D:\auto_study_guidance\backend\.venv\Scripts")
 VENV_PYTHON = VENV_SCRIPTS / "python.exe"
 
 
-def _find_cli(name: str, extra_paths: List[str]) -> Optional[str]:
+def _find_cli(name: str, extra_paths: List[str], prefer_extra_first: bool = False) -> Optional[str]:
+    if prefer_extra_first:
+        for p in extra_paths:
+            expanded = Path(os.path.expandvars(os.path.expanduser(p)))
+            if expanded.exists():
+                return str(expanded)
     found = shutil.which(name)
     if found:
         return found
@@ -45,6 +50,7 @@ def detect_installed_harnesses() -> List[HarnessStatusItem]:
             str(home / ".local" / "bin" / "dsh.exe"),
             str(home / "AppData" / "Roaming" / "npm" / "dsh.cmd"),
         ],
+        prefer_extra_first=True,
     )
     claude_path = _find_cli(
         "claude",
@@ -1187,7 +1193,10 @@ async def run_cli_harness(
 
     combined_prompt = _build_cli_prompt(system_prompt, user_prompt)
     detected = {item.name: item for item in detect_installed_harnesses()}
-    preferred = harness_config.preferred_cli
+    if free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
+        preferred = "dsh"
+    else:
+        preferred = harness_config.preferred_cli
 
     # Auto-pick an available CLI if preferred isn't installed
     if preferred != "custom" and not (detected.get(preferred) and detected[preferred].available):
