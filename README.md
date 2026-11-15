@@ -4,6 +4,12 @@ AI 驱动的学习资料整理、互动练习与多格式导出工作台。上�
 
 ---
 
+## 下载即用
+
+不用自己编译：到 [Releases](https://github.com/Rickyshere/auto_study-guidance/releases/latest) 下载 `AutoStudyGuidance-v1.2.2-win64.zip`，解压后双击 `AutoStudyGuidance.exe`。首次启动会自检 Python / WebView2 等依赖，缺什么会弹窗并给一键安装。
+
+---
+
 ## 快速启动
 
 ### 开发模式（前后端热重载）
