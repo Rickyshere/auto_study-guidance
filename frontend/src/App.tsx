@@ -897,7 +897,7 @@ export function App() {
                   className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
                   style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  v1.2.3
+                  v1.2.4
                 </span>
               </div>
               <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
@@ -1087,7 +1087,7 @@ export function App() {
                       className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.2.3
+                      v1.2.4
                     </span>
                   </div>
                   <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: 'var(--text-secondary)' }}>

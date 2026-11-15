@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Cloud,
   Cpu,
@@ -103,12 +104,24 @@ export const RouterConfigModal: React.FC<Props> = ({
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [taskProgress, setTaskProgress] = useState<TaskProgressState | null>(null);
 
+  const seedDraft = React.useCallback(() => {
+    if (!status?.settings) return;
+    setDraft(JSON.parse(JSON.stringify(status.settings)) as RouterSettings);
+    setTestResult(null);
+  }, [status]);
+
+  // 只在「打开弹窗」时把已保存配置灌进草稿。
+  // 之前这个 effect 依赖 status，任何一次后台刷新（例如点「启动服务」后 onRefreshStatus）
+  // 都会把用户刚选的 OCR 引擎悄悄改回已保存值，接着点保存就把选择覆盖掉了 ——
+  // 这就是「我明明选了 SoMark，保存后却变回 MinerU」的来源。
   useEffect(() => {
-    if (status?.settings && open) {
-      setDraft(JSON.parse(JSON.stringify(status.settings)) as RouterSettings);
-      setTestResult(null);
-    }
-  }, [status, open]);
+    if (open) seedDraft();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 弹窗先打开、状态后到达时补一次初始化
+  useEffect(() => {
+    if (open && !draft) seedDraft();
+  }, [open, draft, seedDraft]);
 
   if (!open || !draft) return null;
 
@@ -281,7 +294,7 @@ export const RouterConfigModal: React.FC<Props> = ({
       status: 'running',
     });
     try {
-      await api.setupOcrEngineStream(engineId, action, (evt) => {
+      const res = await api.setupOcrEngineStream(engineId, action, (evt) => {
         const msg = evt.message || '';
         setTaskProgress((prev) => ({
           targetKey: `ocr:${engineId}`,
@@ -293,9 +306,24 @@ export const RouterConfigModal: React.FC<Props> = ({
             : msg
             ? [...(prev?.logs || []).slice(-18), msg]
             : prev?.logs || [],
-          status: evt.type === 'complete' ? 'success' : evt.type === 'error' ? 'error' : 'running',
+          status: evt.type === 'error' ? 'error' : 'running',
         }));
       });
+      // 「装完了」和「真的跑起来了」不是一回事：以服务端最终结果为准，失败必须显示为失败。
+      const ok = res?.ok !== false;
+      setTaskProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              percent: 100,
+              status: ok ? 'success' : 'error',
+              message: res?.message || prev.message,
+              logs: res?.log
+                ? [...prev.logs.slice(-18), ...String(res.log).split('\n').slice(-6)]
+                : prev.logs,
+            }
+          : prev
+      );
       await onRefreshStatus();
     } catch (e: any) {
       setTaskProgress((prev) =>
@@ -1389,6 +1417,83 @@ export const RouterConfigModal: React.FC<Props> = ({
               </div>
             )}
           </div>
+
+          {/* 任务浮层：点完「启动服务」立刻能看到进展与结果，不用滚到底部找日志 */}
+          {taskProgress && (
+            <div
+              className="fixed right-5 bottom-5 z-[70] w-[380px] max-w-[calc(100vw-2.5rem)] rounded-2xl border shadow-2xl overflow-hidden"
+              style={{
+                backgroundColor: '#0F172A',
+                borderColor:
+                  taskProgress.status === 'success'
+                    ? '#10B981'
+                    : taskProgress.status === 'error'
+                    ? '#EF4444'
+                    : '#5C7CFA',
+              }}
+            >
+              <div
+                className="px-3.5 py-2 flex items-center justify-between gap-2 text-[12px] font-bold"
+                style={{
+                  color: '#fff',
+                  backgroundColor:
+                    taskProgress.status === 'success'
+                      ? 'rgba(16,185,129,0.25)'
+                      : taskProgress.status === 'error'
+                      ? 'rgba(239,68,68,0.25)'
+                      : 'rgba(92,124,250,0.25)',
+                }}
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {taskProgress.status === 'running' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  ) : taskProgress.status === 'success' ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  )}
+                  <span className="truncate">{taskProgress.title}</span>
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span>{taskProgress.percent}%</span>
+                  <button
+                    type="button"
+                    onClick={() => setTaskProgress(null)}
+                    className="opacity-70 hover:opacity-100"
+                    title="关闭"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              </div>
+              <div className="px-3.5 py-2.5 space-y-1.5">
+                <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#334155' }}>
+                  <div
+                    className="h-full transition-all duration-300"
+                    style={{
+                      width: `${Math.max(4, Math.min(100, taskProgress.percent))}%`,
+                      backgroundColor: taskProgress.status === 'error' ? '#EF4444' : '#5C7CFA',
+                    }}
+                  />
+                </div>
+                <div className="text-[11.5px] leading-snug" style={{ color: '#E2E8F0' }}>
+                  {taskProgress.message}
+                </div>
+                {taskProgress.logs.length > 0 && (
+                  <div
+                    className="max-h-24 overflow-y-auto font-mono text-[10.5px] space-y-0.5"
+                    style={{ color: '#94A3B8' }}
+                  >
+                    {taskProgress.logs.slice(-6).map((ln, i) => (
+                      <div key={i} className="whitespace-pre-wrap break-all">
+                        {ln}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Right Footer */}
           <div

@@ -536,6 +536,44 @@ async def _start_silent_bg(cmd: List[str], cwd: Optional[Path] = None) -> int:
     return await asyncio.to_thread(_spawn)
 
 
+async def _start_bg_with_log(cmd: List[str], log_path: Path) -> int:
+    """拉起后台服务并把它的 stdout/stderr 落盘，启动失败时才有话可说。"""
+
+    def _spawn() -> int:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(log_path, "wb")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                creationflags=WIN_NO_WINDOW,
+            )
+        finally:
+            handle.close()
+        return proc.pid
+
+    return await asyncio.to_thread(_spawn)
+
+
+def _read_log_tail(path: Path, lines: int = 10) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    rows = [row for row in text.strip().splitlines() if row.strip()]
+    return "\n".join(rows[-lines:])
+
+
+def _service_port(url: str, default: int) -> int:
+    from urllib.parse import urlparse
+
+    try:
+        return urlparse(url).port or default
+    except Exception:
+        return default
+
+
 async def _stream_silent_cmd(
     cmd: List[str],
     state: Dict[str, Any],
@@ -926,22 +964,79 @@ async def stream_setup_ocr_engine(
             "log_line": "[start] checking mineru-api service...",
         }
         mineru_api_exe = shutil.which("mineru-api") or str(Path(py_exe).with_name("mineru-api.exe"))
-        running = await _probe_http_alive(settings.ocr_config.mineru_service_url)
+        service_url = settings.ocr_config.mineru_service_url
+        running = await _probe_http_alive(service_url)
         if not running and Path(mineru_api_exe).exists():
-            backend_mode = "pipeline" if engine_id == "mineru_pipeline" else "hybrid-auto-engine"
-            await _start_silent_bg(
-                [mineru_api_exe, "--host", "127.0.0.1", "--port", "8010", "--backend", backend_mode]
-            )
-            await asyncio.sleep(1.5)
-            running = await _probe_http_alive(settings.ocr_config.mineru_service_url)
-            logs.append(f"已静默拉起 {mineru_api_exe} ({backend_mode})")
+            port = _service_port(service_url, 8010)
+            # mineru-api 没有 --backend 参数（传了会直接被 typer 拒绝退出，进程秒死、
+            # 用户点了启动却什么反馈都没有）。能力档位用 --tier: flash/basic/standard。
+            start_cmd = [mineru_api_exe, "--host", "127.0.0.1", "--port", str(port)]
+            if engine_id == "mineru_pipeline":
+                start_cmd += ["--tier", "basic", "--no-advanced"]
+            start_log = TOOLS_DIR / "logs" / "mineru_api.log"
+            pid = await _start_bg_with_log(start_cmd, start_log)
             yield {
                 "type": "progress",
-                "percent": 96,
+                "percent": 90,
                 "stage": "3/3 静默启动与校验",
-                "message": f"已静默拉起 {backend_mode} 后端服务",
-                "log_line": f"已静默拉起 {mineru_api_exe} ({backend_mode})",
+                "message": f"已拉起 mineru-api (PID {pid})，正在等待 {port} 端口响应…",
+                "log_line": f"$ {' '.join(start_cmd)}",
             }
+            waited = 0
+            deadline = time.monotonic() + 45.0
+            while time.monotonic() < deadline:
+                await asyncio.sleep(1.0)
+                waited += 1
+                running = await _probe_http_alive(service_url)
+                if running:
+                    break
+                if waited % 5 == 0:
+                    tail = _read_log_tail(start_log, 2)
+                    yield {
+                        "type": "progress",
+                        "percent": min(98, 90 + waited // 5),
+                        "stage": "3/3 静默启动与校验",
+                        "message": f"还在等 {port} 端口响应，已等 {waited}s…",
+                        "log_line": tail,
+                    }
+            if running:
+                logs.append(f"mineru-api 已在线（{service_url}）")
+                yield {
+                    "type": "progress",
+                    "percent": 99,
+                    "stage": "3/3 静默启动与校验",
+                    "message": f"✓ 本地服务已在线：{service_url}（用时 {waited}s）",
+                    "log_line": f"[ready] {service_url} in {waited}s",
+                }
+            else:
+                tail = _read_log_tail(start_log, 12) or "（日志为空，进程可能被系统阻止启动）"
+                msg = (
+                    f"启动失败：命令已发出，但 {waited}s 内 {service_url} 没有响应。"
+                    "下面是从服务日志里读到的最后几行，通常是缺模型或端口被占用。"
+                )
+                logs.append(tail)
+                yield {
+                    "type": "progress",
+                    "percent": 99,
+                    "stage": "3/3 启动失败",
+                    "message": msg,
+                    "log_line": tail.splitlines()[-1] if tail.splitlines() else "",
+                }
+                yield {
+                    "type": "complete",
+                    "percent": 100,
+                    "stage": "启动失败",
+                    "message": msg + " 也可以直接改选「SoMark Free-OXR 开放 API」（云端、免部署）。",
+                    "result": {
+                        "ok": False,
+                        "engine_id": engine_id,
+                        "installed": True,
+                        "running": False,
+                        "message": msg,
+                        "log": tail,
+                    },
+                }
+                return
 
         now_installed = _has_python_pkg("mineru") or _has_python_pkg("magic_pdf") or shutil.which("mineru") is not None
         if now_installed:
@@ -1312,18 +1407,61 @@ async def _extract_with_paddleocr(image_path: Path) -> str:
         return ""
 
 
+def _extract_text_from_parse_json(data: Any) -> str:
+    """从 MinerU / OXR 服务的解析响应里取正文（新版 mineru-api 在 files[].content.markdown）。"""
+    if isinstance(data, str):
+        return data.strip()
+    if not isinstance(data, dict):
+        return ""
+    files = data.get("files")
+    if isinstance(files, list):
+        chunks: List[str] = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, dict):
+                for key in ("markdown", "md_content", "text"):
+                    val = content.get(key)
+                    if isinstance(val, str) and val.strip():
+                        chunks.append(val.strip())
+                        break
+        if chunks:
+            return "\n\n".join(chunks)
+    for key in ("markdown", "md_content", "md", "text", "content"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 async def _extract_with_http_service(image_path: Path, service_url: str) -> str:
+    """调用本地 MinerU / OXR 服务的同步解析接口。
+
+    新版 mineru-api（4.x）只有 `POST /v1/file_parse`（multipart 字段名 `files`），
+    正文在 `files[0].content.markdown`。老代码打的是 `{base}/file_parse`，服务端 404，
+    于是「服务运行中」却始终识别不出一个字。
+    """
+    base = service_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            with image_path.open("rb") as f:
-                files = {"files": (image_path.name, f, "image/png")}
-                resp = await client.post(f"{service_url.rstrip('/')}/file_parse", files=files)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        return str(data.get("md_content") or data.get("markdown") or data.get("text") or "").strip()
+        raw = image_path.read_bytes()
     except Exception:
-        pass
+        return ""
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        for ep in (f"{base}/v1/file_parse", f"{base}/file_parse"):
+            try:
+                resp = await client.post(ep, files={"files": (image_path.name, raw, "image/png")})
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                continue
+            text = _extract_text_from_parse_json(data)
+            if text:
+                return text
     return ""
 
 

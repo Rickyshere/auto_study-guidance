@@ -1,4 +1,4 @@
-# Auto Study Guidance v1.2.3
+# Auto Study Guidance v1.2.4
 
 AI 驱动的学习资料整理、互动练习与多格式导出工作台。上传教材、课件或讲义截图后，按学习阶段自动生成讲义、练习题库、速记卡片与思维导图；也可以上传一份试卷，生成在线题库、同风格变式卷和知识点讲解。支持实时公式渲染与 PDF 打印导出。
 
@@ -6,7 +6,7 @@ AI 驱动的学习资料整理、互动练习与多格式导出工作台。上�
 
 ## 下载即用
 
-不用自己编译：到 [Releases](https://github.com/Rickyshere/auto_study-guidance/releases/latest) 下载 `AutoStudyGuidance-v1.2.3-win64.zip`，解压后双击 `AutoStudyGuidance.exe`。首次启动会自检 Python / WebView2 等依赖，缺什么会弹窗并给一键安装。
+不用自己编译：到 [Releases](https://github.com/Rickyshere/auto_study-guidance/releases/latest) 下载 `AutoStudyGuidance-v1.2.4-win64.zip`，解压后双击 `AutoStudyGuidance.exe`。首次启动会自检 Python / WebView2 等依赖，缺什么会弹窗并给一键安装。
 
 ---
 

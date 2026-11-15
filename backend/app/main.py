@@ -101,7 +101,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.2.3",
+    version="1.2.4",
 )
 
 ALLOWED_ORIGINS = [
