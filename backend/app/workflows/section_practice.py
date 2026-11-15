@@ -26,9 +26,10 @@ EXCERPT_LIMIT = 2600
 MIN_SECTION_CHARS = 20
 # 「第 1 节 / 第三讲 / 第2课」这类标题才是真正可以出题的知识小节
 _SECTION_MARK_RE = re.compile(r"第\s*[0-9一二三四五六七八九十百]+\s*[节讲课]")
-# 这类小节只用来导览/说明，读完就该放行，不该卡练习
+# 这类小节只用来导览/速查，读完就该放行，不该卡练习
 _OPTIONAL_TITLE_RE = re.compile(
-    r"(学习地图|知识地图|思维导图|导览|导读|学习目标|学习路线|使用说明|讲义说明|前言|引言|序言|目录)"
+    r"(学习地图|知识地图|思维导图|导览|导读|导学|学习目标|学习路线|使用说明|讲义说明|"
+    r"前言|引言|序言|绪论|目录|速查|公式表|知识清单|考点清单)"
 )
 
 
@@ -112,7 +113,7 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
 
     if len(sections) < 2:
         for s in sections:
-            s["practice_required"] = True
+            s["practice_required"] = not _OPTIONAL_TITLE_RE.search(s["title"])
         return sections
 
     # 第一个标题有时是讲义自己的大标题（如「第02章 … 详细自学案」），不是可学的小节
@@ -127,11 +128,14 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
 
     has_section_marks = any(_SECTION_MARK_RE.search(s["title"]) for s in sections)
     for s in sections:
-        if has_section_marks:
-            # 结构清晰的讲义：只给「第 N 节」出题，导览页只读
+        if _OPTIONAL_TITLE_RE.search(s["title"]):
+            # 导学 / 知识地图 / 速查这类小节：读完就放行，不强制做题
+            s["practice_required"] = False
+        elif has_section_marks:
+            # 结构清晰的讲义：只给「第 N 节」正文出题
             s["practice_required"] = bool(_SECTION_MARK_RE.search(s["title"]))
         else:
-            s["practice_required"] = not _OPTIONAL_TITLE_RE.search(s["title"])
+            s["practice_required"] = True
     return sections
 
 

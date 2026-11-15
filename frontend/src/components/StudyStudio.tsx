@@ -60,6 +60,14 @@ const SECTION_PRACTICE_PLACEHOLDER: QuizPaper = {
   questions: [],
 };
 
+/** 已选节但练习还在后台生成时的占位卷 */
+const SECTION_WAITING_PLACEHOLDER: QuizPaper = {
+  ...SECTION_PRACTICE_PLACEHOLDER,
+  paper_id: 'section:waiting',
+  title: '这一节的练习正在准备',
+  instructions: '练习在讲义生成时就已排队生成，几秒后会自动出现在这里，不用再点生成。',
+};
+
 export type StudioTabKey =
   | 'notes'
   | 'section_practice'
@@ -492,7 +500,7 @@ export const StudyStudio: React.FC<Props> = ({
 
   const activePaper: QuizPaper = useMemo(() => {
     if (activeTab === 'section_practice') {
-      return sectionPaper || SECTION_PRACTICE_PLACEHOLDER;
+      return sectionPaper || (activeSectionId ? SECTION_WAITING_PLACEHOLDER : SECTION_PRACTICE_PLACEHOLDER);
     }
     return (
       allPapers.find((p) => p.paper_id === selectedPaperId) ||
@@ -526,6 +534,11 @@ export const StudyStudio: React.FC<Props> = ({
   const currentNoteSection = currentNoteStep;
   const currentNoteSectionId = currentNoteStep?.sectionId || null;
   const currentPracticeRequired = currentNoteStep ? currentNoteStep.practiceRequired : true;
+  const currentSectionPaperReady = Boolean(
+    currentNoteSectionId &&
+      (sectionPapers[currentNoteSectionId] ||
+        noteSections.find((s) => s.section_id === currentNoteSectionId)?.has_practice)
+  );
   const currentPracticeDone = isSectionPracticeDone(currentNoteSectionId);
   const currentSectionReady =
     Boolean(noteReadAck[noteStepIdx]) && (!currentPracticeRequired || currentPracticeDone);
@@ -558,6 +571,60 @@ export const StudyStudio: React.FC<Props> = ({
     };
   }, [activeTab, documentIr?.project_id, studyPackage.study_notes_markdown]);
 
+  /** 还有需要出题的小节没拿到练习 → 后台正在准备，前端轮询等它 */
+  const practicePending = useMemo(
+    () => noteSections.some((s) => s.practice_required !== false && !s.has_practice),
+    [noteSections]
+  );
+
+  // 后台预热期间轮询小节列表；已就绪的节直接把练习卷预取到本地（不用用户点）
+  useEffect(() => {
+    const pid = documentIr?.project_id;
+    if (!pid || !practicePending) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      api
+        .getNoteSections(pid)
+        .then((res) => {
+          if (!cancelled) setNoteSections(res.sections || []);
+        })
+        .catch(() => undefined);
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [practicePending, documentIr?.project_id]);
+
+  useEffect(() => {
+    const pid = documentIr?.project_id;
+    if (!pid) return;
+    const wanted = noteSections
+      .filter((s) => s.has_practice && !sectionPapers[s.section_id])
+      .map((s) => s.section_id);
+    if (wanted.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const sid of wanted) {
+        try {
+          const res = await api.createSectionPractice(pid, sid);
+          if (cancelled) return;
+          setSectionPapers((prev) => (prev[sid] ? prev : { ...prev, [sid]: res.paper }));
+        } catch {
+          /* 单节失败不影响其它节 */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [noteSections, documentIr?.project_id, sectionPapers]);
+
+  // 目标节的练习就绪后收掉「准备中」状态
+  useEffect(() => {
+    if (sectionBusyId && sectionPapers[sectionBusyId]) setSectionBusyId(null);
+  }, [sectionBusyId, sectionPapers]);
+
   const openSectionPractice = async (sectionId: string) => {
     const pid = documentIr?.project_id;
     if (!pid) return;
@@ -565,6 +632,12 @@ export const StudyStudio: React.FC<Props> = ({
     setSectionError(null);
     setCurrentCardIdx(0);
     if (sectionPapers[sectionId]) return;
+    const meta = noteSections.find((s) => s.section_id === sectionId);
+    if (meta && !meta.has_practice) {
+      // 练习是后台预生成的，这里只等它准备好，不再让用户点一次「生成」
+      setSectionBusyId(sectionId);
+      return;
+    }
     setSectionBusyId(sectionId);
     try {
       const res = await api.createSectionPractice(pid, sectionId);
@@ -573,7 +646,7 @@ export const StudyStudio: React.FC<Props> = ({
         prev.map((s) => (s.section_id === sectionId ? { ...s, has_practice: true } : s))
       );
     } catch (e: any) {
-      setSectionError(e?.message || '生成分节练习失败，请重试');
+      setSectionError(e?.message || '分节练习暂时取不到，请稍后再试');
     } finally {
       setSectionBusyId(null);
     }
@@ -1232,6 +1305,8 @@ export const StudyStudio: React.FC<Props> = ({
                         const locked = i >= noteUnlocked;
                         const isCurrent = i === noteStepIdx;
                         const secId = s.sectionId;
+                        const secMeta = secId ? noteSections.find((x) => x.section_id === secId) : undefined;
+                        const secReady = Boolean(secMeta?.has_practice || (secId && sectionPapers[secId]));
                         const isDone =
                           Boolean(noteReadAck[i]) && (!s.practiceRequired || isSectionPracticeDone(secId));
                         return (
@@ -1274,7 +1349,7 @@ export const StudyStudio: React.FC<Props> = ({
                             {!locked && s.practiceRequired && (
                               <button
                                 type="button"
-                                disabled={!secId || sectionBusyId === secId}
+                                disabled={!secId || !secReady || sectionBusyId === secId}
                                 onClick={() => {
                                   if (!secId) return;
                                   onChangeTab('section_practice');
@@ -1289,10 +1364,19 @@ export const StudyStudio: React.FC<Props> = ({
                                   color: 'var(--asg-brand-primary)',
                                   fontSize: '11.5px',
                                   fontWeight: 700,
-                                  cursor: !secId ? 'not-allowed' : sectionBusyId === secId ? 'wait' : 'pointer',
+                                  cursor: !secId || !secReady ? 'not-allowed' : 'pointer',
+                                  opacity: secReady ? 1 : 0.6,
                                 }}
                               >
-                                {!secId ? '无对应练习' : sectionBusyId === secId ? '生成中…' : isDone ? '再做一次' : '练本节'}
+                                {!secId
+                                  ? '无对应练习'
+                                  : !secReady
+                                    ? '准备中…'
+                                    : sectionBusyId === secId
+                                      ? '打开中…'
+                                      : isDone
+                                        ? '再做一次'
+                                        : '练本节'}
                               </button>
                             )}
                           </div>
@@ -1369,7 +1453,11 @@ export const StudyStudio: React.FC<Props> = ({
                         {currentPracticeRequired && (
                           <button
                             type="button"
-                            disabled={!currentNoteSectionId || sectionBusyId === currentNoteSectionId}
+                            disabled={
+                              !currentNoteSectionId ||
+                              !currentSectionPaperReady ||
+                              sectionBusyId === currentNoteSectionId
+                            }
                             onClick={() => {
                               if (!currentNoteSectionId) return;
                               onChangeTab('section_practice');
@@ -1380,13 +1468,18 @@ export const StudyStudio: React.FC<Props> = ({
                               borderRadius: '9999px',
                               fontSize: '12px',
                               fontWeight: 700,
-                              cursor: currentNoteSectionId ? 'pointer' : 'not-allowed',
+                              cursor: currentNoteSectionId && currentSectionPaperReady ? 'pointer' : 'not-allowed',
                               border: '1px solid var(--asg-brand-primary)',
                               backgroundColor: 'var(--asg-brand-tint)',
                               color: 'var(--asg-brand-primary)',
+                              opacity: currentSectionPaperReady ? 1 : 0.6,
                             }}
                           >
-                            {currentPracticeDone ? '✓ 本节练习已完成' : '去做本节练习'}
+                            {!currentSectionPaperReady
+                              ? '练习准备中…'
+                              : currentPracticeDone
+                                ? '✓ 本节练习已完成'
+                                : '去做本节练习'}
                           </button>
                         )}
                         <button
@@ -1448,6 +1541,7 @@ export const StudyStudio: React.FC<Props> = ({
                 </span>
                 <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
                   共 {practiceSections.length} 节
+                  {practicePending ? ' · 后台还在准备练习，就绪的节可以先做' : ' · 全部已就绪'}
                 </span>
               </div>
               {practiceSections.length === 0 ? (
@@ -1459,11 +1553,12 @@ export const StudyStudio: React.FC<Props> = ({
                   {practiceSections.map((s, i) => {
                     const isCur = s.section_id === activeSectionId;
                     const isBusy = sectionBusyId === s.section_id;
+                    const ready = s.has_practice || Boolean(sectionPapers[s.section_id]);
                     return (
                       <button
                         key={s.section_id}
                         type="button"
-                        disabled={isBusy}
+                        disabled={isBusy || !ready}
                         onClick={() => void openSectionPractice(s.section_id)}
                         style={{
                           padding: '6px 12px',
@@ -1473,11 +1568,12 @@ export const StudyStudio: React.FC<Props> = ({
                           color: isCur ? '#FFFFFF' : 'var(--asg-text-secondary)',
                           fontSize: '12px',
                           fontWeight: 600,
-                          cursor: isBusy ? 'wait' : 'pointer',
+                          cursor: !ready ? 'progress' : isBusy ? 'wait' : 'pointer',
+                          opacity: ready ? 1 : 0.6,
                         }}
-                        title={s.has_practice ? '已有练习，点击直接开始' : '点击生成这一节的练习'}
+                        title={ready ? '练习已就绪，点击直接开始' : '练习正在后台生成，稍等几秒'}
                       >
-                        {isBusy ? '生成中…' : `${i + 1}. ${s.title}`}
+                        {isBusy ? '打开中…' : `${i + 1}. ${s.title}${ready ? '' : ' · 准备中'}`}
                       </button>
                     );
                   })}

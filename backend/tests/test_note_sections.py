@@ -65,3 +65,47 @@ def test_section_ids_are_unique_and_stable():
 
 def test_markdown_without_headings_yields_no_sections():
     assert extract_note_sections("只有一段没有标题的正文内容，长度随便多少都行。") == []
+
+
+# --------------------------------------------------------------- 分节练习预热
+
+
+def test_practice_plan_skips_read_only_sections(monkeypatch):
+    """讲义一落地就自动预热练习：只给要出题的小节排队。"""
+    from pathlib import Path
+
+    import app.main as main
+
+    class _Pkg:
+        study_notes_markdown = NOTES
+
+    monkeypatch.setattr(main, "_load_package", lambda _pid: _Pkg())
+    monkeypatch.setattr(main, "load_section_practice_cache", lambda _d, _fp: {})
+    monkeypatch.setattr(main, "_safe_project_dir", lambda _pid: Path("."))
+
+    sections, fingerprint, cached = main._section_practice_plan("proj_x")
+    titles = [s["title"] for s in sections]
+    assert titles == ["第 1 节 荧光从哪里来", "第 2 节 两种特征光谱"]
+    assert fingerprint
+    assert cached == {}
+
+
+def test_prewarm_only_queues_sections_without_practice(monkeypatch):
+    import app.main as main
+
+    queued: list = []
+    monkeypatch.setattr(
+        main,
+        "_section_practice_plan",
+        lambda _pid: (
+            [{"section_id": "sec_a"}, {"section_id": "sec_b"}],
+            "fp",
+            {"sec_a": {"paper_id": "section:sec_a"}},
+        ),
+    )
+    monkeypatch.setattr(
+        main, "_start_section_practice_job", lambda pid, sid: queued.append((pid, sid))
+    )
+
+    assert main.prewarm_section_practices("proj_x") == 1
+    assert queued == [("proj_x", "sec_b")]

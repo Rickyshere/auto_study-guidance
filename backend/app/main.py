@@ -110,7 +110,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.3.0",
+    version="1.3.1",
 )
 
 ALLOWED_ORIGINS = [
@@ -907,18 +907,41 @@ async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> St
     return updated_bp
 
 
-@app.post("/api/projects/{project_id}/section-practice")
-async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> Any:
-    """按讲义小节生成/取出分节练习（同一节同一份讲义只生成一次，结果落盘缓存）。"""
+# ------------------------------------------------------------ 分节练习（讲义生成后自动预热）
+
+# 同一节只允许一个生成任务在跑；前端永远不用点「生成」，直接读缓存
+_SECTION_PRACTICE_JOBS: Dict[str, "asyncio.Task"] = {}
+_SECTION_PRACTICE_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+def _section_job_key(project_id: str, section_id: str) -> str:
+    return f"{project_id}::{section_id}"
+
+
+def _section_job_running(project_id: str, section_id: str) -> bool:
+    task = _SECTION_PRACTICE_JOBS.get(_section_job_key(project_id, section_id))
+    return bool(task is not None and not task.done())
+
+
+def _section_practice_plan(project_id: str) -> Any:
+    """(需要出题的小节, 讲义指纹, 已缓存练习)；项目还没有讲义时返回空列表。"""
+    package = _load_package(project_id)
+    if package is None or not (package.study_notes_markdown or "").strip():
+        return [], "", {}
+    notes = package.study_notes_markdown or ""
+    sections = [s for s in extract_note_sections(notes) if s.get("practice_required", True)]
+    fingerprint = notes_fingerprint(notes)
+    cached = load_section_practice_cache(_safe_project_dir(project_id), fingerprint)
+    return sections, fingerprint, cached
+
+
+async def _produce_section_practice(project_id: str, section_id: str) -> Dict[str, Any]:
+    """生成（或复用缓存）某一节的练习。同一项目串行生成，避免并发打爆模型。"""
     package = _load_package(project_id)
     if package is None:
         raise HTTPException(status_code=404, detail="该项目尚未生成讲义，请先完成生成")
     notes = package.study_notes_markdown or ""
     sections = extract_note_sections(notes)
-    if not sections:
-        raise HTTPException(status_code=400, detail="当前讲义没有可切分的小节，无法生成分节练习")
-
-    section_id = str(payload.get("section_id") or "").strip()
     section = next((s for s in sections if s["section_id"] == section_id), None)
     if section is None:
         raise HTTPException(status_code=404, detail=f"未找到小节 {section_id}")
@@ -927,13 +950,16 @@ async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> A
     project_dir = _safe_project_dir(project_id)
     cached = load_section_practice_cache(project_dir, fingerprint)
     if section_id in cached:
-        return {"paper": cached[section_id], "cached": True}
+        return cached[section_id]
 
-    blueprint = _load_blueprint(project_id) or package.blueprint_used
-    doc_ir = _load_project_ir(project_id)
-    settings = load_settings()
-    router = ModelRouter(settings)
-    try:
+    lock = _SECTION_PRACTICE_LOCKS.setdefault(project_id, asyncio.Lock())
+    async with lock:
+        cached = load_section_practice_cache(project_dir, fingerprint)
+        if section_id in cached:
+            return cached[section_id]
+        blueprint = _load_blueprint(project_id) or package.blueprint_used
+        doc_ir = _load_project_ir(project_id)
+        router = ModelRouter(load_settings())
         paper = await generate_section_practice(
             section=section,
             blueprint=blueprint,
@@ -941,17 +967,81 @@ async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> A
             total_sections=len(sections),
             router=router,
         )
+        cached[section_id] = json.loads(paper.model_dump_json())
+        save_section_practice_cache(project_dir, fingerprint, cached)
+        return cached[section_id]
+
+
+async def _run_section_practice_job(project_id: str, section_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        return await _produce_section_practice(project_id, section_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # 后台预热失败不影响讲义阅读
+        print(f"[section-practice] {project_id}/{section_id} 生成失败：{exc}", flush=True)
+        return None
+
+
+def _start_section_practice_job(project_id: str, section_id: str) -> "asyncio.Task":
+    key = _section_job_key(project_id, section_id)
+    task = _SECTION_PRACTICE_JOBS.get(key)
+    if task is not None and not task.done():
+        return task
+    task = asyncio.create_task(_run_section_practice_job(project_id, section_id))
+    _SECTION_PRACTICE_JOBS[key] = task
+
+    def _cleanup(_t: "asyncio.Task", k: str = key) -> None:
+        _SECTION_PRACTICE_JOBS.pop(k, None)
+
+    task.add_done_callback(_cleanup)
+    return task
+
+
+def prewarm_section_practices(project_id: str) -> int:
+    """讲义一落地就把每一节的练习排进后台队列，用户打开时直接可做。"""
+    try:
+        sections, _fingerprint, cached = _section_practice_plan(project_id)
+    except Exception:
+        return 0
+    pending = [s["section_id"] for s in sections if s["section_id"] not in cached]
+    for section_id in pending:
+        _start_section_practice_job(project_id, section_id)
+    return len(pending)
+
+
+@app.post("/api/projects/{project_id}/section-practice")
+async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> Any:
+    """取出某一节的分节练习；还没生成完就等后台任务，而不是让用户再点一次生成。"""
+    package = _load_package(project_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="该项目尚未生成讲义，请先完成生成")
+    notes = package.study_notes_markdown or ""
+    all_sections = extract_note_sections(notes)
+    if not all_sections:
+        raise HTTPException(status_code=400, detail="当前讲义没有可切分的小节，无法生成分节练习")
+
+    section_id = str(payload.get("section_id") or "").strip()
+    if not any(s["section_id"] == section_id for s in all_sections):
+        raise HTTPException(status_code=404, detail=f"未找到小节 {section_id}")
+
+    fingerprint = notes_fingerprint(notes)
+    cached = load_section_practice_cache(_safe_project_dir(project_id), fingerprint)
+    if section_id in cached:
+        return {"paper": cached[section_id], "cached": True}
+
+    task = _start_section_practice_job(project_id, section_id)
+    try:
+        paper = await task
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    cached[section_id] = json.loads(paper.model_dump_json())
-    save_section_practice_cache(project_dir, fingerprint, cached)
-    return {"paper": cached[section_id], "cached": False}
+    if paper is None:
+        raise HTTPException(status_code=400, detail="分节练习生成失败，请稍后重试")
+    return {"paper": paper, "cached": False}
 
 
 @app.get("/api/projects/{project_id}/sections")
 async def list_note_sections(project_id: str) -> Dict[str, Any]:
-    """讲义小节列表 + 每节是否已经有分节练习缓存（供前端「分节练习」导航使用）。"""
+    """讲义小节列表 + 每节练习是否已就绪（还是正在后台准备）。"""
     package = _load_package(project_id)
     if package is None:
         raise HTTPException(status_code=404, detail="该项目尚未生成讲义")
@@ -959,6 +1049,8 @@ async def list_note_sections(project_id: str) -> Dict[str, Any]:
     fingerprint = notes_fingerprint(notes)
     sections = extract_note_sections(notes)
     cached = load_section_practice_cache(_safe_project_dir(project_id), fingerprint)
+    # 打开讲义时顺手补齐还没生成的练习（幂等，已经在跑的不重复排队）
+    prewarm_section_practices(project_id)
     return {
         "notes_fingerprint": fingerprint,
         "sections": [
@@ -970,6 +1062,8 @@ async def list_note_sections(project_id: str) -> Dict[str, Any]:
                 "markdown": s.get("markdown", ""),
                 "practice_required": bool(s.get("practice_required", True)),
                 "has_practice": s["section_id"] in cached,
+                "practice_pending": s["section_id"] not in cached
+                and _section_job_running(project_id, s["section_id"]),
             }
             for s in sections
         ],
@@ -1042,6 +1136,7 @@ async def generate_materials(project_id: str, req: GenerateRequest):
             package = await generate_study_package(doc_ir, req.blueprint, router)
             cancel_token.raise_if_cancelled()
             _save_package(project_id, package)
+            prewarm_section_practices(project_id)
             return package
         except asyncio.CancelledError:
             cancel_token.cancel()
@@ -1068,6 +1163,7 @@ async def generate_materials(project_id: str, req: GenerateRequest):
                 )
                 cancel_token.raise_if_cancelled()
                 _save_package(project_id, package)
+                prewarm_section_practices(project_id)
                 done_payload = json.dumps(
                     {"type": "complete", "package": package.model_dump()},
                     ensure_ascii=False,
@@ -1149,6 +1245,7 @@ async def generate_exam_materials(project_id: str, req: ExamGenerateRequest):
             cancel_token.raise_if_cancelled()
             _save_blueprint(project_id, package.blueprint_used)
             _save_package(project_id, package)
+            prewarm_section_practices(project_id)
             return package
         except asyncio.CancelledError:
             cancel_token.cancel()
@@ -1179,6 +1276,7 @@ async def generate_exam_materials(project_id: str, req: ExamGenerateRequest):
                 cancel_token.raise_if_cancelled()
                 _save_blueprint(project_id, package.blueprint_used)
                 _save_package(project_id, package)
+                prewarm_section_practices(project_id)
                 done_payload = json.dumps(
                     {"type": "complete", "percent": 100, "package": package.model_dump()},
                     ensure_ascii=False,
