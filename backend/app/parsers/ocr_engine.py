@@ -974,6 +974,9 @@ async def stream_setup_ocr_engine(
             # mineru-api 没有 --backend 参数（传了会直接被 typer 拒绝退出，进程秒死、
             # 用户点了启动却什么反馈都没有）。能力档位用 --tier: flash/basic/standard。
             start_cmd = [mineru_api_exe, "--host", "127.0.0.1", "--port", str(port)]
+            # MinerU 会把上传文件写进 --upload-dir（默认相对当前工作目录，也就是 backend/），
+            # 不指定就会在仓库里长出一个 backend/blobs 目录（实测 62 个文件 18MB）。
+            start_cmd += ["--upload-dir", str(TOOLS_DIR / "mineru_uploads")]
             if engine_id == "mineru_pipeline":
                 start_cmd += ["--tier", "basic", "--no-advanced"]
             start_log = TOOLS_DIR / "logs" / "mineru_api.log"

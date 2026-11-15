@@ -24,3 +24,7 @@ AutoStudyGuidance.exe
 Microsoft.Web.WebView2.Core.dll
 Microsoft.Web.WebView2.WinForms.dll
 WebView2Loader.dll
+# MinerU 上传缓存（由 mineru-api --upload-dir 生成，绝不能进仓库）
+backend/blobs/
+backend/data/cache/
+backend/tools/mineru_uploads/
