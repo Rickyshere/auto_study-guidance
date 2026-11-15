@@ -7,6 +7,24 @@ from app.schemas import ScenarioType
 
 SOULS_DIR = Path(__file__).resolve().parent
 
+# 通用写作声音规范（Say Alive, MIT）——每个生成资料的子 Agent 都会挂载这一段。
+WRITING_STYLE_SOUL_FILE = SOULS_DIR / "sayalive_writing_soul.md"
+
+
+def get_writing_style_soul() -> str:
+    """The shared 'write like a person, not a chatbot' block appended to every task soul."""
+    if WRITING_STYLE_SOUL_FILE.is_file():
+        return WRITING_STYLE_SOUL_FILE.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def with_writing_style(soul_text: str) -> str:
+    """Append the shared writing-style block to any soul/system prompt."""
+    style = get_writing_style_soul()
+    if not style or style in (soul_text or ""):
+        return (soul_text or "").strip()
+    return f"{(soul_text or '').strip()}\n\n---\n\n{style}"
+
 # ==============================================================================
 # 0. Global Protocols (Courseware PDF/PPTX Ingestion + Print/Export Spec)
 # ==============================================================================
@@ -166,7 +184,7 @@ def get_courseware_soul_label(scenario_type: ScenarioType) -> str:
 
 
 def build_courseware_deliverable_soul(scenario_type: ScenarioType, deliverable_id: str) -> str:
-    """Assemble System Soul + Global Protocols + Mode-specific Deliverable Task Soul."""
+    """Assemble System Soul + Global Protocols + Writing Style + Deliverable Task Soul."""
     mode_soul = MODE_SYSTEM_SOULS.get(scenario_type, MODE_SYSTEM_SOULS["A_beginner"])
     task_soul = DELIVERABLE_TASK_SOULS.get((scenario_type, deliverable_id))
     if not task_soul:
@@ -176,6 +194,9 @@ def build_courseware_deliverable_soul(scenario_type: ScenarioType, deliverable_i
                 task_soul = prompt_text
                 break
     parts = [mode_soul.strip(), GLOBAL_COURSEWARE_PROTOCOLS.strip()]
+    style_soul = get_writing_style_soul()
+    if style_soul:
+        parts.append(style_soul)
     if task_soul:
         parts.append(task_soul.strip())
     return "\n\n---\n\n".join(parts)

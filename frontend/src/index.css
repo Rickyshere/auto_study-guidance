@@ -8,6 +8,12 @@
   body {
     background: #ffffff !important;
   }
+  /* 分页预览弹窗打开时按 Ctrl+P：主应用与弹窗都隐藏，只留一张空白页，
+     避免打印出残缺的模拟版式（真实分页 PDF 请用弹窗内的下载/新窗口打开）。 */
+  body.print-preview-open #root,
+  body.print-preview-open .print-preview-root {
+    display: none !important;
+  }
 }
 
 .markdown-body h1 {

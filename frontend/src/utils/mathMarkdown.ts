@@ -110,6 +110,80 @@ export function expandInlineMarkdownTables(text: string): string {
   return outLines.join('\n');
 }
 
+const TABLE_SEP_ROW_RE = /^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/;
+const PIPE_ROW_RE = /^\|.*\|\s*$/;
+
+/** 讲义分页标记：与后端 `PAGE_BREAK_TOKEN` 保持一致。 */
+export const PAGE_BREAK_TOKEN = '@@ASG_PAGE_BREAK@@';
+const PAGE_BREAK_HTML_RE =
+  /<div[^>]*class\s*=\s*["']?page-break["']?[^>]*>\s*<\/div>|<!--\s*page-?break\s*-->/gi;
+
+/**
+ * 把 `<div class="page-break"></div>` 换成统一 token。
+ * 否则 react-markdown 会把它当成普通文字直接印在讲义正文里。
+ */
+export function normalizePageBreaks(text: string): string {
+  if (!text) return text;
+  if (!/page-?break/i.test(text) && !text.includes(PAGE_BREAK_TOKEN)) return text;
+  return text
+    .replace(PAGE_BREAK_HTML_RE, `\n\n${PAGE_BREAK_TOKEN}\n\n`)
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Restore the separator row of a GFM table the model pasted without one.
+ *
+ * A two-row table glued into a sentence (`如下表：` then two `| … |` lines) has no
+ * `|---|---|` row, so GFM renders it as one long paragraph instead of a table.
+ */
+export function repairPipeTables(text: string): string {
+  if (!text || !text.includes('|')) return text;
+
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim().startsWith('|')) {
+      out.push(line);
+      i += 1;
+      continue;
+    }
+
+    const run: string[] = [];
+    let j = i;
+    while (j < lines.length && lines[j].trim().startsWith('|')) {
+      run.push(lines[j].trim());
+      j += 1;
+    }
+
+    const rows = run.map((row) => row.replace(/^\|/, '').replace(/\|$/, '').split('|'));
+    const widths = new Set(rows.map((r) => r.length));
+    const looksLikeTable =
+      run.length >= 2 &&
+      !run.some((row) => TABLE_SEP_ROW_RE.test(row)) &&
+      widths.size === 1 &&
+      Math.min(...widths) >= 2 &&
+      run.every((row) => PIPE_ROW_RE.test(row)) &&
+      rows.some((r) => r.some((cell) => cell.trim()));
+
+    if (!looksLikeTable) {
+      out.push(...run);
+      i = j;
+      continue;
+    }
+
+    if (out.length > 0 && out[out.length - 1].trim()) out.push('');
+    out.push(run[0]);
+    out.push(`|${new Array(rows[0].length).fill('---').join('|')}|`);
+    out.push(...run.slice(1));
+    if (j < lines.length && lines[j].trim()) out.push('');
+    i = j;
+  }
+
+  return out.join('\n');
+}
+
 /**
  * Normalize LaTeX delimiters (`\(...\)` -> `$...$`, `\[...\]` -> `$$...$$`),
  * expand single-line collapsed GFM tables, and protect bare LaTeX math expressions
@@ -162,6 +236,10 @@ export function normalizeMathMarkdown(text: string): string {
 
   // 5. Expand collapsed inline Markdown tables into multi-line GFM tables
   out = expandInlineMarkdownTables(out);
+  // 5b. Re-add the separator row to tables pasted without one (otherwise they print as text)
+  out = repairPipeTables(out);
+  // 5c. 统一分页标记，避免原始 <div> 被当成正文渲染
+  out = normalizePageBreaks(out);
 
   // 6. Protect inline math, inline code and images; then repair bare LaTeX only in plain text
   out = out.replace(/\$[^$\n]+\$|`[^`\n]+`|!\[[^\]]*\]\([^)]+\)/g, (m) => stash(m));

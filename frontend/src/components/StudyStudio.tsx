@@ -13,6 +13,7 @@ import {
   Copy,
   Download,
   Eye,
+  ExternalLink,
   FileText,
   Layers,
   Network,
@@ -36,7 +37,6 @@ import {
   StudyPackage,
 } from '../types';
 import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
-import { normalizeMathMarkdown } from '../utils/mathMarkdown';
 import { MathMarkdown } from './MathMarkdown';
 
 mermaid.initialize({
@@ -2779,7 +2779,6 @@ export const StudyStudio: React.FC<Props> = ({
         <PrintPreviewModal
           studyPackage={studyPackage}
           activeQuiz={activePaper}
-          documentIr={documentIr}
           docType={previewSpec.docType}
           paperSize={previewSpec.paperSize}
           includeAnswers={previewSpec.includeAnswers}
@@ -3003,10 +3002,56 @@ function MetricTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * 已生成过的印刷版式 PDF：同一组参数（含学习包生成时间）直接复用 blob，
+ * 避免在 A4/A3、含答案/不含答案之间来回切换时反复触发 2-15s 的后端排版。
+ */
+const pdfBlobCache = new Map<string, Blob>();
+const PDF_BLOB_CACHE_LIMIT = 3;
+
+async function fetchPdfBlob(cacheKey: string, url: string, signal: AbortSignal): Promise<Blob> {
+  const cached = pdfBlobCache.get(cacheKey);
+  if (cached) return cached;
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(await readPdfErrorDetail(res));
+  const blob = await res.blob();
+  if (!blob.size) throw new Error('后端返回了空 PDF，请重试。');
+  pdfBlobCache.set(cacheKey, blob);
+  if (pdfBlobCache.size > PDF_BLOB_CACHE_LIMIT) {
+    const oldestKey = pdfBlobCache.keys().next().value;
+    if (oldestKey !== undefined) pdfBlobCache.delete(oldestKey);
+  }
+  return blob;
+}
+
+/** 把导出 PDF 接口的失败响应折叠成一段可读文案（后端可能返回 JSON detail 或纯文本）。 */
+async function readPdfErrorDetail(res: Response): Promise<string> {
+  let raw = '';
+  try {
+    raw = await res.text();
+  } catch {
+    raw = '';
+  }
+  const fallback = `印刷版式 PDF 生成失败（HTTP ${res.status}）`;
+  if (!raw.trim()) return fallback;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string' && parsed.trim()) return parsed.slice(0, 500);
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as { detail?: unknown; message?: unknown };
+      const detail = record.detail ?? record.message;
+      if (typeof detail === 'string' && detail.trim()) return detail.slice(0, 500);
+      if (detail !== undefined) return JSON.stringify(detail).slice(0, 500);
+    }
+  } catch {
+    // 非 JSON 响应：直接展示原始文本
+  }
+  return raw.slice(0, 500);
+}
+
 function PrintPreviewModal({
   studyPackage,
   activeQuiz,
-  documentIr,
   docType,
   paperSize,
   includeAnswers,
@@ -3017,7 +3062,6 @@ function PrintPreviewModal({
 }: {
   studyPackage: StudyPackage;
   activeQuiz: QuizPaper;
-  documentIr?: DocumentIR | null;
   docType: 'quiz' | 'study_guide' | 'cheatsheet';
   paperSize: 'a4' | 'a3';
   includeAnswers: boolean;
@@ -3030,93 +3074,117 @@ function PrintPreviewModal({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const isA3 = paperSize === 'a3';
-  const quiz = activeQuiz || studyPackage.quiz_paper;
-  const mcqs = quiz.questions.filter((q) => q.type === 'mcq');
-  const blanks = quiz.questions.filter((q) => q.type === 'fill_blank');
-  const shorts = quiz.questions.filter((q) => q.type === 'short_answer');
+  // 预览直接消费后端真实分页 PDF（inline），不再用 DOM 模拟单张纸。
+  const projectId = studyPackage.project_id;
+  const quizPaperId = docType === 'quiz' ? activeQuiz?.paper_id || '' : '';
 
-  const renderQuestionList = (title: string, items: QuizQuestion[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div style={{ breakInside: 'avoid-column', marginBottom: '18px' }}>
-        <div
-          style={{
-            fontSize: '13.5px',
-            fontWeight: 800,
-            color: '#111827',
-            borderBottom: '1.5px solid #111827',
-            paddingBottom: '4px',
-            marginBottom: '10px',
-          }}
-        >
-          {title}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {items.map((q, idx) => {
-            const normStem = normalizeMathMarkdown(q.question || '');
-            const hasBlockStem = normStem.includes('\n|') || normStem.includes('\n\n');
-            return (
-              <div
-                key={q.id}
-                style={{
-                  breakInside: 'avoid',
-                  fontSize: '12.5px',
-                  lineHeight: 1.65,
-                  color: '#1F2937',
-                }}
-              >
-                <div style={{ fontWeight: 600 }}>
-                  <span>{idx + 1}. </span>
-                  <span style={{ color: '#4B5563', fontSize: '11px', marginRight: '4px' }}>
-                    [{q.score}分]
-                  </span>
-                  {hasBlockStem ? (
-                    <div style={{ marginTop: '4px', fontWeight: 500 }}>
-                      <MathMarkdown>{q.question}</MathMarkdown>
-                    </div>
-                  ) : (
-                    <MathMarkdown inline>{q.question}</MathMarkdown>
-                  )}
-                </div>
-                {q.options.length > 0 && (
-                  <div
-                    style={{
-                      marginTop: '4px',
-                      paddingLeft: '14px',
-                      display: 'grid',
-                      gridTemplateColumns: isA3 ? '1fr 1fr' : '1fr',
-                      gap: '3px 12px',
-                      fontSize: '12px',
-                      color: '#374151',
-                    }}
-                  >
-                    {q.options.map((opt, oi) => (
-                      <div key={oi}>
-                        <MathMarkdown inline>{opt}</MathMarkdown>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {q.type === 'short_answer' && (
-                  <div
-                    style={{
-                      marginTop: '8px',
-                      height: '56px',
-                    }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
+  const pdfRequestUrl = useMemo(() => {
+    if (!projectId) return '';
+    const params = new URLSearchParams({
+      doc_type: docType,
+      paper_size: paperSize,
+      include_answers: includeAnswers ? 'true' : 'false',
+      inline: 'true',
+    });
+    if (docType === 'quiz' && quizPaperId) params.set('paper_id', quizPaperId);
+    return `/api/projects/${encodeURIComponent(projectId)}/export-pdf?${params.toString()}`;
+  }, [projectId, docType, paperSize, includeAnswers, quizPaperId]);
+
+  // 学习包重新生成后 generated_at 变化 => 缓存键变化，不会拿到旧 PDF。
+  const pdfCacheKey = useMemo(
+    () => `${pdfRequestUrl}::${studyPackage.generated_at || ''}`,
+    [pdfRequestUrl, studyPackage.generated_at]
+  );
+
+  const pdfObjectUrlRef = useRef<string | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(true);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [pdfAttempt, setPdfAttempt] = useState(0);
+
+  const revokePdfUrl = useCallback(() => {
+    if (pdfObjectUrlRef.current) {
+      URL.revokeObjectURL(pdfObjectUrlRef.current);
+      pdfObjectUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pdfRequestUrl) {
+      setPdfLoading(false);
+      setPdfError('缺少项目 ID，无法生成印刷版式 PDF。');
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    // 切换文稿/纸张/答案即视为新请求：先释放上一份 blob，避免多次导出堆积内存。
+    revokePdfUrl();
+    setPdfUrl(null);
+    setPdfError(null);
+    setPdfLoading(true);
+
+    // 后端排一次版需要 2-15s 且吃 CPU，快速切换开关时做防抖，只保留最后一次请求。
+    const timer = window.setTimeout(() => {
+      fetchPdfBlob(pdfCacheKey, pdfRequestUrl, controller.signal)
+        .then((blob) => {
+          if (cancelled) return;
+          const objectUrl = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(objectUrl);
+            return;
+          }
+          pdfObjectUrlRef.current = objectUrl;
+          setPdfUrl(objectUrl);
+          setPdfLoading(false);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setPdfUrl(null);
+          setPdfLoading(false);
+          setPdfError(err instanceof Error ? err.message : '印刷版式 PDF 生成失败，请重试。');
+        });
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [pdfCacheKey, pdfRequestUrl, pdfAttempt, revokePdfUrl]);
+
+  // 关闭预览（组件卸载）时释放最后一次创建的 object URL。
+  useEffect(() => () => revokePdfUrl(), [revokePdfUrl]);
+
+  // 预览打开期间按 Ctrl+P 时隐藏主应用，只留一张空白页，避免打印出残缺版式。
+  useEffect(() => {
+    document.body.classList.add('print-preview-open');
+    return () => document.body.classList.remove('print-preview-open');
+  }, []);
+
+  const handleOpenInNewWindow = () => {
+    if (!pdfUrl) return;
+    const opened = window.open(pdfUrl, '_blank');
+    if (!opened) {
+      // 弹窗被拦截时退化为下载，保证用户仍能拿到同一份 PDF。
+      const link = document.createElement('a');
+      link.href = pdfUrl;
+      link.download = `study_export_${paperSize}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+    try {
+      opened.opener = null;
+    } catch {
+      // 忽略跨源 opener 限制
+    }
   };
 
   return createPortal(
     <div
-      className="no-print"
+      className="no-print print-preview-root"
       style={{
         position: 'fixed',
         inset: 0,
@@ -3240,6 +3308,33 @@ function PrintPreviewModal({
             </SpringButton>
             <button
               type="button"
+              onClick={handleOpenInNewWindow}
+              disabled={!pdfUrl}
+              title={
+                pdfUrl
+                  ? '在新标签页中打开当前分页 PDF（使用浏览器自带的分页与缩放控件）'
+                  : 'PDF 生成完成后可在新窗口打开'
+              }
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                borderRadius: '9999px',
+                border: '1px solid #E5E7EB',
+                backgroundColor: '#FFFFFF',
+                color: '#374151',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: pdfUrl ? 'pointer' : 'not-allowed',
+                opacity: pdfUrl ? 1 : 0.55,
+              }}
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>在新窗口打开</span>
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               style={{
                 borderRadius: '9999px',
@@ -3260,213 +3355,126 @@ function PrintPreviewModal({
 
         <div
           style={{
+            position: 'relative',
             flex: 1,
             minHeight: 0,
-            overflow: 'auto',
             backgroundColor: '#CBD5E1',
-            padding: '28px 24px 48px',
+            display: 'flex',
           }}
         >
-          <div
-            className="print-paper-sheet"
-            style={{
-              width: isA3 ? '1080px' : '780px',
-              maxWidth: '100%',
-              margin: '0 auto',
-              backgroundColor: '#FFFFFF',
-              boxShadow: '0 22px 50px -14px rgba(15, 23, 42, 0.28)',
-              border: '1px solid #94A3B8',
-              borderRadius: '4px',
-              display: 'flex',
-              minHeight: isA3 ? '740px' : '1040px',
-            }}
-          >
-            {isA3 && (
+          {pdfUrl ? (
+            <iframe
+              key={pdfUrl}
+              title="印刷版式 PDF 分页预览"
+              src={pdfUrl}
+              style={{
+                flex: 1,
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                backgroundColor: '#FFFFFF',
+                display: 'block',
+              }}
+            />
+          ) : pdfError ? (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                padding: '32px',
+                textAlign: 'center',
+              }}
+            >
+              <XCircle className="w-8 h-8" style={{ color: '#B91C1C' }} />
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#111827' }}>
+                印刷版式 PDF 生成失败
+              </div>
               <div
                 style={{
-                  width: '74px',
-                  flexShrink: 0,
-                  borderRight: '2px dashed #475569',
-                  padding: '24px 10px',
+                  fontSize: '12.5px',
+                  color: '#4B5563',
+                  maxWidth: '560px',
+                  lineHeight: 1.7,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {pdfError}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPdfAttempt((n) => n + 1)}
+                style={{
+                  marginTop: '4px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  borderRadius: '9999px',
+                  border: '1px solid #E5E7EB',
+                  backgroundColor: '#FFFFFF',
+                  color: '#374151',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>重试</span>
+              </button>
+            </div>
+          ) : pdfLoading ? (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '14px',
+                padding: '32px',
+              }}
+            >
+              <div
+                className="animate-pulse"
+                style={{
+                  width: 'min(560px, 84%)',
+                  height: '62%',
+                  minHeight: '220px',
+                  borderRadius: '4px',
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #94A3B8',
+                  boxShadow: '0 22px 50px -14px rgba(15, 23, 42, 0.28)',
+                  padding: '28px 30px',
                   display: 'flex',
                   flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  backgroundColor: '#FAF9F6',
-                  color: '#334155',
-                  fontSize: '11px',
-                  fontWeight: 600,
+                  gap: '10px',
                 }}
               >
-                <div style={{ writingMode: 'vertical-rl', letterSpacing: '0.28em' }}>
-                  学校：________ 班级：________ 姓名：________ 学号：________
-                </div>
-                <div
-                  style={{
-                    writingMode: 'vertical-rl',
-                    letterSpacing: '0.35em',
-                    color: '#111827',
-                    fontWeight: 800,
-                  }}
-                >
-                  装 订 密 封 线 · 严 禁 答 题
-                </div>
-              </div>
-            )}
-
-            <div style={{ flex: 1, minWidth: 0, padding: isA3 ? '30px 36px' : '40px 44px' }}>
-              <div
-                style={{
-                  textAlign: 'center',
-                  borderBottom: '2px solid #111827',
-                  paddingBottom: '12px',
-                  marginBottom: '18px',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: '#4B5563', fontWeight: 600, letterSpacing: '0.06em' }}>
-                  {isA3 ? 'A3 横向双栏独立印刷版式预览' : 'A4 竖版独立印刷版式预览'}
-                  {documentIr ? ` · 来源：《${documentIr.filename}》` : ''}
-                </div>
-                <h1
-                  style={{
-                    fontSize: '19px',
-                    fontWeight: 800,
-                    color: '#111827',
-                    marginTop: '4px',
-                  }}
-                >
-                  {docType === 'quiz'
-                    ? quiz.title
-                    : docType === 'cheatsheet'
-                    ? `${studyPackage.blueprint_used.blueprint_title} · 考前速记浓缩表`
-                    : `${studyPackage.blueprint_used.blueprint_title} · 自学导学印刷讲义`}
-                </h1>
-                {docType === 'quiz' && (
+                {[88, 100, 96, 72, 100, 92, 58].map((w, i) => (
                   <div
+                    key={i}
                     style={{
-                      marginTop: '6px',
-                      fontSize: '11.5px',
-                      color: '#374151',
-                      display: 'flex',
-                      justifyContent: 'center',
-                      gap: '18px',
-                      flexWrap: 'wrap',
+                      height: i === 0 ? '14px' : '9px',
+                      width: `${w}%`,
+                      borderRadius: '9999px',
+                      backgroundColor: i === 0 ? '#E2E8F0' : '#EEF2F7',
                     }}
-                  >
-                    <span>建议用时：{quiz.suggested_minutes} 分钟</span>
-                    <span>卷面满分：{quiz.total_score} 分</span>
-                    <span>
-                      题量：单选 {mcqs.length} / 填空 {blanks.length} / 简答 {shorts.length}
-                    </span>
-                  </div>
-                )}
+                  />
+                ))}
               </div>
-
-              <div
-                style={
-                  isA3
-                    ? {
-                        columnCount: 2,
-                        columnGap: '34px',
-                        columnRule: '1px dashed #CBD5E1',
-                      }
-                    : undefined
-                }
-              >
-                {docType === 'quiz' && (
-                  <>
-                    <div
-                      style={{
-                        fontSize: '11.5px',
-                        color: '#4B5563',
-                        backgroundColor: '#FAF9F6',
-                        border: '1px solid #E5E7EB',
-                        padding: '8px 10px',
-                        borderRadius: '4px',
-                        marginBottom: '14px',
-                      }}
-                    >
-                      注意事项：{quiz.instructions}
-                    </div>
-                    {renderQuestionList('一、单项选择题', mcqs)}
-                    {renderQuestionList('二、填空题', blanks)}
-                    {renderQuestionList('三、简答与综合应用题', shorts)}
-
-                    {includeAnswers && quiz.questions.length > 0 && (
-                      <div
-                        style={{
-                          marginTop: '22px',
-                          paddingTop: '14px',
-                          borderTop: '2px solid #111827',
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: '14px',
-                            fontWeight: 800,
-                            color: '#111827',
-                            marginBottom: '10px',
-                          }}
-                        >
-                          参考答案与详细解析
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', color: '#1F2937' }}>
-                          {quiz.questions.map((q, idx) => (
-                            <div key={q.id} style={{ breakInside: 'avoid' }}>
-                              <strong>第 {idx + 1} 题答案：</strong>
-                              <MathMarkdown inline>{q.answer}</MathMarkdown>
-                              <div style={{ color: '#4B5563', marginTop: '2px' }}>
-                                解析：<MathMarkdown inline>{q.explanation}</MathMarkdown>（{q.source_chapter} {q.source_page}）
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {docType === 'study_guide' && (
-                  <div className="asg-academic-prose" style={{ color: '#111827' }}>
-                    <MathMarkdown>
-                      {studyPackage.study_notes_markdown || '_本次方案未生成自学导学讲义正文_'}
-                    </MathMarkdown>
-                    {includeAnswers && quiz.questions.length > 0 && (
-                      <div
-                        style={{
-                          marginTop: '22px',
-                          paddingTop: '14px',
-                          borderTop: '2px solid #111827',
-                        }}
-                      >
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#111827', marginBottom: '10px' }}>
-                          随堂边学边练与参考解析
-                        </div>
-                        {quiz.questions.map((q, idx) => (
-                          <div key={q.id} style={{ marginBottom: '10px', fontSize: '12px', breakInside: 'avoid' }}>
-                            <div style={{ fontWeight: 600 }}>
-                              {idx + 1}. <MathMarkdown inline>{q.question}</MathMarkdown>
-                            </div>
-                            <div style={{ color: '#3B5BDB', marginTop: '2px' }}>
-                              答案：<MathMarkdown inline>{q.answer}</MathMarkdown> ｜ 解析：<MathMarkdown inline>{q.explanation}</MathMarkdown>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {docType === 'cheatsheet' && (
-                  <div className="asg-academic-prose" style={{ color: '#111827' }}>
-                    <MathMarkdown>
-                      {studyPackage.cheatsheet_markdown || '_本次方案未生成考前速记表_'}
-                    </MathMarkdown>
-                  </div>
-                )}
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                正在生成印刷版式 PDF…
+              </div>
+              <div style={{ fontSize: '12px', color: '#64748B' }}>
+                后端正按 {paperSize.toUpperCase()} 真实分页排版，通常需要 2–15 秒。
               </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>,

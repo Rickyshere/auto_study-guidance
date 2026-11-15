@@ -3,7 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { normalizeMathMarkdown } from '../utils/mathMarkdown';
+import { normalizeMathMarkdown, PAGE_BREAK_TOKEN } from '../utils/mathMarkdown';
 import { MermaidDiagram } from './MermaidDiagram';
 
 interface MathMarkdownProps {
@@ -25,6 +25,25 @@ function childrenToText(children: React.ReactNode): string {
     .join('');
 }
 
+/** 讲义里的分页标记：应用内显示为一条标注"分页"的虚线，而不是原始 HTML 文本。 */
+const PageBreakDivider: React.FC = () => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      margin: '18px 0',
+      color: '#94A3B8',
+      fontSize: '11px',
+      userSelect: 'none',
+    }}
+  >
+    <span style={{ flex: 1, borderTop: '1px dashed #CBD5E1' }} />
+    <span style={{ letterSpacing: '0.08em' }}>分页 · 打印时此处另起一页</span>
+    <span style={{ flex: 1, borderTop: '1px dashed #CBD5E1' }} />
+  </div>
+);
+
 const markdownComponents: Components = {
   code: ({ node: _node, className, children, ...props }) => {
     if (isMermaidBlock(className)) {
@@ -44,6 +63,12 @@ const markdownComponents: Components = {
       return <>{firstChild}</>;
     }
     return <pre {...props}>{children}</pre>;
+  },
+  p: ({ node: _node, children, ...props }) => {
+    if (childrenToText(children).trim() === PAGE_BREAK_TOKEN) {
+      return <PageBreakDivider />;
+    }
+    return <p {...props}>{children}</p>;
   },
 };
 

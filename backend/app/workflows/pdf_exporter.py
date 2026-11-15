@@ -9,7 +9,11 @@ from typing import Dict, List, Literal, Optional, Tuple
 import pymupdf
 
 from app.schemas import DocumentIR, QuizQuestion, StudyPackage
-from app.workflows.generator import normalize_markdown_math, strip_document_images
+from app.workflows.generator import (
+    PAGE_BREAK_TOKEN,
+    normalize_markdown_math,
+    strip_document_images,
+)
 from app.workflows.latex_render import render_math
 
 PaperSize = Literal["a4", "a3"]
@@ -252,6 +256,12 @@ def _markdown_to_block_list(
                     i += 1
                 expr = "\n".join(math_lines)
             blocks.append(("block", f'<div class="math-block">{_latex_display_to_html(expr)}</div>'))
+            continue
+
+        # Page break marker (handled before anything else can swallow it as prose)
+        if stripped == PAGE_BREAK_TOKEN or stripped == f"**{PAGE_BREAK_TOKEN}**":
+            blocks.append(("block", '<div style="page-break-after: always;"></div>'))
+            i += 1
             continue
 
         # Horizontal rule

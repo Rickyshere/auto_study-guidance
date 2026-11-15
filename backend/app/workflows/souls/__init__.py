@@ -5,6 +5,8 @@ from app.workflows.souls.soul_registry import (
     SOULS_DIR,
     build_courseware_deliverable_soul,
     get_courseware_soul_label,
+    get_writing_style_soul,
+    with_writing_style,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "DELIVERABLE_TASK_SOULS",
     "build_courseware_deliverable_soul",
     "get_courseware_soul_label",
+    "get_writing_style_soul",
+    "with_writing_style",
 ]

@@ -175,6 +175,87 @@ def strip_document_images(text: str) -> str:
     return cleaned.strip("\n")
 
 
+_PIPE_ROW_RE = re.compile(r"^\|.*\|\s*$")
+_TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+# 讲义里的分页标记统一成这个 token：PDF 导出器据此真正另起一页，
+# 应用内则渲染成一条"分页"分隔线，而不是把原始 <div> 当正文显示。
+PAGE_BREAK_TOKEN = "@@ASG_PAGE_BREAK@@"
+_PAGE_BREAK_HTML_RE = re.compile(
+    r"<div[^>]*class\s*=\s*[\"']?page-break[\"']?[^>]*>\s*</div>|<!--\s*page-?break\s*-->",
+    re.IGNORECASE,
+)
+
+
+def normalize_page_breaks(text: str) -> str:
+    if not text or "page-break" not in text.lower() and PAGE_BREAK_TOKEN not in text:
+        return text
+    cleaned = _PAGE_BREAK_HTML_RE.sub(f"\n\n{PAGE_BREAK_TOKEN}\n\n", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned
+
+
+def repair_pipe_tables(text: str) -> str:
+    """Give GFM tables that lost their separator row a chance to render as tables.
+
+    Models frequently emit a two-row table glued into a sentence, e.g.::
+
+        测得如下表：
+        | 滴定剂体积 V/mL | 24.90 | 25.00 |
+        | Δ²E/ΔV²        | +0.24 | -0.16 |
+
+    Without the `|---|---|---|` line GFM renders the pipe rows as literal text, so the
+    table collapses into one long paragraph. This inserts the missing separator and
+    makes sure the block is surrounded by blank lines.
+    """
+    if "|" not in text:
+        return text
+
+    lines = text.split("\n")
+    out: List[str] = []
+    i = 0
+    total = len(lines)
+    while i < total:
+        line = lines[i]
+        if not line.strip().startswith("|"):
+            out.append(line)
+            i += 1
+            continue
+
+        run: List[str] = []
+        j = i
+        while j < total and lines[j].strip().startswith("|"):
+            run.append(lines[j].strip())
+            j += 1
+
+        rows = [[cell.strip() for cell in row.strip("|").split("|")] for row in run]
+        widths = {len(row) for row in rows}
+        looks_like_table = (
+            len(run) >= 2
+            and not any(_TABLE_SEP_RE.match(row) for row in run)
+            and len(widths) == 1
+            and min(widths) >= 2
+            and all(_PIPE_ROW_RE.match(row) for row in run)
+            # a row of nothing but empty cells is prose that happens to start with a pipe
+            and any(cell for row in rows for cell in row)
+        )
+        if not looks_like_table:
+            out.extend(run)
+            i = j
+            continue
+
+        if out and out[-1].strip():
+            out.append("")
+        out.append(run[0])
+        out.append("|" + "|".join(["---"] * len(rows[0])) + "|")
+        out.extend(run[1:])
+        if j < total and lines[j].strip():
+            out.append("")
+        i = j
+
+    return "\n".join(out)
+
+
 def normalize_markdown_math(text: str) -> str:
     """Normalize LaTeX delimiters for remark-math/rehype-katex, expand inline tables, and escape table math pipes."""
     if not text:
@@ -194,6 +275,10 @@ def normalize_markdown_math(text: str) -> str:
     )
     # Expand single-line collapsed GFM tables into multi-line tables before per-line fixes
     out = expand_inline_markdown_tables(out)
+    # Re-add separator rows to tables the model pasted without one (else they print as text)
+    out = repair_pipe_tables(out)
+    # 统一分页标记（原始 <div class="page-break"> 会作为正文被打印出来）
+    out = normalize_page_breaks(out)
 
     # Fix already-unescaped parenthesized formulas that contain LaTeX commands / ^{ / _{
     out_lines: List[str] = []
@@ -985,6 +1070,50 @@ def _strip_quiz_option_leakage(text: str) -> str:
     return cleaned.strip()
 
 
+# Appended after _strip_quiz_option_leakage(): flashcard helpers + builder.
+
+_FLASHCARD_LABEL_BLACKLIST = (
+    "这一节", "本节", "导学", "生活化类比", "标准定义", "通俗翻译", "一句话", "核心特征",
+    "关键特征", "适用对象", "速记密度", "版式", "打印设置", "使用说明", "使用指南", "记忆口诀",
+    "符号含义", "符号解释", "单位", "注意", "提示", "依据", "破题", "答题步骤", "新手避坑",
+    "易错", "例题", "自测", "答案", "解析", "评分标准", "重头戏", "解题", "思路",
+    "学习目标", "知识地图", "学习地图", "核心聚焦", "覆盖章节", "目录", "参考",
+)
+
+_QUIZ_SECTION_RE = re.compile(r"【([^】]{2,8})】")
+
+
+def _term_ok(term: str) -> bool:
+    """Reject structural labels and layout metadata that used to become junk cards."""
+    t = (term or "").strip().strip("*`【】[] ").strip()
+    if not 2 <= len(t) <= 22:
+        return False
+    if any(b in t for b in _FLASHCARD_LABEL_BLACKLIST):
+        return False
+    if t.endswith(("？", "?", "：", ":", "…")):
+        return False
+    if "｜" in t or "|" in t or "\n" in t:
+        return False
+    # 推导步骤 / 图表编号不是知识点
+    if re.match(r"^(?:step|step\s*\d+|第\s*\d+\s*步|步骤\s*\d*|例\s*\d*|图\s*\d+|表\s*\d+|式\s*\d+)", t, re.I):
+        return False
+    return True
+
+
+def _split_quiz_explanation(text: str) -> Dict[str, str]:
+    """Split `【考点定位】…【详解与推导】…【易错点拨】…` into {section: content}."""
+    sections: Dict[str, str] = {}
+    matches = list(_QUIZ_SECTION_RE.finditer(text or ""))
+    for idx, match in enumerate(matches):
+        name = match.group(1).strip()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = (text[start:end] or "").strip(" \n：:。")
+        if body and name not in sections:
+            sections[name] = body
+    return sections
+
+
 def extract_knowledge_flashcards(
     document_ir: DocumentIR,
     study_notes_md: str,
@@ -992,156 +1121,222 @@ def extract_knowledge_flashcards(
     quiz_paper: Optional[QuizPaper],
     max_cards: int = 18,
 ) -> List[KnowledgeFlashcard]:
-    """Build dedicated active-recall knowledge-point flashcards (strictly decoupled from quiz stems/options)."""
-    cards: List[KnowledgeFlashcard] = []
-    seen_keys: set[str] = set()
+    """Build active-recall flashcards from *real* knowledge points.
 
-    def _add_card(category: str, key: str, front: str, answer: str, explanation: str, source: str) -> None:
+    Priority (highest quality first):
+
+    1. 名词词典 / 公式大全 表格（术语 → 一句话本质；公式名 → 表达式 + 参数前提）；
+    2. `**术语**：定义` 形式的正文定义句（结构性小标题会被过滤，改从定义句取主语）；
+    3. 题库解析里的 `【考点定位】[考点：X]`（真实考点名 + 判定要点 + 常见误区）；
+    4. 兜底：章节关键术语 + 章节摘要首句。
+
+    仅属于"版式/引导语"的内容（适用对象、生活化类比、速记密度、使用说明…）一律丢弃：
+    它们曾经被当成知识点，导致卡片正面是「请简述『适用对象』的核心定义」。
+    """
+    cards: List[KnowledgeFlashcard] = []
+    seen_fronts: set[str] = set()
+    seen_terms: set[str] = set()
+    # 配额：保证"概念 / 公式 / 考点"三类都有位置，不被第一种来源吃光
+    quotas = {"核心公式": 6, "核心概念": 8, "考点规律与易错点": 6, "核心术语": 4}
+    cat_counts: Dict[str, int] = {key: 0 for key in quotas}
+
+    def _norm(text: str) -> str:
+        return re.sub(r"[\s\*`「」『』（）()]", "", text or "").lower()
+
+    def _add_card(category: str, term: str, front: str, answer: str, explanation: str, source: str) -> None:
         if len(cards) >= max_cards:
             return
-        norm_key = re.sub(r"\s+", "", key).lower()[:48]
-        if not norm_key or norm_key in seen_keys:
+        if cat_counts.get(category, 0) >= quotas.get(category, max_cards):
             return
-        seen_keys.add(norm_key)
+        clean_term = re.sub(r"\s+", "", term or "")[:36]
+        if not clean_term or _norm(clean_term) in seen_terms:
+            return
+        body = (answer or "").strip()
+        # 一句话都说不清的卡没有复习价值
+        if len(re.sub(r"[\s$\\{}]", "", body)) < 8:
+            return
+        key = _norm(front)
+        if key in seen_fronts:
+            return
+        seen_terms.add(_norm(clean_term))
+        seen_fronts.add(key)
+        cat_counts[category] = cat_counts.get(category, 0) + 1
         cards.append(
             KnowledgeFlashcard(
                 id=f"kf_{len(cards) + 1}",
                 category=category,
                 front=normalize_markdown_math(front.strip()),
-                answer=normalize_markdown_math(answer.strip()),
-                explanation=normalize_markdown_math(explanation.strip()),
-                source=source.strip() or document_ir.filename,
+                answer=normalize_markdown_math(body),
+                explanation=normalize_markdown_math((explanation or "").strip()),
+                source=(source or "").strip() or document_ir.filename,
             )
         )
 
-    # 1. Extract '**概念/公式**：说明' definitions from cheatsheet first (highest density), then notes
-    for src_label, md_text in [("考前速记浓缩", cheatsheet_md), ("课程学习讲义", study_notes_md)]:
-        if not md_text:
-            continue
-        current_heading = ""
+    # ---------------------------------------------------------------- 表格类知识
+    def _split_row(row: str) -> List[str]:
+        return [cell.strip() for cell in row.strip().strip("|").split("|")]
+
+    def _iter_tables(md_text: str):
         lines = md_text.splitlines()
         i = 0
-        while i < len(lines) and len(cards) < max_cards:
-            line = lines[i].strip()
+        while i + 1 < len(lines):
+            head = lines[i].strip()
+            sep = lines[i + 1].strip()
+            if head.startswith("|") and _TABLE_SEP_RE.match(sep):
+                headers = _split_row(head)
+                rows: List[List[str]] = []
+                j = i + 2
+                while j < len(lines) and lines[j].strip().startswith("|"):
+                    rows.append(_split_row(lines[j].strip()))
+                    j += 1
+                yield headers, rows
+                i = j
+            else:
+                i += 1
+
+    def _find_col(headers: List[str], keys: Tuple[str, ...]) -> int:
+        for idx, head in enumerate(headers):
+            if any(k in head for k in keys):
+                return idx
+        return -1
+
+    for src_label, md_text in [("考前速记浓缩", cheatsheet_md), ("课程学习讲义", study_notes_md)]:
+        if not md_text or len(cards) >= max_cards:
+            continue
+        for headers, rows in _iter_tables(md_text):
+            term_idx = _find_col(headers, ("术语", "名词", "公式名称", "名称", "概念", "项目", "符号"))
+            # 表达式列优先按“表达式 / LaTeX”定位；“公式”这个宽泛关键词只作兜底，
+            # 否则“公式名称”列会被误当成表达式列。
+            formula_idx = _find_col(headers, ("表达式", "LaTeX"))
+            if formula_idx < 0:
+                for idx, head in enumerate(headers):
+                    if idx != term_idx and "公式" in head:
+                        formula_idx = idx
+                        break
+            answer_idx = _find_col(headers, ("本质", "定义", "解释", "含义", "说明", "用途"))
+            extra_idx = _find_col(headers, ("关键词", "参数", "单位", "前提", "适用", "注意"))
+            if term_idx < 0 or (formula_idx < 0 and answer_idx < 0):
+                continue
+            for row in rows:
+                if len(cards) >= max_cards:
+                    break
+                if term_idx >= len(row):
+                    continue
+                term = row[term_idx].strip()
+                if not _term_ok(term):
+                    continue
+                expr = row[formula_idx].strip() if 0 <= formula_idx < len(row) else ""
+                meaning = row[answer_idx].strip() if 0 <= answer_idx < len(row) else ""
+                extra = row[extra_idx].strip() if 0 <= extra_idx < len(row) else ""
+                if formula_idx >= 0 and ("$" in expr or "\\" in expr):
+                    _add_card(
+                        "核心公式",
+                        term,
+                        f"**【公式】** 写出「{term}」的表达式，并说明各符号含义与适用前提。",
+                        expr + (f"　{meaning}" if meaning else ""),
+                        extra,
+                        f"{src_label} · {term}",
+                    )
+                elif meaning:
+                    _add_card(
+                        "核心概念",
+                        term,
+                        f"**【概念】** 「{term}」到底指什么？",
+                        meaning,
+                        extra,
+                        f"{src_label} · {term}",
+                    )
+
+    # ---------------------------------------------------------------- 正文定义句
+    def_bold_re = re.compile(r"^(?:[-*+]\s+|\d+[.、]\s+)?\*\*([^*]{2,42})\*\*\s*[：:]\s*(.{8,})$")
+    subject_re = re.compile(r"^([\u4e00-\u9fa5A-Za-z0-9（）()·\-]{2,18}?)(?:是指|指的是|是|即)")
+
+    for src_label, md_text in [("课程学习讲义", study_notes_md), ("考前速记浓缩", cheatsheet_md)]:
+        if not md_text or len(cards) >= max_cards:
+            continue
+        current_heading = ""
+        for raw_line in md_text.splitlines():
+            if len(cards) >= max_cards:
+                break
+            line = raw_line.strip()
             heading_m = re.match(r"^#{1,4}\s+(.+)$", line)
             if heading_m:
                 current_heading = re.sub(r"[`*_]", "", heading_m.group(1)).strip()
-                i += 1
                 continue
-
-            # Display formula block $$...$$
-            if line.startswith("$$"):
-                formula_lines = [line]
-                if not (line.endswith("$$") and len(line) > 4):
-                    j = i + 1
-                    while j < len(lines) and j < i + 12:
-                        formula_lines.append(lines[j].strip())
-                        if lines[j].strip().endswith("$$"):
-                            i = j
-                            break
-                        j += 1
-                formula_block = "\n".join(formula_lines).strip()
-                if len(formula_block) > 6 and current_heading:
-                    ctx_next = lines[i + 1].strip() if i + 1 < len(lines) else ""
-                    _add_card(
-                        "核心公式",
-                        f"formula_{current_heading}_{formula_block[:24]}",
-                        f"**【公式默写】** 请写出「{current_heading}」对应的核心公式及其变量/适用含义。",
-                        formula_block,
-                        ctx_next if ctx_next and not ctx_next.startswith("#") else f"出自模块：{current_heading}",
-                        f"{src_label} · {current_heading}",
-                    )
-                i += 1
+            # 自测 / 习题 / 答案区不是知识来源
+            if re.search(r"(自测|练习|习题|作业|检测|答案|解析|例题)", current_heading):
                 continue
-
-            # Bold definition pattern: - **Term**：Definition
-            def_m = re.match(r"^(?:[-*+]\s+|\d+[.、]\s+)?\*\*([^*]{2,42})\*\*\s*[：:\-—]\s*(.{6,})$", line)
-            if def_m:
-                term = def_m.group(1).strip()
-                detail = def_m.group(2).strip()
-                if not re.match(r"^[A-D][.、:：\s]", term) and "例题" not in term:
-                    short_ans = re.split(r"[。；\n]", detail)[0].strip() or detail
-                    has_formula = "$" in detail or "\\" in detail or "公式" in term or "定理" in term
-                    _add_card(
-                        "核心公式" if has_formula else "核心概念",
-                        f"term_{term}",
-                        f"**【知识点记忆】** 请简述「{term}」的核心定义、公式表达或判断要点。",
-                        short_ans[:140] + ("..." if len(short_ans) > 140 else ""),
-                        detail,
-                        f"{src_label}" + (f" · {current_heading}" if current_heading else ""),
-                    )
-            i += 1
-
-    # 2. Extract structured section summaries from cheatsheet / notes
-    for src_label, md_text in [("考前速记浓缩", cheatsheet_md), ("课程学习讲义", study_notes_md)]:
-        if not md_text or len(cards) >= max_cards:
-            break
-        sections = re.split(r"\n(?=##+ )", md_text.strip())
-        for sec in sections:
-            if len(cards) >= max_cards:
-                break
-            sec_lines = sec.strip().splitlines()
-            if not sec_lines:
+            def_m = def_bold_re.match(line)
+            if not def_m:
                 continue
-            heading = re.sub(r"^#+\s*", "", sec_lines[0]).replace("**", "").strip()
-            body = "\n".join(sec_lines[1:]).strip()
-            if not heading or not body or len(body) < 20:
+            label = def_m.group(1).strip()
+            detail = def_m.group(2).strip()
+            term = label
+            if not _term_ok(term) or len(term) < 3:
+                # 「标准定义」「生活化类比」这类结构名：改从定义句本身取主语
+                subj = subject_re.match(detail)
+                term = subj.group(1).strip() if subj else ""
+            if not _term_ok(term) or len(term) < 3:
                 continue
-            if any(skip in heading for skip in ("例题", "参考答案", "自测", "目录")):
+            if re.match(r"^\d+[.、）)]", term) or re.search(r"(填空|判断|单选|多选|简答)题", term):
                 continue
-            bullets = [
-                re.sub(r"^[-*+\d.、\s]+", "", ln).strip()
-                for ln in sec_lines[1:]
-                if ln.strip() and not ln.strip().startswith("#")
-            ]
-            core_ans = bullets[0][:140] if bullets else body.splitlines()[0][:140]
+            if term in ("规定", "说明", "注意", "提示", "总结", "小结", "定义", "分类"):
+                continue
+            first_sentence = re.split(r"[。；\n]", detail)[0].strip()
+            if len(first_sentence) < 12:
+                continue
+            # 只有真的含公式（$$…$$ 或带变量的等式）才算公式卡
+            is_formula = "$$" in detail or "=" in detail and ("$" in detail or "\\" in detail)
             _add_card(
-                "知识模块",
-                f"sec_{heading}",
-                f"**【考点精要梳理】** 回忆「{heading}」包含哪些关键结论与适用条件？",
-                core_ans,
-                body[:420] + ("\n..." if len(body) > 420 else ""),
-                f"{src_label} · {heading}",
+                "核心公式" if is_formula else "核心概念",
+                term,
+                f"**【{'公式' if is_formula else '概念'}】** 「{term}」的定义与关键要点是什么？",
+                first_sentence[:150],
+                f"出自「{current_heading}」：{detail[:260]}" if current_heading else detail[:260],
+                f"{src_label}" + (f" · {current_heading}" if current_heading else ""),
             )
 
-    # 3. Supplement pure conceptual knowledge cards from quiz knowledge_tags & distilled explanations (NO stems/options)
+    # ---------------------------------------------------------------- 题库考点
     if quiz_paper and quiz_paper.questions and len(cards) < max_cards:
         for q in quiz_paper.questions:
             if len(cards) >= max_cards:
                 break
+            sections = _split_quiz_explanation(q.explanation or "")
             tags = [t.strip() for t in (q.knowledge_tags or []) if t.strip()]
-            primary_tag = tags[0] if tags else (q.source_chapter or "").strip()
-            if not primary_tag or primary_tag in ("综合", "默认"):
+            tag = tags[0] if tags else sections.get("考点定位", "")
+            tag = re.sub(r"^\[?考点[：:]\s*", "", tag).strip(" []【】")
+            tag = re.split(r"[；;，,。]", tag)[0].strip()
+            if not _term_ok(tag):
                 continue
-            clean_exp = _strip_quiz_option_leakage(q.explanation or "")
-            if not clean_exp:
+            detail = sections.get("详解与推导") or sections.get("详解") or ""
+            takeaway = re.split(r"[。；\n]", detail)[0].strip() if detail else ""
+            if len(takeaway) < 10:
                 continue
-            concise_takeaway = re.split(r"[。；\n]", clean_exp)[0].strip()
-            if len(concise_takeaway) < 6:
-                concise_takeaway = clean_exp[:120]
+            pitfall = sections.get("易错点拨", "")
             _add_card(
                 "考点规律与易错点",
-                f"kp_{primary_tag}",
-                f"**【考点与避坑记忆】** 关于「{primary_tag}」，解题核心规律与常见误区是什么？",
-                concise_takeaway[:150],
-                clean_exp[:380] + ("..." if len(clean_exp) > 380 else ""),
-                f"核心考点 · {' / '.join(tags[:2]) if tags else q.source_chapter}",
+                tag,
+                f"**【考点】** 「{tag}」的判断要点是什么？常见误区在哪？",
+                takeaway[:160],
+                pitfall[:220],
+                f"核心考点 · {tag}",
             )
 
-    # 4. Supplement key terms from DocumentIR chapters if deck is still small
+    # ---------------------------------------------------------------- 兜底章节术语
     if len(cards) < 6 and document_ir.chapters:
         for ch in document_ir.chapters:
             if len(cards) >= max_cards:
                 break
-            terms = [t.strip() for t in (ch.key_terms or []) if t.strip()]
-            preview = (ch.summary_preview or ch.content_text[:260]).strip()
-            for term in terms[:3]:
+            preview = re.split(r"[。\n]", (ch.summary_preview or ch.content_text or "").strip())[0].strip()
+            for term in [t.strip() for t in (ch.key_terms or []) if t.strip()][:3]:
+                if not _term_ok(term) or len(preview) < 12:
+                    continue
                 _add_card(
                     "核心术语",
-                    f"ch_term_{term}",
-                    f"**【核心概念辨析】** 结合《{ch.title}》，简述「{term}」的内涵与关键联系。",
-                    f"{term}（出自 P{ch.start_page}-{ch.end_page}）",
-                    preview,
+                    term,
+                    f"**【术语】** 《{ch.title}》里的「{term}」是什么？",
+                    preview[:150],
+                    f"出自 P{ch.start_page}-{ch.end_page}",
                     f"{ch.title} · P{ch.start_page}",
                 )
 
