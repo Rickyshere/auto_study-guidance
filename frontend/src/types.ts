@@ -121,6 +121,31 @@ export interface OcrEngineStatusItem {
   supports_one_click_setup: boolean;
   description: string;
   repo_or_api_url: string;
+  /** 是否是当前「已保存」选中的引擎 */
+  active?: boolean;
+  /** 是否是解析 auto_recommend 之后真正会用的引擎 */
+  effective?: boolean;
+  /** 现在这一刻是否真的能产出文字 */
+  available?: boolean;
+  /** 人话状态：已安装 · 服务运行中 / 未安装 / 云端 API · 免部署 … */
+  status_text?: string;
+  status_kind?: '' | 'running' | 'idle' | 'missing' | 'builtin' | 'cloud' | 'cloud_error';
+  uninstall_supported?: boolean;
+}
+
+export interface OcrRuntimeSummary {
+  active_engine: OcrEngineType;
+  active_label: string;
+  effective_engine: OcrEngineType;
+  effective_label: string;
+  effective_ready: boolean;
+  effective_status_text: string;
+  effective_status_kind?: string;
+  effective_reason: string;
+  recommended_engine: OcrEngineType;
+  recommended_label: string;
+  fallbacks: string[];
+  warning: string;
 }
 
 export interface ProviderStatusResponse {
@@ -134,6 +159,7 @@ export interface ProviderStatusResponse {
   rapidocr_available: boolean;
   gpu_vram: GpuVramInfo;
   ocr_engines: OcrEngineStatusItem[];
+  ocr_summary?: OcrRuntimeSummary;
 }
 
 export interface AssetItem {
@@ -320,6 +346,14 @@ export interface ExamSoulSpec {
   name: string;
   summary: string;
   content: string;
+}
+
+export interface NoteSectionItem {
+  section_id: string;
+  title: string;
+  level: number;
+  char_count: number;
+  has_practice: boolean;
 }
 
 export interface QuizPaper {

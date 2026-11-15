@@ -127,6 +127,13 @@ class OcrEngineStatusItem(BaseModel):
     supports_one_click_setup: bool = False
     description: str = ""
     repo_or_api_url: str = ""
+    # 「已选中 / 真正生效 / 现在能不能用」是三件事，必须分开告诉用户
+    active: bool = False
+    effective: bool = False
+    available: bool = False
+    status_text: str = ""
+    status_kind: str = ""
+    uninstall_supported: bool = False
 
 
 class FreeAiAppItem(BaseModel):
@@ -152,6 +159,7 @@ class ProviderStatusResponse(BaseModel):
     rapidocr_available: bool = False
     gpu_vram: GpuVramInfo = Field(default_factory=GpuVramInfo)
     ocr_engines: List[OcrEngineStatusItem] = Field(default_factory=list)
+    ocr_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AssetItem(BaseModel):

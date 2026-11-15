@@ -31,6 +31,7 @@ import { api } from '../api';
 import {
   DocumentIR,
   KnowledgeFlashcard,
+  NoteSectionItem,
   QuizPaper,
   QuizQuestion,
   ScenarioType,
@@ -45,8 +46,21 @@ mermaid.initialize({
   securityLevel: 'loose',
 });
 
+/** 未选择小节时的占位试卷：让「分节练习」tab 复用同一套答题卡而不会崩 */
+const SECTION_PRACTICE_PLACEHOLDER: QuizPaper = {
+  paper_id: 'section:none',
+  deliverable_type: 'section_practice',
+  title: '分节练习',
+  mode: 'sync_layered',
+  total_score: 0,
+  suggested_minutes: 0,
+  instructions: '请先在上方选择一个小节',
+  questions: [],
+};
+
 export type StudioTabKey =
   | 'notes'
+  | 'section_practice'
   | 'quiz'
   | 'quiz_similar'
   | 'quiz_original'
@@ -306,6 +320,31 @@ export const StudyStudio: React.FC<Props> = ({
     [studyPackage.blueprint_used.scenario_type]
   );
 
+  // 分节练习：小节列表（来自讲义标题）+ 按节缓存的分节练习卷
+  const [noteSections, setNoteSections] = useState<NoteSectionItem[]>([]);
+  const [sectionPapers, setSectionPapers] = useState<Record<string, QuizPaper>>({});
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [sectionBusyId, setSectionBusyId] = useState<string | null>(null);
+  const [sectionError, setSectionError] = useState<string | null>(null);
+  const notesBodyRef = useRef<HTMLDivElement | null>(null);
+
+  /** 点击 TOC 标题后滚到讲义里对应的标题（不依赖 markdown 渲染器注入 id） */
+  const scrollToNoteHeading = (title: string) => {
+    const root = notesBodyRef.current;
+    if (!root) return;
+    const normalized = (s: string) => s.replace(/\s+/g, '');
+    const target = normalized(title);
+    const nodes = Array.from(root.querySelectorAll('h1,h2,h3,h4'));
+    const hit = nodes.find((n) => {
+      const text = normalized(n.textContent || '');
+      return text && (text.includes(target) || target.includes(text));
+    });
+    hit?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const sectionPaper: QuizPaper | undefined = activeSectionId
+    ? sectionPapers[activeSectionId]
+    : undefined;
+
   // Combine main paper and extra papers for Scenario A / B multi-paper support
   const allPapers: QuizPaper[] = useMemo(() => {
     const raw = [studyPackage.quiz_paper, ...(studyPackage.extra_quiz_papers || [])];
@@ -327,12 +366,15 @@ export const StudyStudio: React.FC<Props> = ({
   );
 
   const activePaper: QuizPaper = useMemo(() => {
+    if (activeTab === 'section_practice') {
+      return sectionPaper || SECTION_PRACTICE_PLACEHOLDER;
+    }
     return (
       allPapers.find((p) => p.paper_id === selectedPaperId) ||
       allPapers[0] ||
       studyPackage.quiz_paper
     );
-  }, [allPapers, selectedPaperId, studyPackage.quiz_paper]);
+  }, [allPapers, selectedPaperId, studyPackage.quiz_paper, activeTab, sectionPaper]);
 
   // Quiz state scoped by paper_id -> question_id
   const [answersByPaper, setAnswersByPaper] = useState<Record<string, Record<string, string>>>({});
@@ -346,6 +388,46 @@ export const StudyStudio: React.FC<Props> = ({
   const [shakeQuestionId, setShakeQuestionId] = useState<string | null>(null);
   const [generatingVariantId, setGeneratingVariantId] = useState<string | null>(null);
   const [variantError, setVariantError] = useState<string | null>(null);
+
+  // 拉取讲义小节列表（讲义 TOC 与分节练习共用）
+  useEffect(() => {
+    if (activeTab !== 'section_practice' && activeTab !== 'notes') return;
+    const pid = documentIr?.project_id;
+    if (!pid) return;
+    let cancelled = false;
+    api
+      .getNoteSections(pid)
+      .then((res) => {
+        if (!cancelled) setNoteSections(res.sections || []);
+      })
+      .catch(() => {
+        if (!cancelled) setNoteSections([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, documentIr?.project_id, studyPackage.study_notes_markdown]);
+
+  const openSectionPractice = async (sectionId: string) => {
+    const pid = documentIr?.project_id;
+    if (!pid) return;
+    setActiveSectionId(sectionId);
+    setSectionError(null);
+    setCurrentCardIdx(0);
+    if (sectionPapers[sectionId]) return;
+    setSectionBusyId(sectionId);
+    try {
+      const res = await api.createSectionPractice(pid, sectionId);
+      setSectionPapers((prev) => ({ ...prev, [sectionId]: res.paper }));
+      setNoteSections((prev) =>
+        prev.map((s) => (s.section_id === sectionId ? { ...s, has_practice: true } : s))
+      );
+    } catch (e: any) {
+      setSectionError(e?.message || '生成分节练习失败，请重试');
+    } finally {
+      setSectionBusyId(null);
+    }
+  };
 
   // Flashcards state + 3D single-face Chromium-safe flip animation
   const [flashDeck, setFlashDeck] = useState<FlashcardItem[]>([]);
@@ -375,7 +457,10 @@ export const StudyStudio: React.FC<Props> = ({
   const isExamMode =
     documentIr?.project_type === 'exam_paper' || Boolean(studyPackage.exam_pipeline_metadata);
   const isQuizTab =
-    activeTab === 'quiz' || activeTab === 'quiz_similar' || activeTab === 'quiz_original';
+    activeTab === 'quiz' ||
+    activeTab === 'quiz_similar' ||
+    activeTab === 'quiz_original' ||
+    activeTab === 'section_practice';
 
   // Keep selected paper synchronized with Top Bar tabs (`变式卷` / `原卷`) in exam paper mode
   useEffect(() => {
@@ -497,6 +582,15 @@ export const StudyStudio: React.FC<Props> = ({
   }, [visibleQuestions.length, currentCardIdx]);
 
   const currentQuestion = visibleQuestions[currentCardIdx];
+
+  // 答案与解析的可见性：必须先作答（选择题选中选项 / 填空简答提交核对），
+  // 且抽屉开关由用户自己控制——以前选择题一旦作答就永久展开，导致「收起」按钮点了没反应。
+  const answerRevealAllowed = currentQuestion
+    ? currentQuestion.type === 'mcq'
+      ? Boolean(currentPaperAnswers[currentQuestion.id])
+      : Boolean(currentPaperChecked[currentQuestion.id])
+    : false;
+  const isDrawerOpen = Boolean(currentQuestion && answerRevealAllowed && openDrawerIds[currentQuestion.id]);
 
   const handleSelectMcqOption = (q: QuizQuestion, opt: string, optIdx: number) => {
     const letter = extractOptionLetter(opt, optIdx);
@@ -912,7 +1006,76 @@ export const StudyStudio: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="asg-academic-prose" style={{ maxWidth: '760px', margin: '0 auto' }}>
+              {/* 小节导航：把讲义变成可跳转、可练的在线文档 */}
+              {noteSections.length > 0 && (
+                <div
+                  className="asg-card no-print"
+                  data-glass-panel="true"
+                  style={{ padding: '14px 18px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--asg-brand-primary)' }}>
+                      本节导航（{noteSections.length} 节）· 点标题跳转，点「练本节」直接做题
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {noteSections.map((s, i) => (
+                      <div
+                        key={s.section_id}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => scrollToNoteHeading(s.title)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            fontSize: '12.5px',
+                            fontWeight: 600,
+                            color: 'var(--asg-text-secondary)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={`跳转到：${s.title}`}
+                        >
+                          {i + 1}. {s.title}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={sectionBusyId === s.section_id}
+                          onClick={() => {
+                            onChangeTab('section_practice');
+                            void openSectionPractice(s.section_id);
+                          }}
+                          style={{
+                            flexShrink: 0,
+                            padding: '3px 10px',
+                            borderRadius: '9999px',
+                            border: '1px solid var(--asg-brand-primary)',
+                            backgroundColor: 'var(--asg-brand-tint)',
+                            color: 'var(--asg-brand-primary)',
+                            fontSize: '11.5px',
+                            fontWeight: 700,
+                            cursor: sectionBusyId === s.section_id ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {sectionBusyId === s.section_id ? '生成中…' : '练本节'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div
+                className="asg-academic-prose"
+                ref={notesBodyRef}
+                style={{ maxWidth: '760px', margin: '0 auto' }}
+              >
                 <MathMarkdown>{studyPackage.study_notes_markdown}</MathMarkdown>
               </div>
             </>
@@ -923,14 +1086,79 @@ export const StudyStudio: React.FC<Props> = ({
       {/* ================= TAB 2: CARD-SWITCHING QUIZ + KEYBOARD FLASHCARDS ================= */}
       {isQuizTab && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* 分节练习：节选择条（与讲义小节一一对应） */}
+          {activeTab === 'section_practice' && (
+            <div
+              className="asg-card no-print"
+              data-glass-panel="true"
+              style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--asg-brand-primary)' }}>
+                  分节练习 · 只考讲义里选中的这一节
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
+                  共 {noteSections.length} 节
+                </span>
+              </div>
+              {noteSections.length === 0 ? (
+                <div style={{ fontSize: '12.5px', color: 'var(--asg-text-secondary)' }}>
+                  当前讲义没有可切分的小节标题；请先确认讲义已生成。
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {noteSections.map((s, i) => {
+                    const isCur = s.section_id === activeSectionId;
+                    const isBusy = sectionBusyId === s.section_id;
+                    return (
+                      <button
+                        key={s.section_id}
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void openSectionPractice(s.section_id)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '9999px',
+                          border: `1.5px solid ${isCur ? 'var(--asg-brand-primary)' : 'var(--asg-border-default)'}`,
+                          backgroundColor: isCur ? 'var(--asg-brand-primary)' : 'var(--asg-bg-subtle)',
+                          color: isCur ? '#FFFFFF' : 'var(--asg-text-secondary)',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          cursor: isBusy ? 'wait' : 'pointer',
+                        }}
+                        title={s.has_practice ? '已有练习，点击直接开始' : '点击生成这一节的练习'}
+                      >
+                        {isBusy ? '生成中…' : `${i + 1}. ${s.title}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {sectionError && (
+                <div style={{ fontSize: '12px', color: 'var(--asg-semantic-warning)' }}>{sectionError}</div>
+              )}
+            </div>
+          )}
+
           {!hasQuiz ? (
             <div className="asg-card" data-glass-panel="true" style={{ padding: '28px' }}>
-              <EmptyDeliverableBanner
-                title="当前试卷暂无习题内容"
-                hint="你可以在左侧栏重新配置参数后生成，或先查看知识点提取与讲解。"
-                onSwitch={() => onChangeTab('notes')}
-                switchLabel={isExamMode ? '查看知识点提取与讲解' : '查看知识讲义'}
-              />
+              {activeTab === 'section_practice' ? (
+                <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--asg-text-primary)' }}>
+                    先在上方选一个小节
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--asg-text-secondary)' }}>
+                    分节练习只出「该小节」的题，做完可以在讲义 tab 的「练本节」继续下一节。
+                  </div>
+                </div>
+              ) : (
+                <EmptyDeliverableBanner
+                  title="当前试卷暂无习题内容"
+                  hint="你可以在左侧栏重新配置参数后生成，或先查看知识点提取与讲解。"
+                  onSwitch={() => onChangeTab('notes')}
+                  switchLabel={isExamMode ? '查看知识点提取与讲解' : '查看知识讲义'}
+                />
+              )}
             </div>
           ) : (
             <>
@@ -1433,8 +1661,25 @@ export const StudyStudio: React.FC<Props> = ({
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                               <button
                                 type="button"
+                                disabled={
+                                  currentQuestion.type === 'fill_blank' &&
+                                  !String(currentPaperAnswers[currentQuestion.id] || '').trim()
+                                }
+                                title={
+                                  currentQuestion.type === 'fill_blank' &&
+                                  !String(currentPaperAnswers[currentQuestion.id] || '').trim()
+                                    ? '请先填写答案再核对'
+                                    : undefined
+                                }
                                 onClick={() => handleSubmitNonMcq(currentQuestion)}
-                                style={primaryToolbarBtnStyle}
+                                style={{
+                                  ...primaryToolbarBtnStyle,
+                                  opacity:
+                                    currentQuestion.type === 'fill_blank' &&
+                                    !String(currentPaperAnswers[currentQuestion.id] || '').trim()
+                                      ? 0.55
+                                      : 1,
+                                }}
                               >
                                 <CheckCircle2 className="w-4 h-4" />
                                 <span>提交并核对解析</span>
@@ -1476,23 +1721,29 @@ export const StudyStudio: React.FC<Props> = ({
                         >
                           <button
                             type="button"
+                            disabled={!answerRevealAllowed}
                             onClick={() =>
                               setOpenDrawerIds((prev) => ({
                                 ...prev,
                                 [currentQuestion.id]: !prev[currentQuestion.id],
                               }))
                             }
+                            title={answerRevealAllowed ? undefined : '先作答后才会显示参考答案与 AI 解析'}
                             style={{
                               background: 'none',
                               border: 'none',
                               padding: 0,
-                              cursor: 'pointer',
+                              cursor: answerRevealAllowed ? 'pointer' : 'not-allowed',
                               fontSize: '13px',
                               fontWeight: 600,
-                              color: 'var(--asg-brand-primary)',
+                              color: answerRevealAllowed
+                                ? 'var(--asg-brand-primary)'
+                                : 'var(--asg-text-muted)',
                             }}
                           >
-                            {openDrawerIds[currentQuestion.id]
+                            {!answerRevealAllowed
+                              ? '🔒 先作答，再查看答案与解析'
+                              : isDrawerOpen
                               ? '收起答案与解析 ▲'
                               : '查看参考答案与 AI 解析 ▼'}
                           </button>
@@ -1502,10 +1753,8 @@ export const StudyStudio: React.FC<Props> = ({
                           </span>
                         </div>
 
-                        {/* AI Explanation Drawer */}
-                        {(openDrawerIds[currentQuestion.id] ||
-                          (currentQuestion.type === 'mcq' &&
-                            Boolean(currentPaperAnswers[currentQuestion.id]))) && (
+                        {/* AI Explanation Drawer —— 只有作答过、且用户展开时才出现 */}
+                        {isDrawerOpen && (
                           <div
                             className="asg-drawer-enter"
                             style={{

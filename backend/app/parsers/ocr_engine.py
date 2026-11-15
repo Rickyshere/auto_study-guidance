@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -177,6 +177,159 @@ def _has_python_pkg(pkg_name: str) -> bool:
     return importlib.util.find_spec(pkg_name) is not None
 
 
+ENGINE_LABELS: Dict[str, str] = {
+    "auto_recommend": "自动推荐（按显存档位）",
+    "mineru_pipeline": "MinerU 2 Pipeline (无 vLLM)",
+    "mineru_full": "MinerU 2 全量本地部署",
+    "oxr_full": "SoMark OXR 全量本地部署",
+    "paddleocr": "PaddleOCR (飞桨极速备选)",
+    "somark_free_api": "SoMark Free-OXR 开放 API",
+    "rapidocr": "内置 RapidOCR (ONNX 保底)",
+}
+
+# 哪些引擎的一键部署支持卸载（与 stream_setup_ocr_engine 的 uninstall 分支保持一致）
+UNINSTALLABLE_ENGINES = {"mineru_pipeline", "mineru_full", "paddleocr", "oxr_full"}
+
+
+def engine_label(engine_id: str) -> str:
+    return ENGINE_LABELS.get(engine_id, engine_id)
+
+
+# 云端 OXR 兜底熔断：一次失败后 5 分钟内不再尝试，避免整本扫描件逐页白等
+_SOMARK_FALLBACK_BLOCK_UNTIL: float = 0.0
+_SOMARK_FALLBACK_COOLDOWN_SEC = 300.0
+# 最近一次云端调用的失败原因（(时间戳, 人话原因)），用于在设置页如实展示
+_SOMARK_LAST_ERROR: Tuple[float, str] = (0.0, "")
+# 是否是「接口本身不可用」级别的失败（地址错/404/非 JSON/连不上），只有这类才值得熔断
+_SOMARK_LAST_HARD_FAIL: bool = False
+
+
+def _set_somark_error(msg: str, hard: bool = False) -> None:
+    global _SOMARK_LAST_ERROR, _SOMARK_LAST_HARD_FAIL
+    _SOMARK_LAST_ERROR = (time.time(), msg.strip()[:200])
+    _SOMARK_LAST_HARD_FAIL = hard and bool(msg.strip())
+
+
+def somark_last_error() -> str:
+    return _SOMARK_LAST_ERROR[1]
+
+
+def _somark_fallback_blocked() -> bool:
+    return time.time() < _SOMARK_FALLBACK_BLOCK_UNTIL
+
+
+def _trip_somark_fallback() -> None:
+    global _SOMARK_FALLBACK_BLOCK_UNTIL
+    _SOMARK_FALLBACK_BLOCK_UNTIL = time.time() + _SOMARK_FALLBACK_COOLDOWN_SEC
+
+
+def reset_somark_fallback() -> None:
+    global _SOMARK_FALLBACK_BLOCK_UNTIL
+    _SOMARK_FALLBACK_BLOCK_UNTIL = 0.0
+
+
+async def resolve_effective_ocr_engine(settings: RouterSettings) -> Dict[str, Any]:
+    """把「用户选的引擎」解析成「实际会用的引擎」，并判断它现在是否真的能用。
+
+    与 `extract_text_from_image_vision()` 的解析顺序保持一致：选了 auto_recommend 时按
+    显存档位取推荐引擎；不可用时依次回退到本地 RapidOCR → 云端 VLM（仅 cloud 通道）。
+    """
+    vram = detect_gpu_vram(settings.ocr_config.vram_override_gb)
+    active = settings.ocr_config.active_engine
+    if active == "auto_recommend":
+        effective = vram.recommended_ocr_engine
+        reason = f"选择的是「自动推荐」，按显存档位推荐为「{engine_label(effective)}」。"
+    else:
+        effective = active
+        reason = f"已手动指定为「{engine_label(effective)}」，不会再按显存档位自动切换。"
+
+    state = _load_ocr_state()
+    mineru_running = await _probe_http_alive(settings.ocr_config.mineru_service_url)
+    oxr_running = await _probe_http_alive(settings.ocr_config.oxr_service_url)
+
+    def _availability(engine_id: str) -> Tuple[bool, str, str]:
+        """→ (是否可用, 人话状态, 状态类别)"""
+        if engine_id == "somark_free_api":
+            if _somark_fallback_blocked():
+                err = somark_last_error()
+                return (
+                    False,
+                    f"云端 API · 最近一次调用失败{('（' + err + '）') if err else ''} · 5 分钟内暂停",
+                    "cloud_error",
+                )
+            return True, "云端 API · 免下载免启动", "cloud"
+        if engine_id == "rapidocr":
+            return (
+                (True, "内置模型 · 随程序可用", "builtin")
+                if RAPIDOCR_AVAILABLE
+                else (False, "内置模型未安装", "missing")
+            )
+        if engine_id in ("mineru_pipeline", "mineru_full"):
+            installed = bool(state.get(engine_id, False))
+            if not installed:
+                return False, "未安装", "missing"
+            if not mineru_running:
+                return False, "已安装 · 服务未启动", "idle"
+            if state.get("running_mineru_mode") not in (None, engine_id):
+                return False, f"已安装 · 当前运行的是 {engine_label(state['running_mineru_mode'])}", "idle"
+            return True, "已安装 · 服务运行中", "running"
+        if engine_id == "paddleocr":
+            installed = bool(state.get("paddleocr", _has_python_pkg("paddleocr")))
+            return (True, "已安装 · 随程序调用", "builtin") if installed else (False, "未安装", "missing")
+        if engine_id == "oxr_full":
+            installed = bool(state.get("oxr_full", OXR_REPO_DIR.exists()))
+            if not installed:
+                return False, "未安装", "missing"
+            return (True, "已安装 · 服务运行中", "running") if oxr_running else (False, "已安装 · 服务未启动", "idle")
+        return False, "未知引擎", "missing"
+
+    available, status_text, status_kind = _availability(effective)
+
+    fallbacks: List[str] = []
+    if not available:
+        if RAPIDOCR_AVAILABLE:
+            fallbacks.append("内置 RapidOCR")
+        fallbacks.append(
+            "SoMark Free-OXR 云端 API"
+            if not _somark_fallback_blocked()
+            else "SoMark Free-OXR 云端 API（最近一次调用失败，已暂停 5 分钟）"
+        )
+        stage_cfg = settings.stage_mapping.get("vision_ocr")
+        cloud_vision = (
+            stage_cfg.provider if settings.routing_mode == "smart_stage" and stage_cfg else settings.active_provider
+        ) == "cloud" and bool((settings.cloud_config.api_key or "").strip())
+        if cloud_vision:
+            fallbacks.append("云端视觉大模型（VLM）")
+
+    warning = ""
+    if not available:
+        tail = (
+            f"目前会自动回退到：{'、'.join(fallbacks)}。"
+            if fallbacks
+            else "且没有任何可用的兜底通道。"
+        )
+        warning = (
+            f"当前生效引擎「{engine_label(effective)}」不可用（{status_text}）。"
+            "上传 PDF / 扫描图片时 OCR 会被跳过，提取到的文字层为空，"
+            "生成的资料只能依据文件名与标题推演。" + tail
+        )
+
+    return {
+        "active_engine": active,
+        "active_label": engine_label(active),
+        "effective_engine": effective,
+        "effective_label": engine_label(effective),
+        "effective_ready": available,
+        "effective_status_text": status_text,
+        "effective_status_kind": status_kind,
+        "effective_reason": reason,
+        "recommended_engine": vram.recommended_ocr_engine,
+        "recommended_label": engine_label(vram.recommended_ocr_engine),
+        "fallbacks": fallbacks,
+        "warning": warning,
+    }
+
+
 async def _probe_http_alive(url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
@@ -212,7 +365,7 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
     )
     running_mode = state.get("running_mineru_mode")
 
-    return [
+    engines: List[OcrEngineStatusItem] = [
         OcrEngineStatusItem(
             engine_id="mineru_pipeline",
             name="MinerU 2 Pipeline 后端 (无 vLLM)",
@@ -233,8 +386,11 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
             installed=True,
             running=True,
             supports_one_click_setup=False,
-            description="直连 https://free-oxr.somark.ai/api/v1 进行高精度版面分析与公式识别。",
-            repo_or_api_url="https://free-oxr.somark.ai/api/v1",
+            description=(
+                f"直连 {settings.ocr_config.somark_api_base_url.rstrip('/')}/parse/sync 做整页解析，"
+                "无需注册、无需 API Key（api_key 填 dummy 即可）。"
+            ),
+            repo_or_api_url=settings.ocr_config.somark_api_base_url,
         ),
         OcrEngineStatusItem(
             engine_id="paddleocr",
@@ -277,6 +433,76 @@ async def get_ocr_engines_status(settings: RouterSettings) -> List[OcrEngineStat
             repo_or_api_url="",
         ),
     ]
+
+    # 补上「已选中 / 真正生效 / 现在能不能用」三个维度，否则用户分不清
+    # 「我选了它」「它装了」「它正在跑」「它真的会被用到」这四件事。
+    runtime = await resolve_effective_ocr_engine(settings)
+    effective_id = str(runtime.get("effective_engine") or "")
+    for item in engines:
+        item.active = settings.ocr_config.active_engine == item.engine_id
+        item.effective = effective_id == item.engine_id
+        item.uninstall_supported = item.engine_id in UNINSTALLABLE_ENGINES
+        available, status_text, status_kind = _engine_availability_snapshot(item, running_mode)
+        item.available = available
+        item.status_text = status_text
+        item.status_kind = status_kind
+    return engines
+
+
+def _engine_availability_snapshot(
+    item: OcrEngineStatusItem, running_mode: Optional[str]
+) -> Tuple[bool, str, str]:
+    """单卡片的三态标签：可用 / 装了没跑 / 没装。语义与 resolve_effective_ocr_engine 一致。"""
+    if item.engine_id == "somark_free_api":
+        if _somark_fallback_blocked():
+            err = somark_last_error()
+            return (
+                False,
+                f"云端 API · 最近一次调用失败{('（' + err + '）') if err else ''} · 5 分钟内暂停",
+                "cloud_error",
+            )
+        return True, "云端 API · 免部署", "cloud"
+    if item.engine_id == "rapidocr":
+        return (True, "内置模型 · 随程序可用", "builtin") if RAPIDOCR_AVAILABLE else (False, "内置模型未安装", "missing")
+    if item.engine_id == "paddleocr":
+        return (True, "已安装 · 随程序调用", "builtin") if item.installed else (False, "未安装", "missing")
+    if not item.installed:
+        return False, "未安装", "missing"
+    if item.running:
+        return True, "已安装 · 服务运行中", "running"
+    if item.engine_id in ("mineru_pipeline", "mineru_full") and running_mode and running_mode != item.engine_id:
+        return False, f"已安装 · 当前运行的是 {engine_label(running_mode)}", "idle"
+    return False, "已安装 · 服务未启动", "idle"
+
+
+def _make_probe_image() -> Optional[Path]:
+    """生成一张带文字的临时测试图，用于真实校验云端 OCR 能不能用（而不是靠猜）。"""
+    try:
+        import tempfile
+
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except Exception:
+        return None
+    try:
+        img = Image.new("RGB", (720, 200), "white")
+        draw = ImageDraw.Draw(img)
+        font = None
+        for fp in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf"):
+            try:
+                font = ImageFont.truetype(fp, 28)
+                break
+            except Exception:
+                continue
+        line = "SoMark OCR probe 2026 连通性测试"
+        if font is not None:
+            draw.text((36, 60), line, font=font, fill="black")
+        else:
+            draw.text((36, 60), "SoMark OCR probe 2026", fill="black")
+        out = Path(tempfile.gettempdir()) / "asg_somark_probe.png"
+        img.save(out)
+        return out
+    except Exception:
+        return None
 
 
 async def _run_silent_cmd(cmd: List[str], cwd: Optional[Path] = None, timeout: int = 300) -> tuple[int, str]:
@@ -563,24 +789,80 @@ async def stream_setup_ocr_engine(
         return
 
     if engine_id == "somark_free_api":
-        msg = f"SoMark Free-OXR 开放 API 无需本地安装，地址：{settings.ocr_config.somark_api_base_url}"
+        base = settings.ocr_config.somark_api_base_url.rstrip("/")
         yield {
             "type": "progress",
-            "percent": 70,
-            "stage": "2/3 连通性检查",
-            "message": "正在校验 Free-OXR 开放 API 端点配置...",
-            "log_line": msg,
+            "percent": 30,
+            "stage": "2/3 真实连通性检查",
+            "message": f"正在用一张测试图调用 {base}/parse/sync 做真实识别...",
+            "log_line": f"[probe] POST {base}/parse/sync",
         }
+        probe = _make_probe_image()
+        probe_text = ""
+        if probe is not None:
+            probe_text = await _extract_with_somark_free_api(probe, settings)
+            try:
+                probe.unlink()
+            except Exception:
+                pass
+
+        if probe is None:
+            msg = f"云端 API 配置已保存（{base}）；本机缺少 Pillow，未能自动验证连通性。"
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "配置已保存",
+                "message": msg,
+                "result": {
+                    "ok": True,
+                    "engine_id": engine_id,
+                    "installed": True,
+                    "running": True,
+                    "message": msg,
+                    "log": msg,
+                },
+            }
+            return
+
+        if probe_text:
+            reset_somark_fallback()
+            msg = f"云端 API 连通正常：测试图识别出 {len(probe_text)} 字，上传扫描件会真正拿到文字。"
+            yield {
+                "type": "progress",
+                "percent": 92,
+                "stage": "2/3 真实连通性检查",
+                "message": msg,
+                "log_line": f"[probe] ok, {len(probe_text)} chars",
+            }
+            yield {
+                "type": "complete",
+                "percent": 100,
+                "stage": "✓ 可用",
+                "message": msg,
+                "result": {
+                    "ok": True,
+                    "engine_id": engine_id,
+                    "installed": True,
+                    "running": True,
+                    "message": msg,
+                    "log": msg,
+                },
+            }
+            return
+
+        err = somark_last_error() or "接口没有返回文字"
+        _trip_somark_fallback()
+        msg = f"云端 API 不可用：{err}。请检查 API 地址（应形如 {base}/parse/sync）或网络。"
         yield {
             "type": "complete",
             "percent": 100,
-            "stage": "完成",
+            "stage": "不可用",
             "message": msg,
             "result": {
-                "ok": True,
+                "ok": False,
                 "engine_id": engine_id,
                 "installed": True,
-                "running": True,
+                "running": False,
                 "message": msg,
                 "log": msg,
             },
@@ -865,43 +1147,81 @@ def extract_text_from_image_local(image_path: Path) -> str:
         return ""
 
 
+def _extract_markdown_from_parse_payload(data: Any) -> str:
+    """从 SoMark / OXR 的解析响应里取正文（兼容多种嵌套层级）。"""
+    if not isinstance(data, dict):
+        return ""
+    nodes: List[Any] = [data]
+    inner = data.get("data")
+    if isinstance(inner, dict):
+        nodes.append(inner)
+        result = inner.get("result")
+        if isinstance(result, dict):
+            nodes.append(result)
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        outputs = node.get("outputs")
+        if isinstance(outputs, dict):
+            md = outputs.get("markdown")
+            if isinstance(md, str) and md.strip():
+                return md.strip()
+        for key in ("markdown", "md_content", "md", "text", "content"):
+            val = node.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
 async def _extract_with_somark_free_api(image_path: Path, settings: RouterSettings) -> str:
+    """调用 SoMark / OXR 的同步解析接口（Free OXR API）。
+
+    真实可用的接口是 `POST {base}/parse/sync`（multipart：file + api_key），
+    正文在 `data.result.outputs.markdown`。旧实现打的是 /ocr、/parse、/file_parse
+    这类不存在的路径，服务端一律返回 404 网页，于是「选了云端 API」也永远拿不到文字。
+    """
     base_url = settings.ocr_config.somark_api_base_url.rstrip("/")
-    headers: Dict[str, str] = {}
-    if settings.ocr_config.somark_api_key:
-        headers["Authorization"] = f"Bearer {settings.ocr_config.somark_api_key}"
+    api_key = (settings.ocr_config.somark_api_key or "").strip() or "dummy"
     suffix = image_path.suffix.lower()
     mime = "image/jpeg" if suffix in (".jpg", ".jpeg") else ("image/webp" if suffix == ".webp" else "image/png")
     try:
         raw_bytes = image_path.read_bytes()
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            for ep in (f"{base_url}/ocr", f"{base_url}/parse", f"{base_url}/file_parse", base_url):
-                try:
-                    files = {"file": (image_path.name, raw_bytes, mime)}
-                    resp = await client.post(ep, files=files, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, dict):
-                            txt = (
-                                data.get("markdown")
-                                or data.get("md_content")
-                                or data.get("text")
-                                or data.get("content")
-                                or ""
-                            )
-                            if not txt and isinstance(data.get("data"), dict):
-                                txt = (
-                                    data["data"].get("markdown")
-                                    or data["data"].get("text")
-                                    or data["data"].get("content")
-                                    or ""
-                                )
-                            if txt:
-                                return str(txt).strip()
-                except Exception:
-                    continue
-    except Exception:
-        pass
+    except Exception as exc:
+        _set_somark_error(f"读取图片失败：{type(exc).__name__}")
+        return ""
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        for ep in (f"{base_url}/parse/sync", f"{base_url}/parse"):
+            try:
+                resp = await client.post(
+                    ep,
+                    files={"file": (image_path.name, raw_bytes, mime)},
+                    data={"api_key": api_key},
+                )
+            except Exception as exc:
+                _set_somark_error(f"连接失败：{type(exc).__name__}", hard=True)
+                continue
+            if resp.status_code == 404:
+                _set_somark_error(f"接口地址不存在（{ep}），请检查 API 地址", hard=True)
+                continue
+            if resp.status_code != 200:
+                _set_somark_error(f"接口返回 HTTP {resp.status_code}", hard=True)
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                _set_somark_error("接口返回的不是 JSON（地址可能填成了文档网页）", hard=True)
+                continue
+            code = data.get("code") if isinstance(data, dict) else None
+            if code not in (None, 0, 200, "0"):
+                message = str((data or {}).get("message") or "").strip()[:80]
+                _set_somark_error(f"接口返回 code={code}{('：' + message) if message else ''}", hard=True)
+                continue
+            text = _extract_markdown_from_parse_payload(data)
+            if text:
+                _set_somark_error("")
+                return text
+            _set_somark_error("接口返回成功但没有文本层")
     return ""
 
 
@@ -1020,6 +1340,10 @@ async def extract_text_from_image_vision(
         txt = await _extract_with_somark_free_api(image_path, settings)
         if txt:
             return txt
+        # 明确是「接口不可用」才熔断，避免整本扫描件逐页重复等 120s；
+        # 只是这一页没解析出文字（空白页/纯图）不该熔断。
+        if _SOMARK_LAST_HARD_FAIL and not _somark_fallback_blocked():
+            _trip_somark_fallback()
     elif engine == "paddleocr":
         txt = await _extract_with_paddleocr(image_path)
         if txt:
@@ -1033,10 +1357,23 @@ async def extract_text_from_image_vision(
         if txt:
             return txt
 
-    # Universal fallbacks: local PaddleOCR / RapidOCR -> VLM
-    local_text = extract_text_from_image_local(image_path)
-    if local_text:
-        return local_text
+    if engine == "rapidocr":
+        local_first = extract_text_from_image_local(image_path)
+        if local_first:
+            return local_first
+    else:
+        # Universal fallbacks: local PaddleOCR / RapidOCR -> 云端 OXR -> VLM
+        local_text = extract_text_from_image_local(image_path)
+        if local_text:
+            return local_text
+
+        # 所选引擎没装/没启动时，云端 OXR 是免部署的最后一道兜底。
+        if engine != "somark_free_api" and not _somark_fallback_blocked():
+            cloud_ocr = await _extract_with_somark_free_api(image_path, settings)
+            if cloud_ocr:
+                return cloud_ocr
+            if _SOMARK_LAST_HARD_FAIL:
+                _trip_somark_fallback()
 
     stage_cfg = settings.stage_mapping.get("vision_ocr")
     provider = (

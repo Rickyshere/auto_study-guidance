@@ -304,7 +304,7 @@ export const BlueprintNegotiator: React.FC<Props> = ({
             >
               <div className="space-y-1">
                 <div className="text-xs font-bold flex flex-wrap items-center gap-2">
-                  <span>硬件推荐方案：{providerStatus.gpu_vram.gpu_name}</span>
+                  <span>{providerStatus.gpu_vram.gpu_name}</span>
                   <span
                     className="px-2 py-0.5 rounded-full text-[11px]"
                     style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
@@ -314,21 +314,32 @@ export const BlueprintNegotiator: React.FC<Props> = ({
                       : 'CPU / 无独立显卡'}
                   </span>
                 </div>
+                {/* 先把「现在实际用谁、能不能用」说清楚，再谈硬件推荐，避免用户以为自己选的和实际用的不是一回事 */}
+                {providerStatus.ocr_summary && (
+                  <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    当前识别引擎：{providerStatus.ocr_summary.effective_label}
+                    {providerStatus.ocr_summary.effective_ready
+                      ? ` · ${providerStatus.ocr_summary.effective_status_text}`
+                      : ` · 不可用（${providerStatus.ocr_summary.effective_status_text}）`}
+                  </p>
+                )}
                 <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  推荐引擎：<strong>{providerStatus.gpu_vram.recommended_ocr_engine}</strong> —{' '}
+                  硬件推荐：<strong>{providerStatus.gpu_vram.recommended_ocr_engine}</strong> —{' '}
                   {providerStatus.gpu_vram.recommendation_reason}
                 </p>
               </div>
-              <SpringButton
-                springLabel="一键下载安装推荐 OCR"
-                disabled={Boolean(ocrSetupState?.running)}
-                onClick={handleQuickDownloadOcr}
-                className="shrink-0 px-3.5 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
-                style={{ backgroundColor: '#3B5BDB', cursor: ocrSetupState?.running ? 'wait' : 'pointer' }}
-              >
-                {ocrSetupState?.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                <span>一键下载/启动 OCR</span>
-              </SpringButton>
+              {!providerStatus.ocr_summary?.effective_ready && (
+                <SpringButton
+                  springLabel="一键下载安装推荐 OCR"
+                  disabled={Boolean(ocrSetupState?.running)}
+                  onClick={handleQuickDownloadOcr}
+                  className="shrink-0 px-3.5 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5"
+                  style={{ backgroundColor: '#3B5BDB', cursor: ocrSetupState?.running ? 'wait' : 'pointer' }}
+                >
+                  {ocrSetupState?.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  <span>一键下载/启动 OCR</span>
+                </SpringButton>
+              )}
             </div>
           )}
 

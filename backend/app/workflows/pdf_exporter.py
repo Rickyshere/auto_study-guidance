@@ -911,7 +911,7 @@ def _build_quiz_exam_html(
     parts.append(
         f"""
         <div class="exam-header">
-          <div class="exam-title">{html.escape(quiz.title)}</div>
+          <div class="exam-title">{_format_inline_text(quiz.title, None)}</div>
           <div class="exam-subtitle">
             {paper_tag} ｜ 命题范围：{html.escape(doc_ir.filename)} ｜ 考试用时：{quiz.suggested_minutes} 分钟 ｜ 满分：{quiz.total_score} 分
           </div>
@@ -947,7 +947,7 @@ def _build_quiz_exam_html(
     )
 
     parts.append(
-        f'<div class="notice-box"><strong>考生注意：</strong>{html.escape(quiz.instructions)} 请将答案规范书写在题后或作答区内，参考答案与教材溯源解析附于本卷末页。</div>'
+        f'<div class="notice-box"><strong>考生注意：</strong>{_format_inline_text(quiz.instructions, None)} 请将答案规范书写在题后或作答区内，参考答案与教材溯源解析附于本卷末页。</div>'
     )
 
     q_global_num = 0

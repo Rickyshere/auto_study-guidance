@@ -826,7 +826,8 @@ export function App() {
 
     return [
       { value: 'notes', label: '讲义 / 知识提取' },
-      { value: 'quiz', label: '在线练习卡片' },
+      { value: 'section_practice', label: '分节练习' },
+      { value: 'quiz', label: '章节测验' },
       { value: 'flashcards', label: '知识点闪卡' },
       { value: 'cheatsheet', label: '考前速记' },
       { value: 'mindmap', label: 'MindMap' },
@@ -885,7 +886,7 @@ export function App() {
                   className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
                   style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  v1.2.1
+                  v1.2.2
                 </span>
               </div>
               <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
@@ -1074,7 +1075,7 @@ export function App() {
                       className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.2.1
+                      v1.2.2
                     </span>
                   </div>
                   <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
@@ -1389,6 +1390,9 @@ export function App() {
             if (providerStatus) {
               setProviderStatus({ ...providerStatus, settings });
             }
+            // 只更新 settings 会让 ocr_summary / ocr_engines 停留在保存前的快照，
+            // 于是「改了 OCR 引擎并保存」后横幅仍按旧引擎判断可用性。这里强制拉一次真实状态。
+            void refreshProviderStatus();
           }}
           onRefreshStatus={refreshProviderStatus}
           gpuAvailable={gpuAvailable}

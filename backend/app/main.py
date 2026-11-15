@@ -33,6 +33,7 @@ from app.parsers.ocr_engine import (
     get_ocr_engines_status,
     is_rapidocr_available,
     probe_local_oxr_only,
+    resolve_effective_ocr_engine,
     setup_ocr_engine,
     stream_setup_ocr_engine,
 )
@@ -77,6 +78,13 @@ from app.workflows import (
 )
 from app.workflows.demo_project import create_demo_courseware_project
 from app.workflows.generator import normalize_markdown_math, strip_document_images
+from app.workflows.section_practice import (
+    extract_note_sections,
+    generate_section_practice,
+    load_cache as load_section_practice_cache,
+    notes_fingerprint,
+    save_cache as save_section_practice_cache,
+)
 from app.workflows.pdf_exporter import (
     export_cheatsheet_pdf_bytes,
     export_quiz_pdf_bytes,
@@ -91,7 +99,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.2.1",
+    version="1.2.2",
 )
 
 ALLOWED_ORIGINS = [
@@ -176,6 +184,7 @@ async def get_providers_status() -> ProviderStatusResponse:
     magpie_info = detect_free_ai_apps_and_magpie(settings.free_ai_auth.magpie_gateway_url)
     gpu_vram = detect_gpu_vram(settings.ocr_config.vram_override_gb)
     ocr_engines = await get_ocr_engines_status(settings)
+    ocr_summary = await resolve_effective_ocr_engine(settings)
     return ProviderStatusResponse(
         settings=redact_settings(settings),
         harnesses=harnesses,
@@ -187,6 +196,7 @@ async def get_providers_status() -> ProviderStatusResponse:
         rapidocr_available=is_rapidocr_available(),
         gpu_vram=gpu_vram,
         ocr_engines=ocr_engines,
+        ocr_summary=ocr_summary,
     )
 
 
@@ -196,9 +206,11 @@ async def detect_ocr_vram_tier(vram_override_gb: Optional[float] = None) -> Dict
     effective_override = vram_override_gb if vram_override_gb is not None else settings.ocr_config.vram_override_gb
     gpu_vram = detect_gpu_vram(effective_override)
     ocr_engines = await get_ocr_engines_status(settings)
+    ocr_summary = await resolve_effective_ocr_engine(settings)
     return {
         "gpu_vram": gpu_vram.model_dump(),
         "ocr_engines": [item.model_dump() for item in ocr_engines],
+        "ocr_summary": ocr_summary,
     }
 
 
@@ -722,6 +734,73 @@ async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> St
         raise HTTPException(status_code=400, detail=str(exc))
     _save_blueprint(project_id, updated_bp)
     return updated_bp
+
+
+@app.post("/api/projects/{project_id}/section-practice")
+async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> Any:
+    """按讲义小节生成/取出分节练习（同一节同一份讲义只生成一次，结果落盘缓存）。"""
+    package = _load_package(project_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="该项目尚未生成讲义，请先完成生成")
+    notes = package.study_notes_markdown or ""
+    sections = extract_note_sections(notes)
+    if not sections:
+        raise HTTPException(status_code=400, detail="当前讲义没有可切分的小节，无法生成分节练习")
+
+    section_id = str(payload.get("section_id") or "").strip()
+    section = next((s for s in sections if s["section_id"] == section_id), None)
+    if section is None:
+        raise HTTPException(status_code=404, detail=f"未找到小节 {section_id}")
+
+    fingerprint = notes_fingerprint(notes)
+    project_dir = _safe_project_dir(project_id)
+    cached = load_section_practice_cache(project_dir, fingerprint)
+    if section_id in cached:
+        return {"paper": cached[section_id], "cached": True}
+
+    blueprint = _load_blueprint(project_id) or package.blueprint_used
+    doc_ir = _load_project_ir(project_id)
+    settings = load_settings()
+    router = ModelRouter(settings)
+    try:
+        paper = await generate_section_practice(
+            section=section,
+            blueprint=blueprint,
+            document_ir=doc_ir,
+            total_sections=len(sections),
+            router=router,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    cached[section_id] = json.loads(paper.model_dump_json())
+    save_section_practice_cache(project_dir, fingerprint, cached)
+    return {"paper": cached[section_id], "cached": False}
+
+
+@app.get("/api/projects/{project_id}/sections")
+async def list_note_sections(project_id: str) -> Dict[str, Any]:
+    """讲义小节列表 + 每节是否已经有分节练习缓存（供前端「分节练习」导航使用）。"""
+    package = _load_package(project_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="该项目尚未生成讲义")
+    notes = package.study_notes_markdown or ""
+    fingerprint = notes_fingerprint(notes)
+    sections = extract_note_sections(notes)
+    cached = load_section_practice_cache(_safe_project_dir(project_id), fingerprint)
+    return {
+        "notes_fingerprint": fingerprint,
+        "sections": [
+            {
+                "section_id": s["section_id"],
+                "title": s["title"],
+                "level": s["level"],
+                "char_count": s["char_count"],
+                "has_practice": s["section_id"] in cached,
+            }
+            for s in sections
+        ],
+    }
 
 
 @app.post("/api/projects/{project_id}/variant-question")

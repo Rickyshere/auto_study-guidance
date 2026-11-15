@@ -9,6 +9,8 @@ from app.parsers.ocr_engine import (
     extract_exam_page_with_forced_oxr,
     extract_text_from_image_vision,
     probe_local_oxr_only,
+    resolve_effective_ocr_engine,
+    somark_last_error,
 )
 from app.schemas import AssetItem, ChapterNode, DocumentIR, RouterSettings
 
@@ -48,9 +50,21 @@ async def parse_pdf(
     page_assets: Dict[int, List[AssetItem]] = {}
     all_assets: List[AssetItem] = []
     ocr_applied = False
+    scanned_pages = 0
 
     if progress_cb:
         await progress_cb(8, "ocr_init", f"已读取 PDF 共 {total_pages} 页，正在启动版面分析与 OCR 识别...")
+
+    # 提前把"这一轮 OCR 到底能不能用"说清楚，避免扫描件静默变成空文本
+    ocr_runtime = await resolve_effective_ocr_engine(settings)
+    if progress_cb and not ocr_runtime.get("effective_ready"):
+        await progress_cb(
+            9,
+            "ocr_warning",
+            f"⚠ OCR 未就绪（{ocr_runtime.get('effective_label')} · {ocr_runtime.get('effective_status_text')}）："
+            f"当前会回退到 {'、'.join(ocr_runtime.get('fallbacks') or ['无'])}；"
+            "扫描页若取不到文字，生成的资料只能依据标题推演。可在「设置 → OCR 文本识别」里一键部署或改选云端 API。",
+        )
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
@@ -87,6 +101,7 @@ async def parse_pdf(
 
         # Scanned page detection: very little text -> render page and run OCR/VLM
         if len(text) < 35:
+            scanned_pages += 1
             if progress_cb:
                 pct = 10 + int(78 * page_num / max(1, total_pages))
                 await progress_cb(
@@ -233,7 +248,18 @@ async def parse_pdf(
     total_chars = sum(c.char_count for c in chapters)
     doc.close()
     if progress_cb:
-        await progress_cb(100, "done", f"OCR 与章节切片完成！共识别 {len(chapters)} 个章节、{total_chars:,} 字。")
+        if scanned_pages and not ocr_applied:
+            # OCR 一路失败但流程没报错，是最容易让人「以为在跑」的坑：结束时把真相说出来。
+            err = somark_last_error()
+            await progress_cb(
+                100,
+                "done",
+                f"⚠ 有 {scanned_pages} 页是扫描图，但 OCR 一个字都没取到"
+                f"{('（' + err + '）') if err else ''}；只切出 {len(chapters)} 段、{total_chars:,} 字，"
+                "后续资料只能依据标题推演。请到「设置 → OCR 文本识别」点一键按钮把它真正跑通。",
+            )
+        else:
+            await progress_cb(100, "done", f"OCR 与章节切片完成！共识别 {len(chapters)} 个章节、{total_chars:,} 字。")
     return DocumentIR(
         project_id=project_id,
         filename=file_path.name,

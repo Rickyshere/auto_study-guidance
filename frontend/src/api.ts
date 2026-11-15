@@ -11,6 +11,7 @@ import {
   ProjectSummary,
   ProviderStatusResponse,
   ProviderType,
+  QuizPaper,
   QuizQuestion,
   RouterSettings,
   StudyBlueprint,
@@ -130,6 +131,17 @@ async function postSseStream<T>(
   return finalResult;
 }
 
+export interface NoteSectionsResponse {
+  notes_fingerprint: string;
+  sections: {
+    section_id: string;
+    title: string;
+    level: number;
+    char_count: number;
+    has_practice: boolean;
+  }[];
+}
+
 export const api = {
   getProviderStatus: () => requestJson<ProviderStatusResponse>('/api/providers/status'),
 
@@ -235,6 +247,21 @@ export const api = {
 
   getProjectDetail: (projectId: string) =>
     requestJson<ProjectDetailResponse>(`/api/projects/${projectId}`),
+
+  /** 讲义小节列表（分节练习导航用） */
+  getNoteSections: (projectId: string) =>
+    requestJson<NoteSectionsResponse>(`/api/projects/${encodeURIComponent(projectId)}/sections`),
+
+  /** 生成/取出某一节的分节练习（同一节同一份讲义只生成一次） */
+  createSectionPractice: (projectId: string, sectionId: string) =>
+    requestJson<{ paper: QuizPaper; cached: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/section-practice`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section_id: sectionId }),
+      }
+    ),
 
   deleteProject: (projectId: string) =>
     requestJson<{ status: string }>(`/api/projects/${projectId}`, { method: 'DELETE' }),

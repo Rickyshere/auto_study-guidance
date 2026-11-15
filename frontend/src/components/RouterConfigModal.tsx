@@ -122,6 +122,27 @@ export const RouterConfigModal: React.FC<Props> = ({
       ? 'dsh'
       : draft.harness_config.preferred_cli;
 
+  // 「已保存」与「草稿」必须区分开，否则用户改完不保存会以为已经生效
+  const ocrSummary = status?.ocr_summary;
+  const ocrDirty = Boolean(
+    status?.settings && draft.ocr_config.active_engine !== status.settings.ocr_config.active_engine
+  );
+  const engineLabelInDraft =
+    draft.ocr_config.active_engine === 'auto_recommend'
+      ? '自动推荐（按显存档位）'
+      : (status?.ocr_engines || []).find((e) => e.engine_id === draft.ocr_config.active_engine)?.name ||
+        draft.ocr_config.active_engine;
+
+  // 横幅必须跟着「草稿里现在选的引擎」走。原来读的是服务端快照（ocr_summary），
+  // 保存后快照不刷新，就会出现「明明选了 SoMark 并保存，却仍提示 OCR 未就绪」。
+  const draftEffectiveEngineId =
+    draft.ocr_config.active_engine === 'auto_recommend'
+      ? status?.gpu_vram.recommended_ocr_engine || ocrSummary?.effective_engine || ''
+      : draft.ocr_config.active_engine;
+  const draftEngineRow = (status?.ocr_engines || []).find((e) => e.engine_id === draftEffectiveEngineId);
+  const bannerReady = draftEngineRow ? Boolean(draftEngineRow.available) : Boolean(ocrSummary?.effective_ready);
+  const bannerStatusText = draftEngineRow?.status_text || ocrSummary?.effective_status_text || '';
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -244,21 +265,27 @@ export const RouterConfigModal: React.FC<Props> = ({
     }
   };
 
-  const handleOcrStreamSetup = async (engineId: OcrEngineType, name: string) => {
+  const handleOcrStreamSetup = async (
+    engineId: OcrEngineType,
+    name: string,
+    action: 'install_and_start' | 'uninstall' = 'install_and_start'
+  ) => {
+    const title =
+      action === 'uninstall' ? `卸载 OCR 引擎：${name}` : `一键下载/启动 OCR 引擎：${name}`;
     setTaskProgress({
       targetKey: `ocr:${engineId}`,
-      title: `一键下载/启动 OCR 引擎：${name}`,
+      title,
       percent: 5,
-      message: '正在准备安装/启动任务...',
-      logs: [`启动 ${engineId} 部署流程...`],
+      message: action === 'uninstall' ? '正在停止服务并清理文件...' : '正在准备安装/启动任务...',
+      logs: [`${action === 'uninstall' ? '开始卸载' : '启动'} ${engineId} ...`],
       status: 'running',
     });
     try {
-      await api.setupOcrEngineStream(engineId, 'install_and_start', (evt) => {
+      await api.setupOcrEngineStream(engineId, action, (evt) => {
         const msg = evt.message || '';
         setTaskProgress((prev) => ({
           targetKey: `ocr:${engineId}`,
-          title: `一键下载/启动 OCR 引擎：${name}`,
+          title,
           percent: Number(evt.percent ?? 50),
           message: msg,
           logs: evt.log_line
@@ -276,7 +303,7 @@ export const RouterConfigModal: React.FC<Props> = ({
           ? {
               ...prev,
               status: 'error',
-              message: e?.message || 'OCR 一键安装失败',
+              message: e?.message || (action === 'uninstall' ? 'OCR 卸载失败' : 'OCR 一键安装失败'),
             }
           : null
       );
@@ -372,7 +399,7 @@ export const RouterConfigModal: React.FC<Props> = ({
                       className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.2.1
+                      v1.2.2
                     </span>
                   </div>
                   <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
@@ -957,11 +984,96 @@ export const RouterConfigModal: React.FC<Props> = ({
                   </div>
                 </div>
 
+                {/* 当前 OCR 运行状态：把「我选了谁 / 实际用谁 / 能不能用」讲清楚 */}
+                {ocrSummary && (
+                  <div
+                    className="p-4 rounded-2xl border space-y-2"
+                    style={{
+                      borderColor: bannerReady ? 'rgba(16,185,129,0.45)' : '#FCA5A5',
+                      backgroundColor: bannerReady ? 'var(--semantic-success-tint)' : '#FEF2F2',
+                    }}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span
+                        className="text-sm font-bold flex items-center gap-1.5"
+                        style={{ color: bannerReady ? 'var(--semantic-success)' : '#B91C1C' }}
+                      >
+                        <ScanText className="w-4 h-4" />
+                        {bannerReady
+                          ? `OCR 已就绪：${engineLabelInDraft} 会实际识别文字`
+                          : `OCR 未就绪：${engineLabelInDraft}${bannerStatusText ? ` · ${bannerStatusText}` : ''}`}
+                      </span>
+                      <span
+                        className="px-2.5 py-0.5 rounded-full text-[11px] font-bold"
+                        style={{
+                          backgroundColor: bannerReady ? '#059669' : '#DC2626',
+                          color: '#FFFFFF',
+                        }}
+                      >
+                        {bannerReady ? '可用' : '不可用'}
+                      </span>
+                    </div>
+
+                    <div className="text-[11.5px] leading-relaxed space-y-1" style={{ color: 'var(--text-secondary)' }}>
+                      <div>
+                        <strong>现在选择的是：</strong>
+                        {engineLabelInDraft}
+                        {draftEngineRow?.status_text ? ` · ${draftEngineRow.status_text}` : ''}
+                        {ocrDirty && (
+                          <span style={{ color: '#B45309', marginLeft: 6 }}>（改动尚未保存）</span>
+                        )}
+                      </div>
+                      <div>
+                        <strong>服务端已生效：</strong>
+                        {ocrSummary.effective_label} · {ocrSummary.effective_status_text}
+                        {ocrDirty && (
+                          <span style={{ color: '#B45309', marginLeft: 6 }}>
+                            （点右下「保存并生效（含 OCR 切换）」后才会换成上面这个）
+                          </span>
+                        )}
+                      </div>
+                      {!ocrDirty && <div style={{ opacity: 0.85 }}>{ocrSummary.effective_reason}</div>}
+                      {ocrSummary.warning && (
+                        <div style={{ color: '#B91C1C', fontWeight: 600 }}>{ocrSummary.warning}</div>
+                      )}
+                      {!bannerReady && (
+                        <div style={{ color: '#7F1D1D' }}>
+                          解决办法：点下方「{engineLabelInDraft}」卡片的一键按钮
+                          {draftEffectiveEngineId === 'somark_free_api' ? '做一次真实连通测试' : '把它装好并启动'}
+                          ，或直接改选「SoMark Free-OXR 开放 API」（云端免部署、无需 Key）。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* OCR Engines List with One-Click Download/Start */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {(status?.ocr_engines || []).map((eng) => {
-                    const isActive = draft.ocr_config.active_engine === eng.engine_id;
+                    const draftSelected = draft.ocr_config.active_engine === eng.engine_id;
+                    const isSaved = Boolean(eng.active);
                     const isRec = status?.gpu_vram.recommended_ocr_engine === eng.engine_id;
+                    const badge = eng.status_text || (eng.installed ? '已安装' : '未安装');
+                    const kindStyle =
+                      eng.status_kind === 'running'
+                        ? { bg: 'var(--semantic-success-tint)', fg: 'var(--semantic-success)' }
+                        : eng.status_kind === 'idle'
+                        ? { bg: '#FEF3C7', fg: '#B45309' }
+                        : eng.status_kind === 'cloud_error'
+                        ? { bg: '#FEE2E2', fg: '#B91C1C' }
+                        : eng.status_kind === 'cloud' || eng.status_kind === 'builtin'
+                        ? { bg: 'var(--brand-tint)', fg: '#3B5BDB' }
+                        : { bg: 'var(--bg-subtle)', fg: 'var(--text-muted)' };
+                    const primaryActionLabel =
+                      eng.engine_id === 'somark_free_api'
+                        ? '测试云端连通性'
+                        : !eng.installed
+                        ? '一键下载并部署启动'
+                        : eng.running
+                        ? '重启 / 检查升级'
+                        : eng.status_kind === 'builtin' || eng.status_kind === 'cloud'
+                        ? '重新检查'
+                        : '启动本地服务';
                     return (
                       <div
                         key={eng.engine_id}
@@ -973,14 +1085,38 @@ export const RouterConfigModal: React.FC<Props> = ({
                         }
                         className="p-3.5 rounded-2xl border cursor-pointer transition space-y-2"
                         style={{
-                          borderColor: isActive ? '#3B5BDB' : 'var(--border-default)',
-                          backgroundColor: isActive ? 'var(--brand-tint)' : 'var(--bg-surface)',
+                          borderColor: isSaved
+                            ? '#3B5BDB'
+                            : draftSelected
+                            ? '#F59E0B'
+                            : 'var(--border-default)',
+                          borderStyle: draftSelected && !isSaved ? 'dashed' : 'solid',
+                          backgroundColor: isSaved
+                            ? 'var(--brand-tint)'
+                            : draftSelected
+                            ? '#FFFBEB'
+                            : 'var(--bg-surface)',
                         }}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-bold flex items-center gap-1.5">
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold flex items-center gap-1.5 flex-wrap">
                               <span>{eng.name}</span>
+                              {isSaved && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#3B5BDB] text-white">
+                                  已启用
+                                </span>
+                              )}
+                              {draftSelected && !isSaved && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500 text-white">
+                                  待保存
+                                </span>
+                              )}
+                              {eng.effective && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-white">
+                                  正在使用
+                                </span>
+                              )}
                               {isRec && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-600 text-white">
                                   显存推荐
@@ -993,31 +1129,46 @@ export const RouterConfigModal: React.FC<Props> = ({
                           </div>
                           <span
                             className="text-[11px] px-2 py-0.5 rounded-full font-semibold shrink-0"
-                            style={{
-                              backgroundColor: eng.running || eng.installed ? 'var(--semantic-success-tint)' : 'var(--bg-subtle)',
-                              color: eng.running || eng.installed ? 'var(--semantic-success)' : 'var(--text-muted)',
-                            }}
+                            style={{ backgroundColor: kindStyle.bg, color: kindStyle.fg }}
+                            title={badge}
                           >
-                            {eng.running ? '运行中' : eng.installed ? '已安装' : '未安装'}
+                            {badge}
                           </span>
                         </div>
                         <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                           {eng.description}
                         </p>
-                        {eng.supports_one_click_setup && (
-                          <div className="pt-1 flex justify-end">
-                            <button
-                              type="button"
-                              disabled={isRunningTask}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOcrStreamSetup(eng.engine_id, eng.name);
-                              }}
-                              className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#3B5BDB] text-white flex items-center gap-1"
-                            >
-                              <Download className="w-3 h-3" />
-                              {eng.installed ? '一键重启 / 检查升级' : '一键下载并部署启动'}
-                            </button>
+                        {(eng.supports_one_click_setup || eng.uninstall_supported) && (
+                          <div className="pt-1 flex justify-end gap-2">
+                            {eng.uninstall_supported && eng.installed && (
+                              <button
+                                type="button"
+                                disabled={isRunningTask}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOcrStreamSetup(eng.engine_id, eng.name, 'uninstall');
+                                }}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-rose-300 text-rose-600 flex items-center gap-1"
+                                style={{ cursor: isRunningTask ? 'not-allowed' : 'pointer' }}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                卸载
+                              </button>
+                            )}
+                            {eng.supports_one_click_setup && (
+                              <button
+                                type="button"
+                                disabled={isRunningTask}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOcrStreamSetup(eng.engine_id, eng.name, 'install_and_start');
+                                }}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#3B5BDB] text-white flex items-center gap-1"
+                              >
+                                <Download className="w-3 h-3" />
+                                {primaryActionLabel}
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1257,9 +1408,9 @@ export const RouterConfigModal: React.FC<Props> = ({
               disabled={saving}
               onClick={handleSave}
               className="px-5 py-2 rounded-xl text-xs font-bold text-white"
-              style={{ backgroundColor: '#3B5BDB', cursor: saving ? 'wait' : 'pointer' }}
+              style={{ backgroundColor: ocrDirty ? '#D97706' : '#3B5BDB', cursor: saving ? 'wait' : 'pointer' }}
             >
-              {saving ? '保存中...' : '保存并生效'}
+              {saving ? '保存中...' : ocrDirty ? '保存并生效（含 OCR 切换）' : '保存并生效'}
             </SpringButton>
           </div>
         </div>

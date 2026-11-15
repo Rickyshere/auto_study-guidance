@@ -480,7 +480,7 @@ namespace AutoStudyGuidanceDesktop
             _projectRoot = projectRoot ?? "";
             _checkResult = initialResult ?? new EnvironmentCheckResult();
 
-            Text = "Auto Study Guidance v1.2.1 · 环境与依赖自检";
+            Text = "Auto Study Guidance v1.2.2 · 环境与依赖自检";
             Width = 700;
             Height = 590;
             MinimumSize = new Size(640, 520);
@@ -964,7 +964,7 @@ namespace AutoStudyGuidanceDesktop
             req.AllowAutoRedirect = true;
             req.Timeout = 30000;
             req.ReadWriteTimeout = 30000;
-            req.UserAgent = "AutoStudyGuidance-Installer/1.2.1";
+            req.UserAgent = "AutoStudyGuidance-Installer/1.2.2";
 
             using (var resp = (HttpWebResponse)req.GetResponse())
             using (var netStream = resp.GetResponseStream())
@@ -1052,7 +1052,7 @@ namespace AutoStudyGuidanceDesktop
     internal sealed class MainWindow : Form
     {
         private const string ServerUrl = "http://127.0.0.1:8000";
-        private const string ReadyTitle = "Auto Study Guidance v1.2.1 · 智能导学与题库工作台";
+        private const string ReadyTitle = "Auto Study Guidance v1.2.2 · 智能导学与题库工作台";
 
         private readonly WebView2 _webView;
         private readonly Panel _loadingPanel;
@@ -1096,7 +1096,7 @@ namespace AutoStudyGuidanceDesktop
             _loadingPanel.BackColor = Color.FromArgb(248, 250, 252);
 
             _loadingLabel = new Label();
-            _loadingLabel.Text = "正在检查本地环境与依赖，并初始化 Auto Study Guidance v1.2.1 引擎，请稍候...";
+            _loadingLabel.Text = "正在检查本地环境与依赖，并初始化 Auto Study Guidance v1.2.2 引擎，请稍候...";
             _loadingLabel.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Regular);
             _loadingLabel.ForeColor = Color.FromArgb(30, 41, 59);
             _loadingLabel.TextAlign = ContentAlignment.MiddleCenter;
@@ -1391,7 +1391,7 @@ namespace AutoStudyGuidanceDesktop
 
         private void SetStatusSafe(string text)
         {
-            SetTitleSafe("Auto Study Guidance v1.2.1 — " + text);
+            SetTitleSafe("Auto Study Guidance v1.2.2 — " + text);
         }
 
         private void SetTitleSafe(string titleText)
