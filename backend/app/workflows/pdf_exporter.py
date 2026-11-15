@@ -7,7 +7,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import pymupdf
 
@@ -1028,6 +1028,47 @@ body {
   border-top: 0.6pt solid #e2e8f0;
   margin: 7pt 0;
 }
+.cornell-wrap {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cornell-main {
+  width: 68%;
+  vertical-align: top;
+  padding-right: 10pt;
+}
+.cornell-side {
+  width: 30%;
+  vertical-align: top;
+  border-left: 0.8pt solid #94a3b8;
+  padding-left: 8pt;
+}
+.cornell-card {
+  border: 0.6pt solid #cbd5e1;
+  border-left: 2.4pt solid #2563eb;
+  border-radius: 4pt;
+  padding: 4pt 6pt;
+  margin-bottom: 6pt;
+  font-size: 8.2pt;
+  break-inside: avoid;
+}
+.cornell-quote {
+  color: #475569;
+  font-style: italic;
+  margin-bottom: 2pt;
+}
+.cornell-title {
+  font-weight: 700;
+  color: #1e3a8a;
+  margin-bottom: 1pt;
+}
+.cornell-body {
+  color: #111827;
+}
+.cornell-user {
+  margin-top: 2pt;
+  color: #92400e;
+}
 .figure-wrap {
   text-align: center;
   margin: 6pt 0;
@@ -1427,6 +1468,36 @@ def _build_study_guide_companion_examples_html(
     return "\n".join(parts)
 
 
+def _build_cornell_side_html(annotations: Optional[List[Any]], assets_dir: Optional[Path]) -> str:
+    """把"钉在页边"的批注排成右侧康奈尔栏。"""
+    if not annotations:
+        return ""
+    cards: List[str] = []
+    ordered = sorted(
+        [a for a in annotations if getattr(a.margin_card, "is_pinned", False)],
+        key=lambda a: (str(a.anchor.block_id), int(a.anchor.start_offset or 0)),
+    )
+    for ann in ordered:
+        quote = (ann.anchor.exact_quote or "").strip()
+        quote_html = (
+            f'<div class="cornell-quote">「{_format_inline_text(quote[:70], assets_dir)}」</div>' if quote else ""
+        )
+        title = (ann.margin_card.card_title or "").strip()
+        title_html = f'<div class="cornell-title">{_format_inline_text(title, assets_dir)}</div>' if title else ""
+        body = (ann.margin_card.ai_response_markdown or "").strip()
+        body_html = f'<div class="cornell-body">{_format_inline_text(body, assets_dir)}</div>' if body else ""
+        user_note = (ann.margin_card.user_custom_note or "").strip()
+        user_html = (
+            f'<div class="cornell-user"><strong>我的批注：</strong>{_format_inline_text(user_note, assets_dir)}</div>'
+            if user_note
+            else ""
+        )
+        if not (quote_html or title_html or body_html or user_html):
+            continue
+        cards.append(f'<div class="cornell-card">{quote_html}{title_html}{body_html}{user_html}</div>')
+    return "".join(cards)
+
+
 def export_study_guide_pdf_bytes(
     doc_ir: DocumentIR,
     package: StudyPackage,
@@ -1434,8 +1505,13 @@ def export_study_guide_pdf_bytes(
     paper_size: PaperSize = "a4",
     include_answers: bool = True,
     assets_dir: Optional[Path] = None,
+    notes_mode: Literal["clean", "cornell"] = "clean",
+    annotations: Optional[List[Any]] = None,
 ) -> bytes:
-    """Export Self-Study Guide / Study Notes in a dedicated printable booklet layout (NOT web UI layout)."""
+    """Export Self-Study Guide / Study Notes in a dedicated printable booklet layout (NOT web UI layout).
+
+    notes_mode="cornell" 时把已钉住的页边批注排到右侧康奈尔栏，导出"带笔记版"。
+    """
     bp = package.blueprint_used
     sel_chapters = [c for c in doc_ir.chapters if c.chapter_id in bp.selected_chapter_ids] or doc_ir.chapters
     chap_str = "、".join(c.title for c in sel_chapters[:5]) + (" 等" if len(sel_chapters) > 5 else "")
@@ -1460,6 +1536,16 @@ def export_study_guide_pdf_bytes(
 
     notes_md = strip_document_images(package.study_notes_markdown or "暂无导学笔记正文。")
     notes_html = _markdown_to_print_html(notes_md, assets_dir=assets_dir, highlight_examples=True)
+
+    cornell_side = _build_cornell_side_html(annotations, assets_dir) if notes_mode == "cornell" else ""
+    if cornell_side:
+        notes_html = (
+            '<table class="cornell-wrap"><tr>'
+            f'<td class="cornell-main">{notes_html}</td>'
+            f'<td class="cornell-side">{cornell_side}</td>'
+            "</tr></table>"
+        )
+
     examples_html = (
         _build_study_guide_companion_examples_html(package, assets_dir=assets_dir)
         if include_answers

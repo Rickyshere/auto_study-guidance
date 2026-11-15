@@ -516,3 +516,71 @@ export interface UpdateStatusResponse {
   last_webhook_at?: string;
   reason?: string;
 }
+
+// ---------------------------------------------------------------------------
+// 交互讲义：块级锚点批注 + Agent 5 伴读微导师
+// ---------------------------------------------------------------------------
+export type AnnotationTargetType = 'TEXT_RANGE' | 'SVG_NODE';
+export type AnnotationMarkStyle = 'HIGHLIGHT' | 'UNDERLINE_WAVE';
+export type AnnotationColor = 'AMBER_YELLOW' | 'MINT_GREEN' | 'CORAL_RED';
+export type MicroTutorAction =
+  | 'EXPLAIN_SIMPLE'
+  | 'GIVE_ANALOGY'
+  | 'TRAP_ALERT'
+  | 'MICRO_QUIZ'
+  | 'EXPLAIN_SVG_NODE';
+
+export interface AnnotationAnchor {
+  block_id: string;
+  start_offset: number;
+  end_offset: number;
+  exact_quote: string;
+  svg_node_id?: string | null;
+}
+
+export interface AnnotationStyle {
+  type: AnnotationMarkStyle;
+  color: AnnotationColor;
+}
+
+export interface MicroQuizPayload {
+  question: string;
+  options: Record<string, string>;
+  answer: string;
+  one_line_reason?: string;
+}
+
+export interface AnnotationMarginCard {
+  is_pinned: boolean;
+  trigger_action: MicroTutorAction;
+  card_title: string;
+  user_custom_note: string;
+  ai_response_markdown: string;
+  micro_quiz?: MicroQuizPayload | null;
+}
+
+export interface HandoutAnnotation {
+  annotation_id: string;
+  project_id?: string;
+  target_type: AnnotationTargetType;
+  anchor: AnnotationAnchor;
+  style: AnnotationStyle;
+  margin_card: AnnotationMarginCard;
+  created_at?: string;
+}
+
+export interface MicroTutorRequest {
+  study_mode: string;
+  action_type: MicroTutorAction;
+  selected_focus: string;
+  surrounding_context: string;
+  document_title: string;
+}
+
+export interface MicroTutorResponse {
+  card_title: string;
+  content_markdown: string;
+  micro_quiz?: MicroQuizPayload | null;
+  fallback: boolean;
+  model_label: string;
+}

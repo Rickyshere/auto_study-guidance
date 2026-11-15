@@ -53,6 +53,9 @@ from app.schemas import (
     ExamGenerateRequest,
     FreeAiAuthConfig,
     GenerateRequest,
+    HandoutAnnotation,
+    MicroTutorRequest,
+    MicroTutorResponse,
     NegotiateRequest,
     OcrEngineType,
     PresetTemplate,
@@ -87,6 +90,12 @@ from app.workflows.section_practice import (
     notes_fingerprint,
     save_cache as save_section_practice_cache,
 )
+from app.workflows.annotations import (
+    delete_annotation,
+    load_annotations,
+    upsert_annotation,
+)
+from app.workflows.micro_tutor import generate_micro_tutor_card
 from app.workflows.pdf_exporter import (
     export_cheatsheet_pdf_bytes,
     export_quiz_pdf_bytes,
@@ -802,6 +811,38 @@ async def reparse_project(project_id: str) -> Any:
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.get("/api/projects/{project_id}/annotations")
+async def list_handout_annotations(project_id: str) -> Dict[str, Any]:
+    """讲义页边批注（含已钉住的康奈尔批注）列表。"""
+    _load_project_ir(project_id)
+    return {"items": [row.model_dump() for row in load_annotations(project_id)]}
+
+
+@app.post("/api/projects/{project_id}/annotations", response_model=HandoutAnnotation)
+async def save_handout_annotation(project_id: str, payload: HandoutAnnotation) -> HandoutAnnotation:
+    """新增或更新一条划词高亮/页边批注。"""
+    _load_project_ir(project_id)
+    return upsert_annotation(project_id, payload)
+
+
+@app.delete("/api/projects/{project_id}/annotations/{annotation_id}")
+async def remove_handout_annotation(project_id: str, annotation_id: str) -> Dict[str, Any]:
+    _load_project_ir(project_id)
+    return {"deleted": delete_annotation(project_id, annotation_id), "annotation_id": annotation_id}
+
+
+@app.post("/api/projects/{project_id}/micro-tutor", response_model=MicroTutorResponse)
+async def micro_tutor_card(project_id: str, payload: MicroTutorRequest) -> MicroTutorResponse:
+    """Agent 5 伴读微导师：把划词/点图焦点变成一张页边批注卡。"""
+    doc_ir = _load_project_ir(project_id)
+    settings = load_settings()
+    router = ModelRouter(settings)
+    req = payload
+    if not req.document_title:
+        req = req.model_copy(update={"document_title": doc_ir.workspace_title or doc_ir.filename})
+    return await generate_micro_tutor_card(req, router)
+
+
 @app.delete("/api/projects/{project_id}/package")
 async def revoke_project_package(project_id: str) -> Dict[str, Any]:
     """Revoke Stage 2 study package and unlock Stage 1 blueprint refinement."""
@@ -1224,6 +1265,7 @@ def _build_pdf_export_response(
     include_answers: bool,
     inline: bool = False,
     paper_id: Optional[str] = None,
+    notes_mode: str = "clean",
 ) -> Response:
     doc_ir = _load_project_ir(project_id)
     package = _load_package(project_id)
@@ -1269,8 +1311,10 @@ def _build_pdf_export_response(
             paper_size=size,  # type: ignore[arg-type]
             include_answers=include_answers,
             assets_dir=assets_dir,
+            notes_mode="cornell" if notes_mode == "cornell" else "clean",  # type: ignore[arg-type]
+            annotations=load_annotations(project_id) if notes_mode == "cornell" else None,
         )
-        suffix = f"_{size.upper()}印刷讲义与知识提取.pdf"
+        suffix = f"_{size.upper()}印刷讲义与知识提取{'_带页边批注' if notes_mode == 'cornell' else ''}.pdf"
 
     filename = f"{base_name}{suffix}"
     encoded_name = quote(filename)
@@ -1302,7 +1346,10 @@ async def export_project_pdf_post(project_id: str, payload: Dict[str, Any]) -> R
     paper_size = str(payload.get("paper_size") or "a4")
     include_answers = bool(payload.get("include_answers", True))
     paper_id = payload.get("paper_id")
-    return _build_pdf_export_response(project_id, doc_type, paper_size, include_answers, inline=False, paper_id=paper_id)
+    notes_mode = str(payload.get("notes_mode") or "clean")
+    return _build_pdf_export_response(
+        project_id, doc_type, paper_size, include_answers, inline=False, paper_id=paper_id, notes_mode=notes_mode
+    )
 
 
 @app.get("/api/system/update-status")

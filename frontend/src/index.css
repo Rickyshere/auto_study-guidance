@@ -627,3 +627,236 @@ body {
   }
 }
 
+
+/* ==========================================================================
+   交互讲义（Handout v1.0）：划词胶囊 + 页边批注栏 + 康奈尔双模打印
+   动效说明：规格书要求弹簧动力学；纯 CSS 用带过冲的贝塞尔近似 Tier1~Tier4，
+   真正的弹簧数值见 utils/marginLayout.ts 的 SPRING_TIERS（供 JS 侧动画使用）。
+   ========================================================================== */
+.handout-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 28px;
+  position: relative;
+  align-items: start;
+}
+.handout-main {
+  min-width: 0;
+}
+.handout-body {
+  max-width: 760px;
+}
+.margin-sidecar-column {
+  position: relative;
+  min-height: 60px;
+}
+.selection-action-pill {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  box-shadow: 0 10px 25px -8px rgba(15, 23, 42, 0.55);
+  z-index: 60;
+  animation: pill-pop 140ms cubic-bezier(0.2, 1.5, 0.4, 1);
+}
+@keyframes pill-pop {
+  from { opacity: 0; transform: translate(-50%, -85%) scale(0.92); }
+  to { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+.selection-action-pill button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.selection-action-pill button:hover {
+  background: rgba(148, 163, 184, 0.28);
+}
+.selection-action-pill button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+.pill-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: rgba(148, 163, 184, 0.45);
+}
+mark.hl-yellow {
+  background: linear-gradient(104deg, rgba(255, 226, 89, 0) 0.9%, rgba(255, 226, 89, 0.65) 2.4%, rgba(255, 226, 89, 0.45) 98%, rgba(255, 226, 89, 0) 99%);
+  padding: 0.1em 0.2em;
+  border-radius: 3px;
+  cursor: pointer;
+}
+mark.hl-green {
+  background: linear-gradient(104deg, rgba(134, 239, 172, 0) 0.9%, rgba(134, 239, 172, 0.55) 2.4%, rgba(134, 239, 172, 0.4) 98%);
+  cursor: pointer;
+}
+mark.hl-red-wave {
+  background: transparent;
+  text-decoration: underline wavy #ef4444;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+.handout-svg .interactive-hotspot:hover {
+  filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.6));
+  cursor: pointer;
+}
+.block-linked-active {
+  background-color: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid #3b82f6;
+  padding-left: 12px;
+  margin-left: -15px;
+  border-radius: 0 6px 6px 0;
+  transition: background-color 180ms cubic-bezier(0.2, 1.2, 0.4, 1);
+}
+.margin-note-card {
+  position: absolute;
+  left: 0;
+  width: 292px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 3.5px solid #3b82f6;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.07);
+  font-size: 13px;
+  line-height: 1.55;
+  color: #0f172a;
+  animation: card-slide 220ms cubic-bezier(0.2, 1.15, 0.35, 1);
+  transition: top 220ms cubic-bezier(0.2, 1.15, 0.35, 1);
+}
+@keyframes card-slide {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.margin-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.margin-card-title {
+  font-weight: 800;
+  font-size: 12px;
+  color: #1e3a8a;
+}
+.margin-card-actions,
+.margin-card-x {
+  display: inline-flex;
+  gap: 4px;
+}
+.margin-card-actions button,
+.margin-card-x {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.margin-card-actions button:hover,
+.margin-card-x:hover {
+  background: #f1f5f9;
+  color: #1d4ed8;
+}
+.margin-quote {
+  font-size: 11.5px;
+  color: #64748b;
+  font-style: italic;
+  margin-bottom: 3px;
+}
+.margin-body :where(p) {
+  margin: 0 0 4px 0;
+}
+.margin-quiz {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #cbd5e1;
+  font-size: 12px;
+}
+.margin-quiz-q { font-weight: 700; margin-bottom: 3px; }
+.margin-quiz-opt { color: #334155; }
+.margin-quiz-a { margin-top: 3px; font-weight: 700; color: #047857; }
+.margin-hint,
+.margin-status {
+  font-size: 12px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px;
+}
+.margin-status { color: #b45309; font-weight: 600; }
+
+@media (max-width: 1180px) {
+  .handout-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .margin-sidecar-column {
+    min-height: 0;
+  }
+  .margin-note-card {
+    position: static;
+    width: 100%;
+    margin-bottom: 10px;
+  }
+}
+
+@media print {
+  .selection-action-pill,
+  .margin-note-card:not(.is-pinned),
+  .margin-card-actions,
+  .margin-card-x,
+  .margin-hint,
+  .margin-status {
+    display: none !important;
+  }
+  .handout-workspace.print-mode-clean {
+    display: block;
+    width: 100%;
+  }
+  .print-mode-clean .margin-sidecar-column {
+    display: none !important;
+  }
+  .print-mode-clean mark {
+    background: transparent !important;
+    text-decoration: none !important;
+  }
+  .handout-workspace.print-mode-cornell {
+    display: grid;
+    grid-template-columns: 68% 30%;
+    gap: 2%;
+    width: 100%;
+  }
+  .print-mode-cornell .margin-sidecar-column {
+    position: static;
+    display: block;
+    border-left: 1px solid #333;
+    padding-left: 8px;
+  }
+  .print-mode-cornell .margin-note-card.is-pinned {
+    position: static !important;
+    top: auto !important;
+    width: 100%;
+    margin-bottom: 12px;
+    box-shadow: none;
+    border: 1px solid #333;
+    border-left: 3px solid #000;
+    break-inside: avoid;
+  }
+}

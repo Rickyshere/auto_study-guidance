@@ -5,6 +5,9 @@ import {
   ExamSoulSpec,
   FreeAiAuthConfig,
   GpuVramInfo,
+  HandoutAnnotation,
+  MicroTutorRequest,
+  MicroTutorResponse,
   OcrEngineStatusItem,
   OcrEngineType,
   PresetTemplate,
@@ -828,6 +831,7 @@ export const api = {
       paper_size: 'a4' | 'a3';
       include_answers: boolean;
       paper_id?: string;
+      notes_mode?: 'clean' | 'cornell';
       fallbackFilename?: string;
     }
   ): Promise<void> => {
@@ -839,6 +843,7 @@ export const api = {
         paper_size: opts.paper_size,
         include_answers: opts.include_answers,
         paper_id: opts.paper_id,
+        notes_mode: opts.notes_mode || 'clean',
       }),
     });
     if (!res.ok) {
@@ -865,4 +870,33 @@ export const api = {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   },
+
+  /** 交互讲义：读取该项目所有页边批注 */
+  listAnnotations: (projectId: string) =>
+    requestJson<{ items: HandoutAnnotation[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/annotations`
+    ),
+
+  /** 交互讲义：新增或更新一条划词高亮/页边批注 */
+  saveAnnotation: (projectId: string, annotation: HandoutAnnotation) =>
+    requestJson<HandoutAnnotation>(`/api/projects/${encodeURIComponent(projectId)}/annotations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(annotation),
+    }),
+
+  /** 交互讲义：删除批注 */
+  deleteAnnotation: (projectId: string, annotationId: string) =>
+    requestJson<{ deleted: boolean; annotation_id: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/annotations/${encodeURIComponent(annotationId)}`,
+      { method: 'DELETE' }
+    ),
+
+  /** Agent 5 伴读微导师：划词/点图 → 一张页边批注卡 */
+  microTutor: (projectId: string, payload: MicroTutorRequest) =>
+    requestJson<MicroTutorResponse>(`/api/projects/${encodeURIComponent(projectId)}/micro-tutor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 };

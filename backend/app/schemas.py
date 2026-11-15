@@ -512,3 +512,66 @@ class ProjectDetailResponse(BaseModel):
     document_ir: DocumentIR
     blueprint: Optional[StudyBlueprint] = None
     study_package: Optional[StudyPackage] = None
+
+
+# ---------------------------------------------------------------------------
+# 交互讲义：块级锚点批注 + Agent 5 伴读微导师
+# ---------------------------------------------------------------------------
+AnnotationTargetType = Literal["TEXT_RANGE", "SVG_NODE"]
+AnnotationMarkStyle = Literal["HIGHLIGHT", "UNDERLINE_WAVE"]
+AnnotationColor = Literal["AMBER_YELLOW", "MINT_GREEN", "CORAL_RED"]
+MicroTutorAction = Literal[
+    "EXPLAIN_SIMPLE",
+    "GIVE_ANALOGY",
+    "TRAP_ALERT",
+    "MICRO_QUIZ",
+    "EXPLAIN_SVG_NODE",
+]
+
+
+class AnnotationAnchor(BaseModel):
+    block_id: str = ""
+    start_offset: int = 0
+    end_offset: int = 0
+    exact_quote: str = ""
+    svg_node_id: Optional[str] = None
+
+
+class AnnotationStyle(BaseModel):
+    type: AnnotationMarkStyle = "HIGHLIGHT"
+    color: AnnotationColor = "AMBER_YELLOW"
+
+
+class AnnotationMarginCard(BaseModel):
+    is_pinned: bool = False
+    trigger_action: MicroTutorAction = "EXPLAIN_SIMPLE"
+    card_title: str = ""
+    user_custom_note: str = ""
+    ai_response_markdown: str = ""
+    micro_quiz: Optional[Dict[str, Any]] = None
+
+
+class HandoutAnnotation(BaseModel):
+    annotation_id: str
+    project_id: str = ""
+    target_type: AnnotationTargetType = "TEXT_RANGE"
+    anchor: AnnotationAnchor = Field(default_factory=AnnotationAnchor)
+    style: AnnotationStyle = Field(default_factory=AnnotationStyle)
+    margin_card: AnnotationMarginCard = Field(default_factory=AnnotationMarginCard)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+
+
+class MicroTutorRequest(BaseModel):
+    study_mode: str = "A_beginner"
+    action_type: MicroTutorAction = "EXPLAIN_SIMPLE"
+    selected_focus: str = ""
+    surrounding_context: str = ""
+    document_title: str = ""
+
+
+class MicroTutorResponse(BaseModel):
+    card_title: str = ""
+    content_markdown: str = ""
+    micro_quiz: Optional[Dict[str, Any]] = None
+    fallback: bool = False
+    model_label: str = ""

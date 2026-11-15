@@ -39,6 +39,7 @@ import {
   StudyPackage,
 } from '../types';
 import { SpringButton, SpringSegmentedControl } from '../utils/springPhysics';
+import { HandoutReader } from './HandoutReader';
 import { MathMarkdown } from './MathMarkdown';
 
 mermaid.initialize({
@@ -377,6 +378,8 @@ export const StudyStudio: React.FC<Props> = ({
   const [noteStepIdx, setNoteStepIdx] = useState(0);
   const [noteReadAck, setNoteReadAck] = useState<Record<number, boolean>>({});
   const [noteUnlocked, setNoteUnlocked] = useState(1);
+  // 讲义打印形态：纯净版 / 带页边批注的康奈尔版
+  const [handoutPrintMode, setHandoutPrintMode] = useState<'clean' | 'cornell'>('clean');
 
   const noteMdSections = useMemo(
     () => splitNoteSections(studyPackage.study_notes_markdown || ''),
@@ -877,10 +880,11 @@ export const StudyStudio: React.FC<Props> = ({
     docType: 'quiz' | 'study_guide' | 'cheatsheet',
     paperSize: 'a4' | 'a3',
     includeAnswers = true,
-    overridePaperId?: string
+    overridePaperId?: string,
+    exportNotesMode: 'clean' | 'cornell' = 'clean'
   ) => {
     const paperId = docType === 'quiz' ? overridePaperId || activePaper.paper_id : undefined;
-    const key = `${docType}-${paperSize}-${paperId || 'main'}`;
+    const key = `${docType}-${paperSize}-${paperId || 'main'}-${exportNotesMode}`;
     setExportingPdfKey(key);
     setPdfError(null);
     try {
@@ -889,6 +893,7 @@ export const StudyStudio: React.FC<Props> = ({
         paper_size: paperSize,
         include_answers: includeAnswers,
         paper_id: paperId,
+        notes_mode: exportNotesMode,
       });
     } catch (e: any) {
       setPdfError(e?.message || 'PDF 导出失败');
@@ -1067,6 +1072,27 @@ export const StudyStudio: React.FC<Props> = ({
                     <Download className="w-3.5 h-3.5" />
                     <span>{exportingPdfKey?.startsWith('study_guide-a4') ? '生成中...' : '导出 A4 PDF'}</span>
                   </SpringButton>
+                  <button
+                    type="button"
+                    onClick={() => setHandoutPrintMode(handoutPrintMode === 'clean' ? 'cornell' : 'clean')}
+                    style={secondaryToolbarBtnStyle}
+                    title="切换打印形态：纯净版 / 带页边批注的康奈尔版"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>{handoutPrintMode === 'clean' ? '纯净版' : '康奈尔版'}</span>
+                  </button>
+                  <SpringButton
+                    springLabel="导出带笔记讲义PDF"
+                    disabled={Boolean(exportingPdfKey)}
+                    onClick={() => handleExportPdf('study_guide', 'a4', true, undefined, 'cornell')}
+                    className="asg-btn-spring"
+                    style={secondaryToolbarBtnStyle}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>
+                      {exportingPdfKey?.startsWith('study_guide-a4-main-cornell') ? '生成中...' : '带笔记 PDF'}
+                    </span>
+                  </SpringButton>
                   <SpringButton
                     springLabel="导出A3讲义"
                     disabled={Boolean(exportingPdfKey)}
@@ -1225,10 +1251,22 @@ export const StudyStudio: React.FC<Props> = ({
                 style={{ maxWidth: '760px', margin: '0 auto' }}
               >
                 {notesMode === 'full' ? (
-                  <MathMarkdown>{studyPackage.study_notes_markdown}</MathMarkdown>
+                  <HandoutReader
+                    markdown={studyPackage.study_notes_markdown || ''}
+                    projectId={documentIr?.project_id}
+                    studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
+                    documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
+                    printMode={handoutPrintMode}
+                  />
                 ) : (
                   <>
-                    <MathMarkdown>{currentNoteSection?.body || ''}</MathMarkdown>
+                    <HandoutReader
+                      markdown={currentNoteSection?.body || ''}
+                      projectId={documentIr?.project_id}
+                      studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
+                      documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
+                      printMode={handoutPrintMode}
+                    />
                     <div
                       className="asg-card no-print"
                       data-glass-panel="true"
