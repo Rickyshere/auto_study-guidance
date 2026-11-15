@@ -32,6 +32,7 @@ import {
   DocumentIR,
   KnowledgeFlashcard,
   NoteSectionItem,
+  QuestionFigureBlock,
   QuizPaper,
   QuizQuestion,
   ScenarioType,
@@ -117,6 +118,49 @@ function downloadText(filename: string, content: string, mime = 'text/markdown;c
   URL.revokeObjectURL(url);
 }
 
+/** 按二级标题把讲义切成"节"，用于逐节学习模式（无二级标题时整篇算一节）。 */
+function splitNoteSections(md: string): { title: string; body: string }[] {
+  const text = (md || '').trim();
+  if (!text) return [];
+  const parts = text.split(/\n(?=##\s+)/);
+  const sections: { title: string; body: string }[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const m = trimmed.match(/^##\s+(.+)$/m);
+    sections.push({ title: m ? m[1].trim() : '正文', body: trimmed });
+  }
+  return sections.length > 0 ? sections : [{ title: '全文', body: text }];
+}
+
+function GraphicPayloadNode({ payload, alt }: { payload?: string | null; alt?: string }) {
+  const src = (payload || '').trim();
+  if (!src) return null;
+  if (src.startsWith('data:image/')) {
+    return <img src={src} alt={alt || '题目配图'} />;
+  }
+  if (src.includes('<svg')) {
+    return <div style={{ width: '100%' }} dangerouslySetInnerHTML={{ __html: src }} />;
+  }
+  return null;
+}
+
+function QuestionBelowStemFigure({ figureBlock }: { figureBlock?: QuestionFigureBlock | null }) {
+  if (!figureBlock || figureBlock.position === 'OPTIONS_GRID' || !figureBlock.compiled_svg_or_base64) {
+    return null;
+  }
+  return (
+    <div className="question-figure-container">
+      <GraphicPayloadNode payload={figureBlock.compiled_svg_or_base64} alt={figureBlock.figure_caption} />
+      {figureBlock.figure_caption && (
+        <div className="figure-caption">
+          <MathMarkdown inline>{figureBlock.figure_caption}</MathMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function shuffleArray<T>(arr: T[]): T[] {
   const copy = [...arr];
   for (let i = copy.length - 1; i > 0; i -= 1) {
@@ -163,7 +207,7 @@ function getScenarioMeta(scenario?: ScenarioType): {
       tag: 'A · 入门 / 零基础学习',
       notesTitle: '详细自学案（附带例题）',
       cheatsheetTitle: '考前速记（核心知识点与公式）',
-      quizSectionTitle: '同步练习与单元检测',
+      quizSectionTitle: '单元检测',
     };
   }
   if (scenario === 'C_sprint') {
@@ -328,6 +372,55 @@ export const StudyStudio: React.FC<Props> = ({
   const [sectionError, setSectionError] = useState<string | null>(null);
   const notesBodyRef = useRef<HTMLDivElement | null>(null);
 
+  // 逐节学习：默认只放行到第 1 节，读完 + 做完本节练习才解锁下一节；也可切到整份预览
+  const [notesMode, setNotesMode] = useState<'step' | 'full'>('step');
+  const [noteStepIdx, setNoteStepIdx] = useState(0);
+  const [noteReadAck, setNoteReadAck] = useState<Record<number, boolean>>({});
+  const [noteUnlocked, setNoteUnlocked] = useState(1);
+
+  const noteMdSections = useMemo(
+    () => splitNoteSections(studyPackage.study_notes_markdown || ''),
+    [studyPackage.study_notes_markdown]
+  );
+  const notesProgressKey = `asg_notes_progress_${documentIr?.project_id || 'p'}_${(studyPackage.study_notes_markdown || '').length}`;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(notesProgressKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { idx?: number; unlocked?: number; read?: Record<string, boolean> };
+      if (typeof parsed.idx === 'number') setNoteStepIdx(Math.min(parsed.idx, Math.max(0, noteMdSections.length - 1)));
+      if (typeof parsed.unlocked === 'number') setNoteUnlocked(Math.max(1, parsed.unlocked));
+      if (parsed.read) setNoteReadAck(parsed.read as Record<number, boolean>);
+    } catch {
+      /* 本地进度损坏时忽略，按从头开始 */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notesProgressKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        notesProgressKey,
+        JSON.stringify({ idx: noteStepIdx, unlocked: noteUnlocked, read: noteReadAck })
+      );
+    } catch {
+      /* 忽略隐私模式下的写入失败 */
+    }
+  }, [notesProgressKey, noteStepIdx, noteUnlocked, noteReadAck]);
+
+  /** 本节练习是否"做完了"（每题都作答过） */
+  const isSectionPracticeDone = (sectionId?: string | null) => {
+    if (!sectionId) return false;
+    const paper = sectionPapers[sectionId];
+    if (!paper || !paper.questions?.length) return false;
+    const ans = answersByPaper[paper.paper_id || 'default'] || {};
+    return paper.questions.every((q) => (ans[q.id] || '').trim().length > 0);
+  };
+  const currentNoteSection = noteMdSections[noteStepIdx];
+  const currentNoteSectionId = noteSections[noteStepIdx]?.section_id || null;
+  const currentSectionReady = Boolean(noteReadAck[noteStepIdx]) && isSectionPracticeDone(currentNoteSectionId);
+
   /** 点击 TOC 标题后滚到讲义里对应的标题（不依赖 markdown 渲染器注入 id） */
   const scrollToNoteHeading = (title: string) => {
     const root = notesBodyRef.current;
@@ -352,6 +445,8 @@ export const StudyStudio: React.FC<Props> = ({
     const seen = new Set<string>();
     for (const p of raw) {
       if (!p) continue;
+      // 「同步基础作业」已并入「分节练习」（按节练），这里只保留正式测验卷，避免同一套题两个入口
+      if (p.paper_id === 'sync_homework') continue;
       if (seen.has(p.paper_id)) continue;
       seen.add(p.paper_id);
       if (p.questions.length > 0 || unique.length === 0) {
@@ -1006,8 +1101,8 @@ export const StudyStudio: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* 小节导航：把讲义变成可跳转、可练的在线文档 */}
-              {noteSections.length > 0 && (
+              {/* 学习路径：逐节学习（读完 + 做完本节练习才解锁下一节）或整份预览 */}
+              {(noteSections.length > 0 || noteMdSections.length > 0) && (
                 <div
                   className="asg-card no-print"
                   data-glass-panel="true"
@@ -1015,59 +1110,112 @@ export const StudyStudio: React.FC<Props> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--asg-brand-primary)' }}>
-                      本节导航（{noteSections.length} 节）· 点标题跳转，点「练本节」直接做题
+                      学习路径（共 {noteMdSections.length} 节 · 已解锁 {Math.min(noteUnlocked, noteMdSections.length)} 节）
                     </span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {noteSections.map((s, i) => (
-                      <div
-                        key={s.section_id}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}
+                    <div style={{ display: 'inline-flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setNotesMode('step')}
+                        style={{
+                          padding: '4px 12px',
+                          borderRadius: '9999px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          border: `1px solid ${notesMode === 'step' ? 'var(--asg-brand-primary)' : 'var(--asg-border-default)'}`,
+                          backgroundColor: notesMode === 'step' ? 'var(--asg-brand-tint)' : 'var(--asg-bg-surface)',
+                          color: notesMode === 'step' ? 'var(--asg-brand-primary)' : 'var(--asg-text-secondary)',
+                        }}
                       >
-                        <button
-                          type="button"
-                          onClick={() => scrollToNoteHeading(s.title)}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 0,
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                            fontSize: '12.5px',
-                            fontWeight: 600,
-                            color: 'var(--asg-text-secondary)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                          title={`跳转到：${s.title}`}
-                        >
-                          {i + 1}. {s.title}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={sectionBusyId === s.section_id}
-                          onClick={() => {
-                            onChangeTab('section_practice');
-                            void openSectionPractice(s.section_id);
-                          }}
-                          style={{
-                            flexShrink: 0,
-                            padding: '3px 10px',
-                            borderRadius: '9999px',
-                            border: '1px solid var(--asg-brand-primary)',
-                            backgroundColor: 'var(--asg-brand-tint)',
-                            color: 'var(--asg-brand-primary)',
-                            fontSize: '11.5px',
-                            fontWeight: 700,
-                            cursor: sectionBusyId === s.section_id ? 'wait' : 'pointer',
-                          }}
-                        >
-                          {sectionBusyId === s.section_id ? '生成中…' : '练本节'}
-                        </button>
-                      </div>
-                    ))}
+                        逐节学习
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotesMode('full')}
+                        style={{
+                          padding: '4px 12px',
+                          borderRadius: '9999px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          border: `1px solid ${notesMode === 'full' ? 'var(--asg-brand-primary)' : 'var(--asg-border-default)'}`,
+                          backgroundColor: notesMode === 'full' ? 'var(--asg-brand-tint)' : 'var(--asg-bg-surface)',
+                          color: notesMode === 'full' ? 'var(--asg-brand-primary)' : 'var(--asg-text-secondary)',
+                        }}
+                      >
+                        整份预览
+                      </button>
+                    </div>
                   </div>
+
+                  {notesMode === 'step' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {noteMdSections.map((s, i) => {
+                        const locked = i >= noteUnlocked;
+                        const isCurrent = i === noteStepIdx;
+                        const isDone = Boolean(noteReadAck[i]) && isSectionPracticeDone(noteSections[i]?.section_id);
+                        const secId = noteSections[i]?.section_id;
+                        return (
+                          <div
+                            key={`${s.title}-${i}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '10px',
+                              opacity: locked ? 0.55 : 1,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              disabled={locked}
+                              onClick={() => setNoteStepIdx(i)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: 0,
+                                textAlign: 'left',
+                                cursor: locked ? 'not-allowed' : 'pointer',
+                                fontSize: '12.5px',
+                                fontWeight: isCurrent ? 800 : 600,
+                                color: isCurrent ? 'var(--asg-brand-primary)' : 'var(--asg-text-secondary)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={locked ? '先完成上一节（读完 + 做完本节练习）才能进入' : `进入：${s.title}`}
+                            >
+                              {locked ? '🔒' : isDone ? '✅' : isCurrent ? '▶' : '○'} {i + 1}. {s.title}
+                            </button>
+                            {!locked && (
+                              <button
+                                type="button"
+                                disabled={!secId || sectionBusyId === secId}
+                                onClick={() => {
+                                  if (!secId) return;
+                                  onChangeTab('section_practice');
+                                  void openSectionPractice(secId);
+                                }}
+                                style={{
+                                  flexShrink: 0,
+                                  padding: '3px 10px',
+                                  borderRadius: '9999px',
+                                  border: '1px solid var(--asg-brand-primary)',
+                                  backgroundColor: 'var(--asg-brand-tint)',
+                                  color: 'var(--asg-brand-primary)',
+                                  fontSize: '11.5px',
+                                  fontWeight: 700,
+                                  cursor: !secId ? 'not-allowed' : sectionBusyId === secId ? 'wait' : 'pointer',
+                                }}
+                              >
+                                {!secId ? '无对应练习' : sectionBusyId === secId ? '生成中…' : isDone ? '再做一次' : '练本节'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1076,7 +1224,99 @@ export const StudyStudio: React.FC<Props> = ({
                 ref={notesBodyRef}
                 style={{ maxWidth: '760px', margin: '0 auto' }}
               >
-                <MathMarkdown>{studyPackage.study_notes_markdown}</MathMarkdown>
+                {notesMode === 'full' ? (
+                  <MathMarkdown>{studyPackage.study_notes_markdown}</MathMarkdown>
+                ) : (
+                  <>
+                    <MathMarkdown>{currentNoteSection?.body || ''}</MathMarkdown>
+                    <div
+                      className="asg-card no-print"
+                      data-glass-panel="true"
+                      style={{ marginTop: '18px', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+                    >
+                      <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--asg-text-secondary)' }}>
+                        第 {noteStepIdx + 1} / {noteMdSections.length} 节 · 完成本节需两步：
+                        <span style={{ color: noteReadAck[noteStepIdx] ? 'var(--asg-brand-primary)' : 'inherit' }}>
+                          {' '}① 已读完
+                        </span>
+                        <span style={{ color: isSectionPracticeDone(currentNoteSectionId) ? 'var(--asg-brand-primary)' : 'inherit' }}>
+                          {' '}② 已做完本节练习
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => setNoteReadAck((prev) => ({ ...prev, [noteStepIdx]: true }))}
+                          disabled={Boolean(noteReadAck[noteStepIdx])}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: noteReadAck[noteStepIdx] ? 'default' : 'pointer',
+                            border: '1px solid var(--asg-border-default)',
+                            backgroundColor: noteReadAck[noteStepIdx] ? 'var(--asg-brand-tint)' : 'var(--asg-bg-surface)',
+                            color: noteReadAck[noteStepIdx] ? 'var(--asg-brand-primary)' : 'var(--asg-text-secondary)',
+                          }}
+                        >
+                          {noteReadAck[noteStepIdx] ? '✓ 本节已读完' : '标记本节已读完'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!currentNoteSectionId || sectionBusyId === currentNoteSectionId}
+                          onClick={() => {
+                            if (!currentNoteSectionId) return;
+                            onChangeTab('section_practice');
+                            void openSectionPractice(currentNoteSectionId);
+                          }}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: currentNoteSectionId ? 'pointer' : 'not-allowed',
+                            border: '1px solid var(--asg-brand-primary)',
+                            backgroundColor: 'var(--asg-brand-tint)',
+                            color: 'var(--asg-brand-primary)',
+                          }}
+                        >
+                          {isSectionPracticeDone(currentNoteSectionId) ? '✓ 本节练习已完成' : '去做本节练习'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!currentSectionReady || noteStepIdx >= noteMdSections.length - 1}
+                          onClick={() => {
+                            const next = noteStepIdx + 1;
+                            setNoteStepIdx(next);
+                            setNoteUnlocked((u) => Math.max(u, next + 1));
+                            try {
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          style={{
+                            padding: '6px 16px',
+                            borderRadius: '9999px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            cursor: currentSectionReady ? 'pointer' : 'not-allowed',
+                            border: 'none',
+                            backgroundColor: currentSectionReady ? 'var(--asg-brand-primary)' : 'var(--asg-border-default)',
+                            color: currentSectionReady ? '#FFFFFF' : 'var(--asg-text-muted)',
+                          }}
+                        >
+                          {noteStepIdx >= noteMdSections.length - 1 ? '已是最后一节' : '进入下一节 →'}
+                        </button>
+                      </div>
+                      {!currentSectionReady && (
+                        <div style={{ fontSize: '11.5px', color: 'var(--asg-text-muted)' }}>
+                          读完并做完本节练习后，「进入下一节」会自动解锁；想先整体通读可切到「整份预览」。
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1480,6 +1720,17 @@ export const StudyStudio: React.FC<Props> = ({
                             </span>
                             <span style={metaTagStyle}>{currentQuestion.difficulty || '核心'}</span>
                             <span style={metaTagStyle}>{currentQuestion.score} 分</span>
+                            {currentQuestion.has_figure && currentQuestion.figure_block && (
+                              <span
+                                style={{
+                                  ...metaTagStyle,
+                                  color: '#1D4ED8',
+                                  backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                                }}
+                              >
+                                {currentQuestion.is_original_question ? '🎨 含图原创' : '📊 含图题'}
+                              </span>
+                            )}
                           </div>
 
                           {/* Academic Citation Badge */}
@@ -1499,107 +1750,235 @@ export const StudyStudio: React.FC<Props> = ({
                         </div>
 
                         {/* Question Stem (with full KaTeX support) */}
-                        <div
-                          className="asg-academic-prose"
-                          style={{
-                            fontSize: '16px',
-                            fontWeight: 600,
-                            lineHeight: 1.65,
-                            color: 'var(--asg-text-primary)',
-                          }}
-                        >
-                          <MathMarkdown>{currentQuestion.question}</MathMarkdown>
+                        <div className="question-card" style={{ marginBottom: 0 }}>
+                          <div
+                            className="asg-academic-prose"
+                            style={{
+                              fontSize: '16px',
+                              fontWeight: 600,
+                              lineHeight: 1.65,
+                              color: 'var(--asg-text-primary)',
+                            }}
+                          >
+                            <MathMarkdown>{currentQuestion.question}</MathMarkdown>
+                          </div>
+
+                          {/* BELOW_STEM Static Compiled Graphic */}
+                          {currentQuestion.has_figure && currentQuestion.figure_block && (
+                            <QuestionBelowStemFigure figureBlock={currentQuestion.figure_block} />
+                          )}
                         </div>
 
-                        {/* Interactive MCQ State Machine */}
-                        {currentQuestion.type === 'mcq' && currentQuestion.options.length > 0 && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            {currentQuestion.options.map((opt, oi) => {
-                              const letter = extractOptionLetter(opt, oi);
-                              const chosenLetter = currentPaperAnswers[currentQuestion.id];
-                              const hasAnswered = Boolean(chosenLetter);
-                              const isThisChosen = chosenLetter === letter;
-                              const isThisRight = isMcqOptionCorrect(
-                                opt,
-                                oi,
-                                currentQuestion.answer
-                              );
+                        {/* Interactive MCQ State Machine: OPTIONS_GRID (4-chart grid) or vertical text list */}
+                        {currentQuestion.type === 'mcq' &&
+                          currentQuestion.figure_block?.position === 'OPTIONS_GRID' &&
+                          currentQuestion.figure_block?.sub_figures_compiled && (
+                            <div>
+                              <div className="options-figure-grid">
+                                {(['A', 'B', 'C', 'D'] as const).map((letter, oi) => {
+                                  const subSvg =
+                                    currentQuestion.figure_block?.sub_figures_compiled?.[letter] || '';
+                                  const optText =
+                                    currentQuestion.options[oi] ||
+                                    currentQuestion.options.find(
+                                      (o) => extractOptionLetter(o, oi) === letter
+                                    ) ||
+                                    `${letter}. 见选项${letter}图`;
+                                  const chosenLetter = currentPaperAnswers[currentQuestion.id];
+                                  const hasAnswered = Boolean(chosenLetter);
+                                  const isThisChosen = chosenLetter === letter;
+                                  const isThisRight = isMcqOptionCorrect(
+                                    optText,
+                                    oi,
+                                    currentQuestion.answer
+                                  );
 
-                              let stateClass = '';
-                              if (hasAnswered) {
-                                if (isThisRight) stateClass = 'is-correct';
-                                else if (isThisChosen) stateClass = 'is-wrong';
-                              }
+                                  let stateClass = '';
+                                  if (hasAnswered) {
+                                    if (isThisRight) stateClass = 'is-correct';
+                                    else if (isThisChosen) stateClass = 'is-wrong';
+                                  }
 
-                              const cleanLabel = opt
-                                .trim()
-                                .replace(/^[A-D][.、:：\s]+/i, '')
-                                .trim();
+                                  const cleanLabel = optText
+                                    .trim()
+                                    .replace(/^[A-D][.、:：\s]+/i, '')
+                                    .trim();
+                                  const hideRedundantSubLabel =
+                                    !cleanLabel || /^见选项[A-D]图$/i.test(cleanLabel);
 
-                              return (
-                                <button
-                                  key={`${currentQuestion.id}-opt-${oi}`}
-                                  type="button"
-                                  onClick={() => handleSelectMcqOption(currentQuestion, opt, oi)}
-                                  className={`asg-quiz-opt ${stateClass}`}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'flex-start',
-                                    gap: '12px',
-                                    width: '100%',
-                                    padding: '12px 14px',
-                                    textAlign: 'left',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <span
+                                  return (
+                                    <button
+                                      key={`${currentQuestion.id}-figopt-${letter}`}
+                                      type="button"
+                                      onClick={() => handleSelectMcqOption(currentQuestion, optText, oi)}
+                                      className={`option-figure-card asg-quiz-opt ${stateClass}`}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          width: '100%',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            width: '26px',
+                                            height: '26px',
+                                            borderRadius: '9999px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontSize: '12.5px',
+                                            fontWeight: 700,
+                                            backgroundColor:
+                                              hasAnswered && isThisRight
+                                                ? 'var(--asg-semantic-success)'
+                                                : hasAnswered && isThisChosen && !isThisRight
+                                                ? 'var(--asg-semantic-warning)'
+                                                : '#F3F4F6',
+                                            color:
+                                              hasAnswered && (isThisRight || isThisChosen)
+                                                ? '#FFFFFF'
+                                                : '#374151',
+                                          }}
+                                        >
+                                          {hasAnswered && isThisRight ? (
+                                            <CheckCircle2 className="w-4 h-4" />
+                                          ) : hasAnswered && isThisChosen && !isThisRight ? (
+                                            <XCircle className="w-4 h-4" />
+                                          ) : (
+                                            letter
+                                          )}
+                                        </span>
+                                        <span style={{ fontSize: '11.5px', color: '#6B7280', fontWeight: 600 }}>
+                                          选项 {letter}
+                                        </span>
+                                      </div>
+
+                                      <div className="option-figure-card-svg">
+                                        <GraphicPayloadNode payload={subSvg} alt={`选项 ${letter}`} />
+                                      </div>
+
+                                      {!hideRedundantSubLabel && (
+                                        <div
+                                          style={{
+                                            fontSize: '13px',
+                                            lineHeight: 1.4,
+                                            color: '#1F2937',
+                                            textAlign: 'center',
+                                          }}
+                                        >
+                                          <MathMarkdown inline>{cleanLabel}</MathMarkdown>
+                                        </div>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {currentQuestion.figure_block.figure_caption && (
+                                <div className="figure-caption">
+                                  <MathMarkdown inline>
+                                    {currentQuestion.figure_block.figure_caption}
+                                  </MathMarkdown>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                        {currentQuestion.type === 'mcq' &&
+                          !(
+                            currentQuestion.figure_block?.position === 'OPTIONS_GRID' &&
+                            currentQuestion.figure_block?.sub_figures_compiled
+                          ) &&
+                          currentQuestion.options.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              {currentQuestion.options.map((opt, oi) => {
+                                const letter = extractOptionLetter(opt, oi);
+                                const chosenLetter = currentPaperAnswers[currentQuestion.id];
+                                const hasAnswered = Boolean(chosenLetter);
+                                const isThisChosen = chosenLetter === letter;
+                                const isThisRight = isMcqOptionCorrect(
+                                  opt,
+                                  oi,
+                                  currentQuestion.answer
+                                );
+
+                                let stateClass = '';
+                                if (hasAnswered) {
+                                  if (isThisRight) stateClass = 'is-correct';
+                                  else if (isThisChosen) stateClass = 'is-wrong';
+                                }
+
+                                const cleanLabel = opt
+                                  .trim()
+                                  .replace(/^[A-D][.、:：\s]+/i, '')
+                                  .trim();
+
+                                return (
+                                  <button
+                                    key={`${currentQuestion.id}-opt-${oi}`}
+                                    type="button"
+                                    onClick={() => handleSelectMcqOption(currentQuestion, opt, oi)}
+                                    className={`asg-quiz-opt ${stateClass}`}
                                     style={{
-                                      width: '26px',
-                                      height: '26px',
-                                      borderRadius: '9999px',
-                                      flexShrink: 0,
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      fontSize: '12.5px',
-                                      fontWeight: 700,
-                                      marginTop: '1px',
-                                      backgroundColor:
-                                        hasAnswered && isThisRight
-                                          ? 'var(--asg-semantic-success)'
-                                          : hasAnswered && isThisChosen && !isThisRight
-                                          ? 'var(--asg-semantic-warning)'
-                                          : 'var(--asg-bg-subtle)',
-                                      color:
-                                        hasAnswered && (isThisRight || isThisChosen)
-                                          ? '#FFFFFF'
-                                          : 'var(--asg-text-secondary)',
+                                      display: 'flex',
+                                      alignItems: 'flex-start',
+                                      gap: '12px',
+                                      width: '100%',
+                                      padding: '12px 14px',
+                                      textAlign: 'left',
+                                      cursor: 'pointer',
                                     }}
                                   >
-                                    {hasAnswered && isThisRight ? (
-                                      <CheckCircle2 className="w-4 h-4" />
-                                    ) : hasAnswered && isThisChosen && !isThisRight ? (
-                                      <XCircle className="w-4 h-4" />
-                                    ) : (
-                                      letter
-                                    )}
-                                  </span>
+                                    <span
+                                      style={{
+                                        width: '26px',
+                                        height: '26px',
+                                        borderRadius: '9999px',
+                                        flexShrink: 0,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: '12.5px',
+                                        fontWeight: 700,
+                                        marginTop: '1px',
+                                        backgroundColor:
+                                          hasAnswered && isThisRight
+                                            ? 'var(--asg-semantic-success)'
+                                            : hasAnswered && isThisChosen && !isThisRight
+                                            ? 'var(--asg-semantic-warning)'
+                                            : 'var(--asg-bg-subtle)',
+                                        color:
+                                          hasAnswered && (isThisRight || isThisChosen)
+                                            ? '#FFFFFF'
+                                            : 'var(--asg-text-secondary)',
+                                      }}
+                                    >
+                                      {hasAnswered && isThisRight ? (
+                                        <CheckCircle2 className="w-4 h-4" />
+                                      ) : hasAnswered && isThisChosen && !isThisRight ? (
+                                        <XCircle className="w-4 h-4" />
+                                      ) : (
+                                        letter
+                                      )}
+                                    </span>
 
-                                  <div
-                                    style={{
-                                      flex: 1,
-                                      fontSize: '14.5px',
-                                      lineHeight: 1.55,
-                                      color: 'var(--asg-text-primary)',
-                                    }}
-                                  >
-                                    <MathMarkdown inline>{cleanLabel || opt}</MathMarkdown>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
+                                    <div
+                                      style={{
+                                        flex: 1,
+                                        fontSize: '14.5px',
+                                        lineHeight: 1.55,
+                                        color: 'var(--asg-text-primary)',
+                                      }}
+                                    >
+                                      <MathMarkdown inline>{cleanLabel || opt}</MathMarkdown>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
 
                         {/* Fill-in-the-blank & Short-answer Inputs */}
                         {currentQuestion.type !== 'mcq' && (

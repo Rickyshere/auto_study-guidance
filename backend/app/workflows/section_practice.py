@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.router.routing_engine import ModelRouter
-from app.schemas import ChapterNode, DocumentIR, QuizPaper, QuizQuestion, StudyBlueprint
+from app.schemas import ChapterNode, DocumentIR, QuestionFigureBlock, QuizPaper, QuizQuestion, StudyBlueprint
 from app.workflows.generator import normalize_markdown_math
+from app.workflows.visual_compiler import compile_figure_block_with_fallbacks
 
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*$")
 _SECTION_ID_RE = re.compile(r"[^a-z0-9]+")
@@ -167,10 +168,16 @@ def _build_section_prompt(
         "2. 单选题必须 4 个选项，answer 只填 A/B/C/D；填空题题干空位用 `__________`，options 为 []；"
         "简答/计算题 options 为 []，answer 按【得分点1】…列出。\n"
         "3. 每道题的 explanation 必须包含【考点定位】【详解与推导】【易错点拨】三段。\n"
-        "4. 公式一律 LaTeX：行内 $...$，独立 $$...$$；JSON 字符串里的反斜杠要双写。\n"
+        "4. 配图按需：只有「文字说不清、看图才秒懂」的考点才配图（如曲线走向、结构式、机理流程、四图辨析），"
+        "纯概念/纯计算/纯记忆题一律不配图，**不要为了凑数给不需要图的题硬配图**；确需配图时支持 "
+        "`ECHARTS` / `MERMAID` / `SMILES` / `SVG`，可用 `BELOW_STEM`（题干主图）或 `OPTIONS_GRID`（一题四图选项），"
+        "并必须给出可解析的 `original_graphic_modeling`，否则系统会直接丢弃该图。\n"
+        "5. 公式一律 LaTeX：行内 $...$，独立 $$...$$；JSON 字符串里的反斜杠要双写。\n"
         "JSON 结构：\n"
         '{"title":"本节练习标题","questions":[{"id":"q_1","type":"mcq|fill_blank|short_answer",'
         '"difficulty":"easy|medium|hard","tier":"基础达标|能力提升|拓展探究","score":5,'
+        '"is_original_question":true,"has_figure":false,"original_graphic_modeling":"",'
+        '"figure_block":{"position":"BELOW_STEM|OPTIONS_GRID","visual_strategy":"ORIGINAL_SYNTHESIS","original_recipe":"ORIGINAL_DUAL_CURVE","render_engine":"ECHARTS","raw_payload":"","sub_figures":null,"figure_caption":""},'
         '"question":"题干","options":["A. ..."],"answer":"答案","explanation":"【考点定位】…",'
         '"source_chapter":"小节标题","source_page":"P?"}]}'
     )
@@ -184,9 +191,22 @@ def _build_section_prompt(
     return system_prompt, user_prompt
 
 
-def _parse_questions(raw: Any, section_title: str) -> List[QuizQuestion]:
+def _parse_questions(
+    raw: Any,
+    section_title: str,
+    *,
+    doc_ir: Optional[DocumentIR] = None,
+    scenario_type: str = "A_beginner",
+    assets_dir: Optional[Path] = None,
+) -> List[QuizQuestion]:
     if not isinstance(raw, list):
         return []
+    source_mode_map = {
+        "A_beginner": "TEXTBOOK_MODE_A",
+        "B_consolidate": "TEXTBOOK_MODE_B",
+        "C_sprint": "TEXTBOOK_MODE_C",
+    }
+    source_mode = source_mode_map.get(scenario_type, "TEXTBOOK_MODE_A")
     questions: List[QuizQuestion] = []
     for idx, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
@@ -200,6 +220,31 @@ def _parse_questions(raw: Any, section_title: str) -> List[QuizQuestion]:
         diff = str(item.get("difficulty") or "medium")
         if diff not in ("easy", "medium", "hard"):
             diff = "medium"
+
+        stem_txt = normalize_markdown_math(str(item.get("question") or ""))
+        modeling_txt = normalize_markdown_math(str(item.get("original_graphic_modeling") or ""))
+        raw_fb = item.get("figure_block") if isinstance(item.get("figure_block"), dict) else {}
+        has_fig_req = bool(item.get("has_figure")) or bool(
+            raw_fb.get("raw_payload") or raw_fb.get("figure_payload") or raw_fb.get("sub_figures")
+        )
+        compiled_fig: Optional[QuestionFigureBlock] = None
+        if has_fig_req:
+            ok_fig, compiled_fig, stem_txt = compile_figure_block_with_fallbacks(
+                stem=stem_txt,
+                position=str(raw_fb.get("position") or raw_fb.get("figure_position") or "BELOW_STEM"),
+                visual_strategy=str(raw_fb.get("visual_strategy") or "ORIGINAL_SYNTHESIS"),
+                original_recipe=raw_fb.get("original_recipe"),
+                render_engine=str(raw_fb.get("render_engine") or "ECHARTS"),
+                raw_payload=str(raw_fb.get("raw_payload") or raw_fb.get("figure_payload") or ""),
+                sub_figures=raw_fb.get("sub_figures") or raw_fb.get("sub_figures_compiled"),
+                figure_caption=str(raw_fb.get("figure_caption") or ""),
+                original_graphic_modeling=modeling_txt,
+                original_image_id=raw_fb.get("original_image_id") or item.get("original_image_id"),
+                assets_dir=assets_dir,
+                doc_ir=doc_ir,
+            )
+            has_fig_req = ok_fig and compiled_fig is not None
+
         questions.append(
             QuizQuestion(
                 id=str(item.get("id") or f"sp_{idx}"),
@@ -207,12 +252,18 @@ def _parse_questions(raw: Any, section_title: str) -> List[QuizQuestion]:
                 difficulty=diff,  # type: ignore[arg-type]
                 tier=tier,  # type: ignore[arg-type]
                 score=max(1, int(item.get("score") or 5)),
-                question=normalize_markdown_math(str(item.get("question") or "")),
+                question=stem_txt,
                 options=[normalize_markdown_math(str(o)) for o in (item.get("options") or [])],
                 answer=normalize_markdown_math(str(item.get("answer") or "")),
                 explanation=normalize_markdown_math(str(item.get("explanation") or "")),
                 source_chapter=str(item.get("source_chapter") or section_title),
                 source_page=str(item.get("source_page") or ""),
+                is_original_question=bool(item.get("is_original_question", True)),
+                source_mode=source_mode,  # type: ignore[arg-type]
+                has_figure=has_fig_req,
+                figure_block=compiled_fig,
+                original_graphic_modeling=modeling_txt,
+                print_space_height_px=96 if q_type in ("fill_blank", "short_answer") else 0,
             )
         )
     return questions
@@ -232,7 +283,12 @@ async def generate_section_practice(
     data, label = await router.execute_json("quiz_generation", system_prompt, user_prompt)
     if not isinstance(data, dict):
         raise RuntimeError(f"分节练习生成失败：{label} 未返回合法 JSON")
-    questions = _parse_questions(data.get("questions"), str(section["title"]))
+    questions = _parse_questions(
+        data.get("questions"),
+        str(section["title"]),
+        doc_ir=document_ir,
+        scenario_type=blueprint.deliverables.scenario_type,
+    )
     if not questions:
         raise RuntimeError("分节练习解析后没有有效题目，请重试")
 

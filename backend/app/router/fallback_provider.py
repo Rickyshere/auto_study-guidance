@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 from app.schemas import (
@@ -14,6 +15,7 @@ from app.schemas import (
     StudyBlueprint,
     difficulty_label,
 )
+from app.workflows.visual_compiler import build_recipe_figure_block  # noqa: F401  (按需配图时由生成链路使用)
 
 
 def _extract_sentences_and_points(chapter: ChapterNode) -> List[str]:
@@ -417,6 +419,18 @@ class HeuristicStudyEngine:
                     source_page=f"P{ch.start_page}-{ch.end_page}",
                 )
             )
+
+        source_mode_map = {
+            "A_beginner": "TEXTBOOK_MODE_A",
+            "B_consolidate": "TEXTBOOK_MODE_B",
+            "C_sprint": "TEXTBOOK_MODE_C",
+        }
+        src_mode = source_mode_map.get(d.scenario_type, "TEXTBOOK_MODE_A")
+        # 离线启发式没有真实建模数据，绝不能凭模板给题目硬造配图（那就是"不需要图强行生图"）。
+        # 这里只补排版必需的元信息，配图交由在线模型按需输出。
+        for q in questions:
+            q.source_mode = src_mode  # type: ignore[assignment]
+            q.print_space_height_px = 96 if q.type in ("fill_blank", "short_answer") else 0
 
         actual_total = sum(q.score for q in questions) or d.total_score
         return QuizPaper(

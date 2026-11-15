@@ -32,6 +32,21 @@ OcrEngineType = Literal[
     "vision_vlm",
 ]
 VramTier = Literal["le_8gb", "gt_8_lt_48gb", "ge_48gb"]
+VisualStrategyType = Literal[
+    "ORIGINAL_SYNTHESIS",
+    "TEXT_TO_GRAPHIC",
+    "CODE_REDRAW",
+    "IMAGE_REUSE_QUERY_SHIFT",
+]
+OriginalRecipeType = Literal[
+    "ORIGINAL_DUAL_CURVE",
+    "ORIGINAL_FOUR_OPTION_CHARTS",
+    "ORIGINAL_PATHWAY_PUZZLE",
+    "ORIGINAL_CHEM_SYNTHESIS",
+    "ORIGINAL_SCHEMATIC_MODEL",
+]
+FigureRenderEngineType = Literal["ECHARTS", "SMILES", "MERMAID", "SVG", "REUSE_CROP"]
+FigurePositionType = Literal["BELOW_STEM", "OPTIONS_GRID"]
 
 # 难度枚举的中文说法：打印件/正文里绝不能露出 exam_sprint 这种内部标识
 DIFFICULTY_LABELS: Dict[str, str] = {
@@ -310,6 +325,27 @@ class QuickGenerateRequest(BaseModel):
     stream: bool = False
 
 
+class VisualBlueprint(BaseModel):
+    visual_strategy: str = "ORIGINAL_SYNTHESIS"
+    original_recipe: Optional[str] = "ORIGINAL_DUAL_CURVE"
+    figure_position: str = "BELOW_STEM"
+    target_engine: str = "ECHARTS"
+    original_image_id: Optional[str] = None
+    visual_directive: str = ""
+
+
+class QuestionFigureBlock(BaseModel):
+    position: str = "BELOW_STEM"
+    visual_strategy: str = "ORIGINAL_SYNTHESIS"
+    original_recipe: Optional[str] = None
+    render_engine: str = "ECHARTS"
+    raw_payload: str = ""
+    compiled_svg_or_base64: str = ""
+    figure_caption: str = ""
+    sub_figures_compiled: Optional[Dict[str, str]] = None
+    layout_calculation: str = ""
+
+
 class QuizQuestion(BaseModel):
     id: str
     type: Literal["mcq", "fill_blank", "short_answer"]
@@ -326,6 +362,12 @@ class QuizQuestion(BaseModel):
     applied_strategies: List[str] = Field(default_factory=list)
     reverse_design: str = ""
     blind_review_summary: str = ""
+    is_original_question: bool = False
+    source_mode: str = ""
+    has_figure: bool = False
+    figure_block: Optional[QuestionFigureBlock] = None
+    original_graphic_modeling: str = ""
+    print_space_height_px: int = 0
 
 
 class ExamToneAndPersona(BaseModel):
@@ -337,6 +379,8 @@ class ExamToneAndPersona(BaseModel):
 class ExamAgentStyleProfile(BaseModel):
     subject_and_level: str = ""
     overall_difficulty: str = ""
+    visual_density: str = ""
+    originality_requirement: str = ""
     tone_and_persona: ExamToneAndPersona = Field(default_factory=ExamToneAndPersona)
     formatting_rules: str = ""
     user_override_directives: List[str] = Field(default_factory=list)
@@ -357,14 +401,20 @@ class ExamQuestionBlueprintItem(BaseModel):
     distractor_recipe: List[ExamDistractorRecipeItem] = Field(default_factory=list)
     assigned_strategies: List[str] = Field(default_factory=list)
     generation_directive: str = ""
+    has_figure: bool = False
+    visual_blueprint: Optional[VisualBlueprint] = None
 
 
 class ExamGeneratedQuestionItem(BaseModel):
     question_id: int
+    is_original_question: bool = True
     question_type: str = "单选题"
     knowledge_tags: List[str] = Field(default_factory=list)
     applied_strategies: List[str] = Field(default_factory=list)
     reverse_design: str = ""
+    has_figure: bool = False
+    original_graphic_modeling: str = ""
+    figure_block: Optional[QuestionFigureBlock] = None
     correct_answer: str = ""
     detailed_analysis: str = ""
     stem: str = ""
@@ -374,12 +424,16 @@ class ExamGeneratedQuestionItem(BaseModel):
 class ExamBlindReviewResult(BaseModel):
     question_id: int
     attempt: int = 1
+    visual_observation: str = ""
     reasoning_process: str = ""
     my_answer: str = ""
     expected_answer: str = ""
+    is_text_valid: bool = True
+    is_visual_valid: bool = True
     is_valid: bool = True
     passed: bool = True
     defect_report: Optional[str] = None
+    visual_defect_report: Optional[str] = None
 
 
 class ExamPipelineMetadata(BaseModel):

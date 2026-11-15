@@ -23,13 +23,20 @@ from app.schemas import (
     ExamQuestionBlueprintItem,
     ExamToneAndPersona,
     KnowledgeFlashcard,
+    QuestionFigureBlock,
     QuizPaper,
     QuizQuestion,
     RouterSettings,
     StudyBlueprint,
     StudyPackage,
+    VisualBlueprint,
 )
 from app.workflows.generator import extract_knowledge_flashcards, normalize_markdown_math
+from app.workflows.visual_compiler import (
+    async_compile_figure_block_with_fallbacks,
+    build_recipe_figure_block,
+    compile_figure_block_with_fallbacks,
+)
 
 ExamProgressCallback = Optional[Callable[[Dict[str, Any]], Awaitable[None]]]
 
@@ -63,6 +70,7 @@ SOUL_SPECS: List[Dict[str, str]] = [
 ]
 
 SOUL_ORIGINAL_FILENAME = "soul_original_bank.md"
+SOUL_VISUAL_FILENAME = "soul_c_5.md"
 SOUL_KNOWLEDGE_NOTES_FILENAME = "soul_knowledge_notes.md"
 
 
@@ -84,6 +92,7 @@ def _ensure_project_soul_files(project_dir: Path) -> Dict[str, Path]:
         "soul_a.md",
         "soul_b.md",
         "soul_c.md",
+        SOUL_VISUAL_FILENAME,
         "soul_d.md",
         SOUL_ORIGINAL_FILENAME,
         SOUL_KNOWLEDGE_NOTES_FILENAME,
@@ -409,6 +418,7 @@ async def _run_original_exam_to_bank(
     if not isinstance(data, dict):
         raise RuntimeError(f"{label} 未返回有效的原卷题库 JSON 对象")
 
+    assets_dir = soul_path.parent.parent / "assets"
     raw_qs = data.get("questions") or []
     questions: List[QuizQuestion] = []
     for idx, q in enumerate(raw_qs, start=1):
@@ -421,6 +431,27 @@ async def _run_original_exam_to_bank(
         if tier not in ("基础达标", "能力提升", "拓展探究"):
             tier = _difficulty_to_tier(diff)
         tags = [str(t).strip() for t in (q.get("knowledge_tags") or []) if str(t).strip()]
+        stem_txt = normalize_markdown_math(str(q.get("question") or "").strip())
+        modeling_txt = normalize_markdown_math(str(q.get("original_graphic_modeling") or "").strip())
+        raw_fb = q.get("figure_block") if isinstance(q.get("figure_block"), dict) else {}
+        has_fig_req = bool(q.get("has_figure")) or bool(raw_fb)
+        compiled_fig: Optional[QuestionFigureBlock] = None
+        if has_fig_req:
+            ok_fig, compiled_fig, stem_txt = compile_figure_block_with_fallbacks(
+                stem=stem_txt,
+                position=str(raw_fb.get("position") or raw_fb.get("figure_position") or "BELOW_STEM"),
+                visual_strategy=str(raw_fb.get("visual_strategy") or "IMAGE_REUSE_QUERY_SHIFT"),
+                original_recipe=raw_fb.get("original_recipe"),
+                render_engine=str(raw_fb.get("render_engine") or "ECHARTS"),
+                raw_payload=str(raw_fb.get("raw_payload") or raw_fb.get("figure_payload") or ""),
+                sub_figures=raw_fb.get("sub_figures") or raw_fb.get("sub_figures_compiled"),
+                figure_caption=str(raw_fb.get("figure_caption") or ""),
+                original_graphic_modeling=modeling_txt,
+                original_image_id=raw_fb.get("original_image_id") or q.get("original_image_id"),
+                assets_dir=assets_dir if assets_dir.is_dir() else None,
+                doc_ir=doc_ir,
+            )
+            has_fig_req = ok_fig and compiled_fig is not None
         questions.append(
             QuizQuestion(
                 id=str(q.get("id") or f"orig_{idx}"),
@@ -428,13 +459,19 @@ async def _run_original_exam_to_bank(
                 difficulty=diff,  # type: ignore[arg-type]
                 tier=tier,  # type: ignore[arg-type]
                 score=max(1, int(q.get("score") or 5)),
-                question=normalize_markdown_math(str(q.get("question") or "").strip()),
+                question=stem_txt,
                 options=opts if qtype == "mcq" else [],
                 answer=normalize_markdown_math(str(q.get("answer") or "").strip()),
                 explanation=normalize_markdown_math(str(q.get("explanation") or "").strip()),
                 source_chapter=tags[0] if tags else "原卷考点",
                 source_page=str(q.get("source_page") or f"原卷第 {idx} 题"),
                 knowledge_tags=tags,
+                is_original_question=bool(q.get("is_original_question", False)),
+                source_mode="EXAM_CLONE",
+                has_figure=has_fig_req,
+                figure_block=compiled_fig,
+                original_graphic_modeling=modeling_txt,
+                print_space_height_px=96 if qtype in ("fill_blank", "short_answer") else 0,
             )
         )
 
@@ -461,11 +498,111 @@ async def _run_original_exam_to_bank(
     return paper, label
 
 
+_VALID_VISUAL_STRATEGIES = {
+    "ORIGINAL_SYNTHESIS",
+    "TEXT_TO_GRAPHIC",
+    "CODE_REDRAW",
+    "IMAGE_REUSE_QUERY_SHIFT",
+}
+_VALID_ORIGINAL_RECIPES = {
+    "ORIGINAL_DUAL_CURVE",
+    "ORIGINAL_FOUR_OPTION_CHARTS",
+    "ORIGINAL_PATHWAY_PUZZLE",
+    "ORIGINAL_CHEM_SYNTHESIS",
+    "ORIGINAL_SCHEMATIC_MODEL",
+}
+_VALID_FIGURE_POSITIONS = {"BELOW_STEM", "OPTIONS_GRID"}
+_VALID_RENDER_ENGINES = {"ECHARTS", "SMILES", "MERMAID", "SVG", "REUSE_CROP"}
+
+
+def _coerce_visual_blueprint(
+    raw_vb: Any,
+    assigned_strategies: List[str],
+    qtype: str,
+    generation_directive: str,
+) -> Tuple[bool, Optional[VisualBlueprint]]:
+    if not isinstance(raw_vb, dict):
+        return False, None
+
+    raw_strategy = str(raw_vb.get("visual_strategy") or "ORIGINAL_SYNTHESIS").strip().upper()
+    strategy = raw_strategy if raw_strategy in _VALID_VISUAL_STRATEGIES else "ORIGINAL_SYNTHESIS"
+
+    raw_recipe = raw_vb.get("original_recipe")
+    recipe_str = str(raw_recipe).strip().upper() if raw_recipe not in (None, "", "null", "None") else None
+    recipe = recipe_str if recipe_str in _VALID_ORIGINAL_RECIPES else None
+
+    raw_pos = str(raw_vb.get("figure_position") or "BELOW_STEM").strip().upper()
+    pos = raw_pos if raw_pos in _VALID_FIGURE_POSITIONS else "BELOW_STEM"
+    if recipe == "ORIGINAL_FOUR_OPTION_CHARTS":
+        pos = "OPTIONS_GRID"
+    if pos == "OPTIONS_GRID" and ("选择" not in qtype and "CHOICE" not in qtype.upper() and "MCQ" not in qtype.upper()):
+        pos = "BELOW_STEM"
+
+    raw_eng = str(raw_vb.get("target_engine") or raw_vb.get("render_engine") or "ECHARTS").strip().upper()
+    engine = raw_eng if raw_eng in _VALID_RENDER_ENGINES else "ECHARTS"
+
+    img_id = raw_vb.get("original_image_id")
+    img_id_clean = str(img_id).strip() if img_id not in (None, "", "null", "None") else None
+    directive = str(raw_vb.get("visual_directive") or generation_directive or "").strip()
+
+    vb = VisualBlueprint(
+        visual_strategy=strategy,  # type: ignore[arg-type]
+        original_recipe=recipe,  # type: ignore[arg-type]
+        figure_position=pos,  # type: ignore[arg-type]
+        target_engine=engine,  # type: ignore[arg-type]
+        original_image_id=img_id_clean,
+        visual_directive=directive,
+    )
+    return True, vb
+
+
+def _ensure_blueprint_visual_quota(
+    blueprints: List[ExamQuestionBlueprintItem],
+    doc_ir: DocumentIR,
+) -> List[ExamQuestionBlueprintItem]:
+    """已废弃：不再按比例强制蓝图配图。
+
+    以前这里会把 38% 的题目强行标记 has_figure=True 并指派模板配方，
+    导致"不需要图也硬配一张"。现在配图完全由 Agent B 按考点需要决定，
+    这里保留函数只为兼容旧调用点，原样返回。
+    """
+    return blueprints
+
+
+def _summarize_figure_for_blind_review(fig: Optional[QuestionFigureBlock]) -> str:
+    """Summarize compiled visual elements for Agent D blind verification without exposing answers."""
+    if fig is None:
+        return "无配图"
+    parts = [f"位置={fig.position}", f"引擎={fig.render_engine}", f"策略={fig.visual_strategy}"]
+    if fig.figure_caption:
+        parts.append(f"图注={fig.figure_caption}")
+    if fig.compiled_svg_or_base64:
+        texts = re.findall(r">([^<>]{1,40})</text>", fig.compiled_svg_or_base64)
+        uniq_texts = list(dict.fromkeys(t.strip() for t in texts if t.strip()))[:18]
+        if uniq_texts:
+            parts.append("主图可见文字与标号=" + " / ".join(uniq_texts))
+        elif fig.compiled_svg_or_base64.startswith("data:image/"):
+            parts.append("主图为预加载位图原图裁剪(REUSE_CROP)")
+    if fig.sub_figures_compiled:
+        sub_desc: List[str] = []
+        for opt_k in ("A", "B", "C", "D"):
+            svg_sub = fig.sub_figures_compiled.get(opt_k, "")
+            if svg_sub:
+                sub_texts = re.findall(r">([^<>]{1,30})</text>", svg_sub)
+                lbls = list(dict.fromkeys(t.strip() for t in sub_texts if t.strip()))[:6]
+                sub_desc.append(f"选项{opt_k}图[{' / '.join(lbls) if lbls else '已渲染SVG'}]")
+        if sub_desc:
+            parts.append("四图选项=" + "；".join(sub_desc))
+    return "；".join(parts)
+
+
 def _coerce_style_profile(raw: Any, user_requirements: str) -> ExamAgentStyleProfile:
     if not isinstance(raw, dict):
         return ExamAgentStyleProfile(
             subject_and_level="学科综合评估测试",
             overall_difficulty="标准中档",
+            visual_density="配图按需：只有看图才说得清的考点才配图，不做比例要求",
+            originality_requirement="严禁仅改数字换皮，至少50%以上题目采用全新原创实验背景或原创图形",
             tone_and_persona=ExamToneAndPersona(
                 stem_style="题干表述严谨规范，结合核心概念与情境推理",
                 phrasing_habits=["下列说法正确的是", "据此推导下列结论最合理的是"],
@@ -478,6 +615,12 @@ def _coerce_style_profile(raw: Any, user_requirements: str) -> ExamAgentStylePro
     return ExamAgentStyleProfile(
         subject_and_level=str(raw.get("subject_and_level") or "学科测试"),
         overall_difficulty=str(raw.get("overall_difficulty") or "标准中档"),
+        visual_density=str(
+            raw.get("visual_density") or "配图按需：只有看图才说得清的考点才配图，不做比例要求"
+        ),
+        originality_requirement=str(
+            raw.get("originality_requirement") or "严禁仅改数字换皮，优先采用全新原创实验背景与原创图形"
+        ),
         tone_and_persona=ExamToneAndPersona(
             stem_style=str(tone_raw.get("stem_style") or ""),
             phrasing_habits=[str(x) for x in (tone_raw.get("phrasing_habits") or []) if str(x).strip()],
@@ -517,17 +660,45 @@ def _coerce_blueprints(raw: Any) -> List[ExamQuestionBlueprintItem]:
                         detail=str(rec.get("detail") or ""),
                     )
                 )
+        qtype_str = str(item.get("target_question_type") or "单选题")
+        assigned = [str(x) for x in (item.get("assigned_strategies") or []) if str(x).strip()] or [
+            "CONTEXT_SHIFT",
+            "TRAP_CLONE",
+        ]
+        directive = str(item.get("generation_directive") or "")
+        vb_ok, vb_obj = _coerce_visual_blueprint(
+            item.get("visual_blueprint"),
+            assigned,
+            qtype_str,
+            directive,
+        )
+        explicit_has_fig = item.get("has_figure")
+        if explicit_has_fig is True or (explicit_has_fig is None and vb_ok):
+            has_fig = True
+            if vb_obj is None:
+                vb_obj = VisualBlueprint(
+                    visual_strategy="ORIGINAL_SYNTHESIS",
+                    original_recipe="ORIGINAL_DUAL_CURVE",
+                    figure_position="BELOW_STEM",
+                    target_engine="ECHARTS",
+                    visual_directive=directive,
+                )
+        else:
+            has_fig = False
+            vb_obj = None
+
         blueprints.append(
             ExamQuestionBlueprintItem(
                 question_id=qid,
-                target_question_type=str(item.get("target_question_type") or "单选题"),
+                target_question_type=qtype_str,
                 target_difficulty=str(item.get("target_difficulty") or "中档"),
                 knowledge_points=[str(x) for x in (item.get("knowledge_points") or []) if str(x).strip()],
                 original_skeleton=str(item.get("original_skeleton") or ""),
                 distractor_recipe=recipes,
-                assigned_strategies=[str(x) for x in (item.get("assigned_strategies") or []) if str(x).strip()]
-                or ["CONTEXT_SHIFT", "TRAP_CLONE"],
-                generation_directive=str(item.get("generation_directive") or ""),
+                assigned_strategies=assigned,
+                generation_directive=directive,
+                has_figure=has_fig,
+                visual_blueprint=vb_obj,
             )
         )
     return blueprints
@@ -553,7 +724,10 @@ async def _run_four_agent_similar_paper(
     soul_a_path = soul_paths["soul_a.md"]
     soul_b_path = soul_paths["soul_b.md"]
     soul_c_path = soul_paths["soul_c.md"]
+    soul_c5_path = soul_paths.get(SOUL_VISUAL_FILENAME, EXAM_AGENTS_DIR / SOUL_VISUAL_FILENAME)
     soul_d_path = soul_paths["soul_d.md"]
+    assets_dir = soul_a_path.parent.parent / "assets"
+    resolved_assets_dir = assets_dir if assets_dir.is_dir() else None
 
     # ==================== AGENT A: 风格鉴赏师 (Style Profile) ====================
     await _emit(
@@ -626,14 +800,15 @@ async def _run_four_agent_similar_paper(
         agent_id="b",
         soul_file="soul_b.md",
         percent=pct_b_done,
-        message=f"✓ 【Agent B】完成 {len(blueprints)} 道原卷题目的三维解构与变异蓝图指派（{label_b}），即将启动 Agent C ⇄ Agent D 并发命题与盲测闭环...",
+        message=f"✓ 【Agent B】完成 {len(blueprints)} 道原卷题目的三维解构与变异蓝图指派（{label_b}），即将启动 Agent C/3.5 ⇄ Agent D 并发命题与盲测闭环...",
         detail={"blueprint_count": len(blueprints)},
     )
 
     router.check_cancelled()
 
-    # ==================== AGENT C (全卷先命制完成) -> AGENT D (全卷独立盲测与按需打回重写) ====================
+    # ==================== AGENT C / 3.5 -> AGENT D (全卷独立盲测与按需打回重写) ====================
     soul_c_tpl = soul_c_path.read_text(encoding="utf-8")
+    soul_c5_tpl = soul_c5_path.read_text(encoding="utf-8") if soul_c5_path.is_file() else ""
     soul_d_tpl = soul_d_path.read_text(encoding="utf-8")
     sem = asyncio.Semaphore(3)
     progress_lock = asyncio.Lock()
@@ -646,6 +821,7 @@ async def _run_four_agent_similar_paper(
     current_items: Dict[int, ExamGeneratedQuestionItem] = {}
     reviews_by_idx: Dict[int, List[ExamBlindReviewResult]] = {i: [] for i in range(total_bp)}
     defects_by_idx: Dict[int, Optional[str]] = {i: None for i in range(total_bp)}
+    visual_defects_by_idx: Dict[int, Optional[str]] = {i: None for i in range(total_bp)}
     pending_indices: List[int] = list(range(total_bp))
 
     max_attempts = 3
@@ -690,59 +866,208 @@ async def _run_four_agent_similar_paper(
             bp = blueprints[idx]
             async with sem:
                 router.check_cancelled()
-                prompt_c = _render_soul_template(
-                    soul_c_tpl,
-                    {
-                        "style_profile": style_json_str,
-                        "question_blueprint": bp.model_dump_json(indent=2),
-                        "defect_report": defects_by_idx[idx] or "null",
-                        "question_id": str(bp.question_id),
-                    },
+                visual_only_retry = (
+                    attempt > 1
+                    and defects_by_idx[idx] is None
+                    and bool(visual_defects_by_idx[idx])
+                    and idx in current_items
                 )
-                raw_c, _label_c = await router.execute_json(
-                    "quiz_generation",
-                    "你是 Agent C 逆向命题专家，必须严格遵循任务书（soul_c.md 渲染版）的 Execution Steps 顺序输出合法 JSON。",
-                    prompt_c,
-                )
-                if not isinstance(raw_c, dict):
-                    defects_by_idx[idx] = (
-                        f"Agent C 第 {attempt} 轮输出不是合法单题 JSON 对象，请严格按 Output Format 重写。"
+                if visual_only_retry:
+                    prev_item = current_items[idx]
+                    q_type_c = prev_item.question_type
+                    k_tags_c = prev_item.knowledge_tags
+                    strategies_c = prev_item.applied_strategies
+                    rev_design_c = prev_item.reverse_design
+                    corr_ans_c = prev_item.correct_answer
+                    analysis_c = prev_item.detailed_analysis
+                    stem_c = prev_item.stem
+                    norm_opts_dict = prev_item.options
+                    is_original_q = prev_item.is_original_question
+                    has_fig_c = True
+                    modeling_text = prev_item.original_graphic_modeling
+                    inline_fb: Dict[str, Any] = {}
+                    raw_c_qid = prev_item.question_id
+                else:
+                    prompt_c = _render_soul_template(
+                        soul_c_tpl,
+                        {
+                            "style_profile": style_json_str,
+                            "question_blueprint": bp.model_dump_json(indent=2),
+                            "defect_report": defects_by_idx[idx] or "null",
+                            "question_id": str(bp.question_id),
+                        },
                     )
-                    async with progress_lock:
-                        c_done += 1
-                    return False
-
-                raw_options = raw_c.get("options")
-                norm_opts_dict: Optional[Dict[str, str]] = None
-                if isinstance(raw_options, dict) and raw_options:
-                    norm_opts_dict = {
-                        str(k).strip().upper()[:1]: normalize_markdown_math(str(v or "").strip())
-                        for k, v in raw_options.items()
-                        if str(v or "").strip()
-                    }
-                elif isinstance(raw_options, list) and raw_options:
-                    norm_opts_dict = {
-                        chr(65 + i): normalize_markdown_math(
-                            re.sub(r"^[A-Ha-h][.、:：\s]+", "", str(v or "").strip())
+                    raw_c, _label_c = await router.execute_json(
+                        "quiz_generation",
+                        "你是 Agent C 逆向命题专家，必须严格遵循任务书（soul_c.md 渲染版）的 Execution Steps 顺序输出合法 JSON。",
+                        prompt_c,
+                    )
+                    if not isinstance(raw_c, dict):
+                        defects_by_idx[idx] = (
+                            f"Agent C 第 {attempt} 轮输出不是合法单题 JSON 对象，请严格按 Output Format 重写。"
                         )
-                        for i, v in enumerate(raw_options)
-                        if str(v or "").strip()
+                        async with progress_lock:
+                            c_done += 1
+                        return False
+
+                    raw_options = raw_c.get("options")
+                    norm_opts_dict = None
+                    if isinstance(raw_options, dict) and raw_options:
+                        norm_opts_dict = {
+                            str(k).strip().upper()[:1]: normalize_markdown_math(str(v or "").strip())
+                            for k, v in raw_options.items()
+                            if str(v or "").strip()
+                        }
+                    elif isinstance(raw_options, list) and raw_options:
+                        norm_opts_dict = {
+                            chr(65 + i): normalize_markdown_math(
+                                re.sub(r"^[A-Ha-h][.、:：\s]+", "", str(v or "").strip())
+                            )
+                            for i, v in enumerate(raw_options)
+                            if str(v or "").strip()
+                        }
+
+                    raw_c_qid = int(raw_c.get("question_id") or bp.question_id)
+                    q_type_c = str(raw_c.get("question_type") or bp.target_question_type or "单选题")
+                    k_tags_c = [
+                        str(x) for x in (raw_c.get("knowledge_tags") or bp.knowledge_points) if str(x).strip()
+                    ]
+                    strategies_c = [
+                        str(x) for x in (raw_c.get("applied_strategies") or bp.assigned_strategies) if str(x).strip()
+                    ]
+                    rev_design_c = normalize_markdown_math(str(raw_c.get("reverse_design") or "").strip())
+                    corr_ans_c = normalize_markdown_math(str(raw_c.get("correct_answer") or "").strip())
+                    analysis_c = normalize_markdown_math(str(raw_c.get("detailed_analysis") or "").strip())
+                    stem_c = normalize_markdown_math(str(raw_c.get("stem") or "").strip())
+                    is_original_q = bool(raw_c.get("is_original_question", True))
+                    inline_fb = raw_c.get("figure_block") if isinstance(raw_c.get("figure_block"), dict) else {}
+                    has_fig_c = (
+                        bool(raw_c["has_figure"])
+                        if "has_figure" in raw_c
+                        else (bool(inline_fb) or bool(bp.has_figure))
+                    )
+                    modeling_raw = raw_c.get("original_graphic_modeling")
+                    modeling_text = (
+                        normalize_markdown_math(str(modeling_raw).strip())
+                        if modeling_raw not in (None, "null", "None")
+                        else ""
+                    )
+
+                compiled_block: Optional[QuestionFigureBlock] = None
+                final_has_figure = False
+                if has_fig_c or inline_fb:
+                    vb = bp.visual_blueprint or VisualBlueprint(
+                        visual_strategy=str(inline_fb.get("visual_strategy") or "ORIGINAL_SYNTHESIS"),  # type: ignore[arg-type]
+                        original_recipe=inline_fb.get("original_recipe"),
+                        figure_position=str(inline_fb.get("position") or inline_fb.get("figure_position") or "BELOW_STEM"),  # type: ignore[arg-type]
+                        target_engine=str(inline_fb.get("render_engine") or "ECHARTS"),  # type: ignore[arg-type]
+                        original_image_id=inline_fb.get("original_image_id"),
+                        visual_directive=bp.generation_directive or stem_c[:120],
+                    )
+                    context_for_visual = {
+                        "question_id": raw_c_qid,
+                        "question_type": q_type_c,
+                        "stem": stem_c,
+                        "options": norm_opts_dict,
+                        "original_graphic_modeling": modeling_text,
+                        "knowledge_tags": k_tags_c,
                     }
+
+                    async def _invoke_agent_3_5(err_feedback: str) -> Dict[str, Any]:
+                        if not soul_c5_tpl:
+                            return {}
+                        combined_v_err = "; ".join(
+                            x for x in (visual_defects_by_idx[idx], err_feedback) if x and str(x).strip()
+                        )
+                        prompt_c5 = _render_soul_template(
+                            soul_c5_tpl,
+                            {
+                                "visual_blueprint": vb.model_dump_json(indent=2),
+                                "question_context_and_modeling": json.dumps(
+                                    context_for_visual, ensure_ascii=False, indent=2
+                                ),
+                                "visual_defect_report": combined_v_err or "null",
+                            },
+                        )
+                        try:
+                            raw_v, _label_v = await router.execute_json(
+                                "quiz_generation",
+                                "你是 Agent 3.5 科学可视化与原创学科配图代码生成专家，请严格遵循任务书（soul_c_5.md）规范输出单个 JSON 对象。",
+                                prompt_c5,
+                            )
+                            return raw_v if isinstance(raw_v, dict) else {}
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            return {}
+
+                    visual_spec = dict(inline_fb) if (inline_fb.get("raw_payload") or inline_fb.get("figure_payload") or inline_fb.get("sub_figures")) else {}
+                    if not visual_spec and not visual_only_retry:
+                        # Emit brief Agent 3.5 stage notice under agent_id="c"
+                        await _emit(
+                            progress_cb,
+                            stage="agent_c_5",
+                            agent_id="c",
+                            soul_file=SOUL_VISUAL_FILENAME,
+                            percent=c_start_pct,
+                            message=f"🎨 【Agent 3.5 · 学科制图】正在为第 {bp.question_id} 题编写并预编译静态矢量配图...",
+                            detail={"question_id": bp.question_id, "attempt": attempt, "status": "generating"},
+                        )
+                    if not visual_spec:
+                        visual_spec = await _invoke_agent_3_5("")
+
+                    raw_payload_v = str(
+                        visual_spec.get("figure_payload") or visual_spec.get("raw_payload") or ""
+                    )
+                    sub_figs_v = visual_spec.get("sub_figures")
+                    if not isinstance(sub_figs_v, dict):
+                        sub_figs_v = visual_spec.get("sub_figures_compiled") if isinstance(
+                            visual_spec.get("sub_figures_compiled"), dict
+                        ) else None
+
+                    final_has_figure, compiled_block, stem_c = await async_compile_figure_block_with_fallbacks(
+                        stem=stem_c,
+                        position=str(
+                            visual_spec.get("figure_position")
+                            or visual_spec.get("position")
+                            or vb.figure_position
+                        ),
+                        visual_strategy=str(visual_spec.get("visual_strategy") or vb.visual_strategy),
+                        original_recipe=visual_spec.get("original_recipe") or vb.original_recipe,
+                        render_engine=str(visual_spec.get("render_engine") or vb.target_engine),
+                        raw_payload=raw_payload_v,
+                        sub_figures=sub_figs_v,
+                        figure_caption=str(visual_spec.get("figure_caption") or ""),
+                        layout_calculation=str(visual_spec.get("layout_calculation") or ""),
+                        original_graphic_modeling=modeling_text,
+                        visual_blueprint=vb,
+                        original_image_id=visual_spec.get("original_image_id") or vb.original_image_id,
+                        assets_dir=resolved_assets_dir,
+                        doc_ir=doc_ir,
+                        async_retry_callback=_invoke_agent_3_5,
+                    )
+                    if compiled_block and compiled_block.position == "OPTIONS_GRID" and not norm_opts_dict:
+                        norm_opts_dict = {
+                            "A": "见选项A图",
+                            "B": "见选项B图",
+                            "C": "见选项C图",
+                            "D": "见选项D图",
+                        }
 
                 c_item = ExamGeneratedQuestionItem(
-                    question_id=int(raw_c.get("question_id") or bp.question_id),
-                    question_type=str(raw_c.get("question_type") or bp.target_question_type or "单选题"),
-                    knowledge_tags=[
-                        str(x) for x in (raw_c.get("knowledge_tags") or bp.knowledge_points) if str(x).strip()
-                    ],
-                    applied_strategies=[
-                        str(x) for x in (raw_c.get("applied_strategies") or bp.assigned_strategies) if str(x).strip()
-                    ],
-                    reverse_design=normalize_markdown_math(str(raw_c.get("reverse_design") or "").strip()),
-                    correct_answer=normalize_markdown_math(str(raw_c.get("correct_answer") or "").strip()),
-                    detailed_analysis=normalize_markdown_math(str(raw_c.get("detailed_analysis") or "").strip()),
-                    stem=normalize_markdown_math(str(raw_c.get("stem") or "").strip()),
+                    question_id=raw_c_qid,
+                    is_original_question=is_original_q,
+                    question_type=q_type_c,
+                    knowledge_tags=k_tags_c,
+                    applied_strategies=strategies_c,
+                    has_figure=bool(final_has_figure and compiled_block is not None),
+                    reverse_design=rev_design_c,
+                    original_graphic_modeling=modeling_text,
+                    correct_answer=corr_ans_c,
+                    detailed_analysis=analysis_c,
+                    stem=normalize_markdown_math(stem_c),
                     options=norm_opts_dict,
+                    figure_block=compiled_block if final_has_figure else None,
                 )
                 current_items[idx] = c_item
 
@@ -838,22 +1163,28 @@ async def _run_four_agent_similar_paper(
             c_item = current_items[idx]
             async with sem:
                 router.check_cancelled()
-                # STRICT BLIND ISOLATION: ONLY question_type, stem, options are sent to Agent D!
-                # correct_answer, detailed_analysis, and reverse_design are NEVER sent to Agent D.
+                # STRICT BLIND ISOLATION: ONLY question_type, stem, figure_caption, visual_observation_hint, and options are sent!
+                # correct_answer, detailed_analysis, reverse_design, and original_graphic_modeling are NEVER sent to Agent D.
                 blind_options_str = (
                     json.dumps(c_item.options, ensure_ascii=False, indent=2) if c_item.options else "null"
                 )
+                blind_caption = (
+                    (c_item.figure_block.figure_caption if c_item.figure_block else "") or "无配图"
+                )
+                blind_visual_hint = _summarize_figure_for_blind_review(c_item.figure_block)
                 prompt_d = _render_soul_template(
                     soul_d_tpl,
                     {
                         "question_type": c_item.question_type,
                         "stem": c_item.stem,
+                        "figure_caption": blind_caption,
+                        "visual_observation_hint": blind_visual_hint,
                         "options": blind_options_str,
                     },
                 )
                 raw_d, _label_d = await router.execute_json(
                     "global_quality_audit",
-                    "你是 Agent D 盲测审题专家，仅依据题干与选项独立推导答案并严格按任务书（soul_d.md 渲染版）输出 JSON。",
+                    "你是 Agent D 多模态盲测审题与审图专家，仅依据题干、可见配图摘要与选项独立推导答案并严格按任务书（soul_d.md 渲染版）输出 JSON。",
                     prompt_d,
                 )
 
@@ -862,21 +1193,45 @@ async def _run_four_agent_similar_paper(
                     review_item = ExamBlindReviewResult(
                         question_id=bp.question_id,
                         attempt=attempt,
+                        visual_observation="",
                         reasoning_process="Agent D 输出格式非合法 JSON",
                         my_answer="",
                         expected_answer=c_item.correct_answer,
                         is_valid=False,
+                        is_text_valid=False,
+                        is_visual_valid=not c_item.has_figure,
                         passed=False,
                         defect_report=defects_by_idx[idx],
+                        visual_defect_report=None,
                     )
                     reviews_by_idx[idx].append(review_item)
                     passed = False
                 else:
-                    is_valid = bool(raw_d.get("is_valid", False))
+                    legacy_valid = raw_d.get("is_valid")
+                    is_text_valid = (
+                        bool(raw_d["is_text_valid"])
+                        if "is_text_valid" in raw_d
+                        else bool(legacy_valid if legacy_valid is not None else False)
+                    )
+                    is_visual_valid = (
+                        bool(raw_d["is_visual_valid"])
+                        if "is_visual_valid" in raw_d
+                        else (True if legacy_valid is None or legacy_valid else not c_item.has_figure)
+                    )
+                    is_valid = (
+                        is_text_valid
+                        and is_visual_valid
+                        and (bool(legacy_valid) if legacy_valid is not None else True)
+                    )
+                    visual_obs = normalize_markdown_math(str(raw_d.get("visual_observation") or "").strip())
                     my_answer = normalize_markdown_math(str(raw_d.get("my_answer") or "").strip())
                     reasoning = normalize_markdown_math(str(raw_d.get("reasoning_process") or "").strip())
                     raw_defect = raw_d.get("defect_report")
                     defect_str = str(raw_defect).strip() if raw_defect not in (None, "", "null", "None") else ""
+                    raw_v_defect = raw_d.get("visual_defect_report")
+                    v_defect_str = (
+                        str(raw_v_defect).strip() if raw_v_defect not in (None, "", "null", "None") else ""
+                    )
 
                     matched = _blind_answers_match(
                         c_item.question_type, c_item.options, c_item.correct_answer, my_answer
@@ -886,8 +1241,12 @@ async def _run_four_agent_similar_paper(
                     combined_defect: Optional[str] = None
                     if not passed:
                         reasons: List[str] = []
-                        if not is_valid:
-                            reasons.append(defect_str or "盲测审题指出题干存在逻辑或条件缺陷 (is_valid=false)")
+                        if not is_text_valid or (legacy_valid is False and is_visual_valid):
+                            reasons.append(defect_str or "盲测审题指出题干存在逻辑或条件缺陷 (is_text_valid=false)")
+                        if not is_visual_valid:
+                            reasons.append(
+                                v_defect_str or "盲测审图指出原创配图存在标号缺失或文字重叠 (is_visual_valid=false)"
+                            )
                         if not matched:
                             reasons.append(
                                 f"盲测答案不一致：命题预设答案为「{c_item.correct_answer}」，但 Agent D 独立盲算得出「{my_answer or '无解'}」。"
@@ -895,17 +1254,33 @@ async def _run_four_agent_similar_paper(
                         if reasoning:
                             reasons.append(f"盲测独立推导过程摘要：{reasoning[:260]}")
                         combined_defect = "；".join(reasons)
-                    defects_by_idx[idx] = combined_defect
+
+                    if passed:
+                        defects_by_idx[idx] = None
+                        visual_defects_by_idx[idx] = None
+                    elif is_text_valid and matched and not is_visual_valid:
+                        # Text is sound; route specifically to Agent 3.5 visual repair on next round
+                        defects_by_idx[idx] = None
+                        visual_defects_by_idx[idx] = (
+                            v_defect_str or "盲测审图要求修正配图坐标、标号对齐或重叠文字。"
+                        )
+                    else:
+                        defects_by_idx[idx] = combined_defect
+                        visual_defects_by_idx[idx] = v_defect_str or None
 
                     review_item = ExamBlindReviewResult(
                         question_id=bp.question_id,
                         attempt=attempt,
+                        visual_observation=visual_obs,
                         reasoning_process=reasoning,
                         my_answer=my_answer,
                         expected_answer=c_item.correct_answer,
                         is_valid=is_valid,
+                        is_text_valid=is_text_valid,
+                        is_visual_valid=is_visual_valid,
                         passed=passed,
                         defect_report=combined_defect,
+                        visual_defect_report=v_defect_str or None,
                     )
                     reviews_by_idx[idx].append(review_item)
 
@@ -1004,6 +1379,12 @@ async def _run_four_agent_similar_paper(
                 applied_strategies=c_item.applied_strategies,
                 reverse_design=c_item.reverse_design,
                 blind_review_summary=review_note,
+                is_original_question=c_item.is_original_question,
+                source_mode="EXAM_CLONE",
+                has_figure=bool(c_item.has_figure and c_item.figure_block is not None),
+                figure_block=c_item.figure_block,
+                original_graphic_modeling=c_item.original_graphic_modeling,
+                print_space_height_px=96 if qtype in ("fill_blank", "short_answer") else 0,
             )
         )
 
@@ -1017,7 +1398,7 @@ async def _run_four_agent_similar_paper(
         suggested_minutes=90,
         instructions=(
             f"命题学科/学段：{style_profile.subject_and_level} ｜ 难度基调：{style_profile.overall_difficulty} ｜ "
-            f"已由 A/B/C/D 四子 Agent 完成风格抽取、逆向命题与盲测校验。"
+            f"已由 A/B/C/3.5/D 多智能体完成风格抽取、原创配图生成与图文盲测校验。"
         ),
         questions=quiz_questions,
     )
@@ -1039,7 +1420,7 @@ async def _run_four_agent_similar_paper(
         user_requirements=req_text,
         oxr_engine_used=doc_ir.oxr_engine_used,
         oxr_probe_summary=doc_ir.oxr_probe_summary,
-        soul_files_uploaded=["soul_a.md", "soul_b.md", "soul_c.md", "soul_d.md"],
+        soul_files_uploaded=["soul_a.md", "soul_b.md", "soul_c.md", SOUL_VISUAL_FILENAME, "soul_d.md"],
         style_profile=style_profile,
         question_blueprints=blueprints,
         generated_items=generated_items,
@@ -1304,7 +1685,7 @@ async def generate_exam_study_package(
         extra_papers: List[QuizPaper] = []
 
     elif direction == "similar_paper":
-        soul_files_uploaded = ["soul_a.md", "soul_b.md", "soul_c.md", "soul_d.md"]
+        soul_files_uploaded = ["soul_a.md", "soul_b.md", "soul_c.md", SOUL_VISUAL_FILENAME, "soul_d.md"]
         similar_paper, metadata, _ = await _run_four_agent_similar_paper(
             doc_ir, raw_text, user_requirements, soul_paths, router, progress_cb, 8, 80
         )
@@ -1312,7 +1693,14 @@ async def generate_exam_study_package(
         extra_papers = []
 
     else:  # direction == "both"
-        soul_files_uploaded = [SOUL_ORIGINAL_FILENAME, "soul_a.md", "soul_b.md", "soul_c.md", "soul_d.md"]
+        soul_files_uploaded = [
+            SOUL_ORIGINAL_FILENAME,
+            "soul_a.md",
+            "soul_b.md",
+            "soul_c.md",
+            SOUL_VISUAL_FILENAME,
+            "soul_d.md",
+        ]
         orig_paper, _orig_label = await _run_original_exam_to_bank(
             doc_ir, raw_text, user_requirements, soul_paths[SOUL_ORIGINAL_FILENAME], router, progress_cb, 8, 28
         )

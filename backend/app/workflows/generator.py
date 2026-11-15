@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import re
 import uuid
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
@@ -11,12 +12,17 @@ from app.schemas import (
     DeliverableConfig,
     DocumentIR,
     KnowledgeFlashcard,
+    QuestionFigureBlock,
     QuizPaper,
     QuizQuestion,
     StudyBlueprint,
     StudyPackage,
 )
 from app.workflows.presets import sync_deliverable_flags_with_items
+from app.workflows.visual_compiler import (
+    build_recipe_figure_block,
+    compile_figure_block_with_fallbacks,
+)
 from app.workflows.souls import (
     build_courseware_deliverable_soul,
     get_courseware_soul_label,
@@ -565,7 +571,8 @@ def build_quiz_prompts(
         "3. **填空题 (`type=\"fill_blank\"`)**：题干关键空位使用 `__________`；`options` 固定为 `[]`；`answer` 须简明唯一客观。\n"
         "4. **简答/计算/综合题 (`type=\"short_answer\"`)**：须创设完整情景或分步设问 `(1)...(2)...`；`options` 固定为 `[]`；`answer` 按采分点列出（如 `【得分点1】...（X分）；【得分点2】...（Y分）`）。\n"
         "5. **解析字段 (`explanation`) 强制模块**：包含 `【考点定位】...` + `【详解与推导】...` + `【易错点拨】...`（若为 Mode B 请写透 `【设错陷阱揭秘】【同类题通法总结】`；若为 Mode C 抱佛脚卷，末尾必须附 `【考场抢分包】👉 若考场直接考原题 / 👉 若考场换个问法 / 👉 简答题标准背诵模板`）。\n"
-        "6. **LaTeX & JSON 双反斜杠**：行内用 `$...$`，独立用 `$$...$$`，JSON 字符串内的 LaTeX 反斜杠必须双写（例如 `\"$\\\\frac{a}{b}$\"`）。只输出纯 JSON 对象，不要包含任何前后解释文字。\n\n"
+        "6. **配图按需原则（严禁凑数）**：只有「文字说不清、看图才秒懂」的考点才配图（曲线走势、多条件对比、结构式、流程机理、四图辨析）；纯概念、纯记忆、纯计算题一律不配图。**不要为了凑比例给不需要图的题硬配图**。确需配图时，从五大配方（`ORIGINAL_DUAL_CURVE` / `ORIGINAL_FOUR_OPTION_CHARTS` / `ORIGINAL_PATHWAY_PUZZLE` / `ORIGINAL_CHEM_SYNTHESIS` / `ORIGINAL_SCHEMATIC_MODEL`）中选一个，并必须同时输出可解析的 `original_graphic_modeling`（方程/坐标点/结构式）与 `figure_block`，图里只能出现题干真正用到的符号；没有可解析建模数据的配图会被系统直接丢弃。\n"
+        "7. **LaTeX & JSON 双反斜杠**：行内用 `$...$`，独立用 `$$...$$`，JSON 字符串内的 LaTeX 反斜杠必须双写（例如 `\"$\\\\frac{a}{b}$\"`）。只输出纯 JSON 对象，不要包含任何前后解释文字。\n\n"
         "JSON 结构契约：\n"
         "{\n"
         '  "title": "试卷/练习标题",\n'
@@ -574,10 +581,22 @@ def build_quiz_prompts(
         '  "questions": [\n'
         "    {\n"
         '      "id": "q_1",\n'
+        '      "is_original_question": true,\n'
         '      "type": "mcq" | "fill_blank" | "short_answer",\n'
         '      "difficulty": "easy" | "medium" | "hard",\n'
         '      "tier": "基础达标" | "能力提升" | "拓展探究",\n'
         '      "score": 5,\n'
+        '      "has_figure": false,\n'
+        '      "original_graphic_modeling": "无图题留空；含图题写明方程/采样点/符号点定义或A/B/C/D四图差异",\n'
+        '      "figure_block": {\n'
+        '        "position": "BELOW_STEM" | "OPTIONS_GRID",\n'
+        '        "visual_strategy": "ORIGINAL_SYNTHESIS" | "TEXT_TO_GRAPHIC" | "CODE_REDRAW" | "IMAGE_REUSE_QUERY_SHIFT",\n'
+        '        "original_recipe": "ORIGINAL_DUAL_CURVE" | "ORIGINAL_FOUR_OPTION_CHARTS" | "ORIGINAL_PATHWAY_PUZZLE" | "ORIGINAL_CHEM_SYNTHESIS" | "ORIGINAL_SCHEMATIC_MODEL" | null,\n'
+        '        "render_engine": "ECHARTS" | "SMILES" | "MERMAID" | "SVG" | "REUSE_CROP",\n'
+        '        "raw_payload": "ECharts纯JSON/SMILES/Mermaid/SVG代码或原图ID",\n'
+        '        "sub_figures": null,\n'
+        '        "figure_caption": "图注说明"\n'
+        "      },\n"
         '      "question": "题干内容（含具体情境、考点标注或公式 $...$）",\n'
         '      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
         '      "answer": "单选填 A/B/C/D；填空填唯一标准答案；简答按【得分点1】...列出",\n'
@@ -701,7 +720,22 @@ _PAPER_SPECS: Dict[str, Tuple[str, str, str]] = {
 }
 
 
-def _parse_quiz_questions(raw_questions: list, default_chapter: str) -> List[QuizQuestion]:
+_SCENARIO_SOURCE_MODE = {
+    "A_beginner": "TEXTBOOK_MODE_A",
+    "B_consolidate": "TEXTBOOK_MODE_B",
+    "C_sprint": "TEXTBOOK_MODE_C",
+}
+
+
+def _parse_quiz_questions(
+    raw_questions: list,
+    default_chapter: str,
+    *,
+    doc_ir: Optional[DocumentIR] = None,
+    scenario_type: str = "A_beginner",
+    assets_dir: Optional[Path] = None,
+) -> List[QuizQuestion]:
+    source_mode = _SCENARIO_SOURCE_MODE.get(scenario_type, "TEXTBOOK_MODE_A")
     valid_qs: List[QuizQuestion] = []
     for idx, item in enumerate(raw_questions, start=1):
         if not isinstance(item, dict):
@@ -715,6 +749,38 @@ def _parse_quiz_questions(raw_questions: list, default_chapter: str) -> List[Qui
         diff = item.get("difficulty", "medium")
         if diff not in ("easy", "medium", "hard"):
             diff = "medium"
+
+        stem_txt = normalize_markdown_math(str(item.get("question") or ""))
+        modeling_txt = normalize_markdown_math(str(item.get("original_graphic_modeling") or ""))
+        raw_fb = item.get("figure_block") if isinstance(item.get("figure_block"), dict) else {}
+        has_fig_req = bool(item.get("has_figure")) or bool(
+            raw_fb.get("raw_payload")
+            or raw_fb.get("figure_payload")
+            or raw_fb.get("sub_figures")
+            or raw_fb.get("compiled_svg_or_base64")
+        )
+        compiled_fig: Optional[QuestionFigureBlock] = None
+        if has_fig_req:
+            ok_fig, compiled_fig, stem_txt = compile_figure_block_with_fallbacks(
+                stem=stem_txt,
+                position=str(raw_fb.get("position") or raw_fb.get("figure_position") or "BELOW_STEM"),
+                visual_strategy=str(raw_fb.get("visual_strategy") or "ORIGINAL_SYNTHESIS"),
+                original_recipe=raw_fb.get("original_recipe"),
+                render_engine=str(raw_fb.get("render_engine") or "ECHARTS"),
+                raw_payload=str(raw_fb.get("raw_payload") or raw_fb.get("figure_payload") or ""),
+                sub_figures=raw_fb.get("sub_figures") or raw_fb.get("sub_figures_compiled"),
+                figure_caption=str(raw_fb.get("figure_caption") or ""),
+                original_graphic_modeling=modeling_txt,
+                original_image_id=raw_fb.get("original_image_id") or item.get("original_image_id"),
+                assets_dir=assets_dir,
+                doc_ir=doc_ir,
+            )
+            has_fig_req = ok_fig and compiled_fig is not None
+
+        opts_norm = [normalize_markdown_math(str(o)) for o in (item.get("options") or [])]
+        if compiled_fig and compiled_fig.position == "OPTIONS_GRID" and not opts_norm and q_type == "mcq":
+            opts_norm = ["A. 见选项A图", "B. 见选项B图", "C. 见选项C图", "D. 见选项D图"]
+
         valid_qs.append(
             QuizQuestion(
                 id=str(item.get("id") or f"q_{idx}"),
@@ -722,14 +788,24 @@ def _parse_quiz_questions(raw_questions: list, default_chapter: str) -> List[Qui
                 difficulty=diff,
                 tier=tier,
                 score=max(1, int(item.get("score") or 5)),
-                question=normalize_markdown_math(str(item.get("question") or "")),
-                options=[normalize_markdown_math(str(o)) for o in (item.get("options") or [])],
+                question=stem_txt,
+                options=opts_norm,
                 answer=normalize_markdown_math(str(item.get("answer") or "")),
                 explanation=normalize_markdown_math(str(item.get("explanation") or "")),
                 source_chapter=str(item.get("source_chapter") or default_chapter),
                 source_page=str(item.get("source_page") or ""),
+                is_original_question=bool(item.get("is_original_question", True)),
+                source_mode=source_mode,  # type: ignore[arg-type]
+                has_figure=has_fig_req,
+                figure_block=compiled_fig,
+                original_graphic_modeling=modeling_txt,
+                print_space_height_px=96 if q_type in ("fill_blank", "short_answer") else 0,
             )
         )
+
+    # 这里以前会按固定比例（全卷 35%）给普通题硬塞一张模板图，题干还会被追加
+    # 「可结合下方图分析作答」。结果就是"题不需要图却硬配一张通用框图"，图与题意无关。
+    # 现在只认模型真正给出的素材：有 payload / 有可解析的建模数据才出图，绝不按比例凑数。
     return valid_qs
 
 
@@ -759,7 +835,12 @@ async def _generate_single_quiz_paper(
     if not (isinstance(quiz_data, dict) and isinstance(quiz_data.get("questions"), list) and quiz_data["questions"]):
         raise RuntimeError(f"AI 未能为《{label}》返回有效的 JSON 试题列表，请检查模型配置或重试。")
 
-    valid_qs = _parse_quiz_questions(quiz_data["questions"], selected_chapters[0].title)
+    valid_qs = _parse_quiz_questions(
+        quiz_data["questions"],
+        selected_chapters[0].title,
+        doc_ir=document_ir,
+        scenario_type=d.scenario_type,
+    )
     if not valid_qs:
         raise RuntimeError(f"《{label}》解析后有效试题为空，请重试。")
 
@@ -791,10 +872,14 @@ async def generate_variant_question(
         "独立命制 **1 道全新变式题**（改变情景、参数、提问角度或反例条件，切忌照抄原题题干或选项），并只输出单个合法 JSON 对象：\n"
         "{\n"
         '  "id": "var_xxx",\n'
+        '  "is_original_question": true,\n'
         '  "type": "mcq" | "fill_blank" | "short_answer",\n'
         '  "difficulty": "easy" | "medium" | "hard",\n'
         '  "tier": "基础达标" | "能力提升" | "拓展探究",\n'
         '  "score": 5,\n'
+        '  "has_figure": false,\n'
+        '  "original_graphic_modeling": "",\n'
+        '  "figure_block": null,\n'
         '  "question": "全新变式题干（所有公式用 $...$ 或 $$...$$，JSON 反斜杠须双写）",\n'
         '  "options": ["A. ...", "B. ...", "C. ...", "D. ..."],\n'
         '  "answer": "标准答案",\n'
@@ -815,7 +900,18 @@ async def generate_variant_question(
     if not isinstance(data, dict):
         raise RuntimeError("AI 未返回合法的变式题 JSON，请重试。")
     q_dict = data["questions"][0] if isinstance(data.get("questions"), list) and data["questions"] else data
-    parsed = _parse_quiz_questions([q_dict], source_question.source_chapter or chapters[0].title)
+    src_mode = source_question.source_mode or "TEXTBOOK_MODE_A"
+    scenario_rev = {
+        "TEXTBOOK_MODE_A": "A_beginner",
+        "TEXTBOOK_MODE_B": "B_consolidate",
+        "TEXTBOOK_MODE_C": "C_sprint",
+    }.get(src_mode, "A_beginner")
+    parsed = _parse_quiz_questions(
+        [q_dict],
+        source_question.source_chapter or chapters[0].title,
+        doc_ir=document_ir,
+        scenario_type=scenario_rev,
+    )
     if not parsed:
         raise RuntimeError("生成的变式题格式校验失败，请重试。")
     return parsed[0].model_copy(update={"id": f"var_{uuid.uuid4().hex[:6]}"})

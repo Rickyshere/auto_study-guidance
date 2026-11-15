@@ -28,6 +28,19 @@ export type OcrEngineType =
   | 'vision_vlm';
 
 export type VramTier = 'le_8gb' | 'gt_8_lt_48gb' | 'ge_48gb';
+export type VisualStrategyType =
+  | 'ORIGINAL_SYNTHESIS'
+  | 'TEXT_TO_GRAPHIC'
+  | 'CODE_REDRAW'
+  | 'IMAGE_REUSE_QUERY_SHIFT';
+export type OriginalRecipeType =
+  | 'ORIGINAL_DUAL_CURVE'
+  | 'ORIGINAL_FOUR_OPTION_CHARTS'
+  | 'ORIGINAL_PATHWAY_PUZZLE'
+  | 'ORIGINAL_CHEM_SYNTHESIS'
+  | 'ORIGINAL_SCHEMATIC_MODEL';
+export type FigureRenderEngineType = 'ECHARTS' | 'SMILES' | 'MERMAID' | 'SVG' | 'REUSE_CROP';
+export type FigurePositionType = 'BELOW_STEM' | 'OPTIONS_GRID';
 
 export interface CloudConfig {
   provider_label: string;
@@ -263,6 +276,27 @@ export interface StudyBlueprint {
   confirmed: boolean;
 }
 
+export interface VisualBlueprint {
+  visual_strategy: string;
+  original_recipe?: string | null;
+  figure_position: string;
+  target_engine: string;
+  original_image_id?: string | null;
+  visual_directive: string;
+}
+
+export interface QuestionFigureBlock {
+  position: string;
+  visual_strategy: string;
+  original_recipe?: string | null;
+  render_engine: string;
+  raw_payload: string;
+  compiled_svg_or_base64: string;
+  figure_caption: string;
+  sub_figures_compiled?: Record<string, string> | null;
+  layout_calculation?: string;
+}
+
 export interface QuizQuestion {
   id: string;
   type: 'mcq' | 'fill_blank' | 'short_answer';
@@ -279,6 +313,12 @@ export interface QuizQuestion {
   applied_strategies?: string[];
   reverse_design?: string;
   blind_review_summary?: string;
+  is_original_question?: boolean;
+  source_mode?: string;
+  has_figure?: boolean;
+  figure_block?: QuestionFigureBlock | null;
+  original_graphic_modeling?: string;
+  print_space_height_px?: number;
 }
 
 export interface ExamToneAndPersona {
@@ -290,6 +330,8 @@ export interface ExamToneAndPersona {
 export interface ExamAgentStyleProfile {
   subject_and_level: string;
   overall_difficulty: string;
+  visual_density?: string;
+  originality_requirement?: string;
   tone_and_persona: ExamToneAndPersona;
   formatting_rules: string;
   user_override_directives: string[];
@@ -310,14 +352,20 @@ export interface ExamQuestionBlueprintItem {
   distractor_recipe: ExamDistractorRecipeItem[];
   assigned_strategies: string[];
   generation_directive: string;
+  has_figure?: boolean;
+  visual_blueprint?: VisualBlueprint | null;
 }
 
 export interface ExamGeneratedQuestionItem {
   question_id: number;
+  is_original_question?: boolean;
   question_type: string;
   knowledge_tags: string[];
   applied_strategies: string[];
   reverse_design: string;
+  has_figure?: boolean;
+  original_graphic_modeling?: string;
+  figure_block?: QuestionFigureBlock | null;
   correct_answer: string;
   detailed_analysis: string;
   stem: string;
@@ -327,12 +375,16 @@ export interface ExamGeneratedQuestionItem {
 export interface ExamBlindReviewResult {
   question_id: number;
   attempt: number;
+  visual_observation?: string;
   reasoning_process: string;
   my_answer: string;
   expected_answer: string;
+  is_text_valid?: boolean;
+  is_visual_valid?: boolean;
   is_valid: boolean;
   passed: boolean;
   defect_report?: string | null;
+  visual_defect_report?: string | null;
 }
 
 export interface ExamPipelineMetadata {

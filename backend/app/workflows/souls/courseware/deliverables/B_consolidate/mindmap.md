@@ -1,4 +1,4 @@
-# Task (B4): 生成《重难点关联与解题模型 MindMap》 (Advanced_MindMap)
+# Task (B4): 生成《重难点关联与跨章节逻辑耦合拓扑 MindMap》 (Advanced_MindMap)
 不同于入门版的“按目录罗列”，进阶版 MindMap 必须以**“核心问题 / 综合模型 / 因果调控网”**为中心进行重构：
-1. 输出 Mermaid `flowchart LR` 代码（带清晰指向箭头）。
+1. 输出 Mermaid `flowchart LR` 代码（带清晰指向箭头、条件判定与反馈符号 `(+) / (-)`，编译为清晰矢量 SVG）。
 2. 重点体现不同章节知识点之间的**触发条件、正负反馈、公式联立关系与特例分支**。

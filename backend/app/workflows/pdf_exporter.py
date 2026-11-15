@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
 import html
 import io
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 import pymupdf
 
-from app.schemas import DocumentIR, QuizQuestion, StudyPackage, difficulty_label
+from app.schemas import DocumentIR, QuestionFigureBlock, QuizQuestion, StudyPackage, difficulty_label
 from app.workflows.generator import (
     PAGE_BREAK_TOKEN,
     normalize_markdown_math,
@@ -457,6 +460,76 @@ def _render_question_stem_html(
     return "\n".join(out)
 
 
+_INLINE_SVG_RE = re.compile(r"<svg\b[\s\S]*?</svg>", re.IGNORECASE)
+_BASE64_IMG_SRC_RE = re.compile(
+    r'(<img\b[^>]*?\bsrc=["\'])(data:image/(?:png|jpeg|jpg|webp);base64,([^"\']+))(["\'][^>]*>)',
+    re.IGNORECASE,
+)
+
+
+def _figure_img_attrs(width_px: int, height_px: int, *, max_h_pt: float) -> str:
+    """把栅格化后的图像换成带显式宽高（pt）的 <img> 属性。
+
+    PyMuPDF Story 不认 `max-width/max-height` 这类 CSS，图片会按内在像素尺寸硬铺，
+    一张 933×533 的位图能吃掉大半页。这里按 pt 直接算死，单图最高不超过 max_h_pt。
+    """
+    if width_px <= 0 or height_px <= 0:
+        return ""
+    w_pt = width_px * 72.0 / 160.0
+    h_pt = height_px * 72.0 / 160.0
+    scale = min(1.0, max_h_pt / h_pt) if h_pt > max_h_pt else 1.0
+    max_w_pt = 250.0
+    if w_pt * scale > max_w_pt:
+        scale = max_w_pt / w_pt
+    return f'width="{int(round(w_pt * scale))}" height="{int(round(h_pt * scale))}"'
+
+
+def _materialize_embedded_graphics_for_story(html_body: str, tmp_dir: Path) -> Tuple[str, bool]:
+    """Convert inline `<svg>` and `data:image/...;base64,...` nodes into PNG files inside `tmp_dir`."""
+    counter = 0
+    created_any = False
+
+    def _svg_repl(m: re.Match[str]) -> str:
+        nonlocal counter, created_any
+        svg_src = m.group(0)
+        if not svg_src.strip():
+            return ""
+        counter += 1
+        fname = f"fig_svg_{counter}.png"
+        try:
+            sdoc = pymupdf.open(stream=svg_src.encode("utf-8"), filetype="svg")
+            pix = sdoc[0].get_pixmap(dpi=160)
+            dims = _figure_img_attrs(pix.width, pix.height, max_h_pt=150.0)
+            (tmp_dir / fname).write_bytes(pix.tobytes("png"))
+            sdoc.close()
+            created_any = True
+            return f'<img class="q-fig-img" src="{fname}" {dims} alt="figure" />'
+        except Exception:
+            return '<div class="q-fig-caption">[图形渲染异常，请核对题干数据]</div>'
+
+    out = _INLINE_SVG_RE.sub(_svg_repl, html_body)
+
+    def _b64_repl(m: re.Match[str]) -> str:
+        nonlocal counter, created_any
+        prefix, _full_uri, b64_payload, suffix = m.groups()
+        counter += 1
+        fname = f"fig_b64_{counter}.png"
+        try:
+            raw_bytes = base64.b64decode(b64_payload)
+            pix = pymupdf.Pixmap(raw_bytes)
+            dims = _figure_img_attrs(pix.width, pix.height, max_h_pt=150.0)
+            (tmp_dir / fname).write_bytes(pix.tobytes("png"))
+            created_any = True
+            if dims:
+                return f'<img class="q-fig-img" src="{fname}" {dims} alt="figure" />'
+            return f"{prefix}{fname}{suffix}"
+        except Exception:
+            return ""
+
+    out = _BASE64_IMG_SRC_RE.sub(_b64_repl, out)
+    return out, created_any
+
+
 def _render_story_to_doc(
     html_body: str,
     *,
@@ -467,10 +540,37 @@ def _render_story_to_doc(
     max_pages: int = 80,
 ) -> Tuple[pymupdf.Document, int]:
     """Render HTML+CSS via PyMuPDF Story into an in-memory PDF Document."""
+    has_embedded_graphics = bool(_INLINE_SVG_RE.search(html_body) or _BASE64_IMG_SRC_RE.search(html_body))
+    if has_embedded_graphics:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp_dir = Path(tmp_str)
+            if assets_dir and assets_dir.exists():
+                for child in assets_dir.iterdir():
+                    if child.is_file():
+                        try:
+                            shutil.copy2(child, tmp_dir / child.name)
+                        except OSError:
+                            pass
+            body_mat, _ = _materialize_embedded_graphics_for_story(html_body, tmp_dir)
+            full_html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{css}</style></head><body>{body_mat}</body></html>"
+            archive = pymupdf.Archive(str(tmp_dir))
+            story = pymupdf.Story(html=full_html, archive=archive)
+            return _write_story_pages(story, paper_size=paper_size, seal_margin=seal_margin, max_pages=max_pages)
+
     full_html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{css}</style></head><body>{html_body}</body></html>"
     archive = pymupdf.Archive(str(assets_dir)) if assets_dir and assets_dir.exists() else None
     story = pymupdf.Story(html=full_html, archive=archive)
+    return _write_story_pages(story, paper_size=paper_size, seal_margin=seal_margin, max_pages=max_pages)
 
+
+def _write_story_pages(
+    story: pymupdf.Story,
+    *,
+    paper_size: PaperSize,
+    seal_margin: bool,
+    max_pages: int,
+) -> Tuple[pymupdf.Document, int]:
+    """Flow a PyMuPDF Story across A4 or A3 dual-column pages and return the Document."""
     buf = io.BytesIO()
     writer = pymupdf.DocumentWriter(buf)
 
@@ -682,6 +782,59 @@ body {
   vertical-align: top;
   font-size: 9.2pt;
 }
+.q-fig-box {
+  margin: 5pt 0 6pt 14pt;
+  padding: 5pt 6pt;
+  border: 0.6pt solid #e2e8f0;
+  border-radius: 4pt;
+  background: #ffffff;
+  text-align: center;
+  break-inside: avoid;
+}
+.q-fig-img {
+  max-width: 240pt;
+  max-height: 150pt;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+.q-fig-caption {
+  margin-top: 3pt;
+  font-size: 8.2pt;
+  color: #374151;
+  text-align: center;
+}
+.opt-grid-figures {
+  width: 96%;
+  border-collapse: separate;
+  border-spacing: 5pt;
+  margin: 4pt 0 4pt 14pt;
+  break-inside: avoid;
+}
+.opt-grid-figures td {
+  width: 50%;
+  border: 0.6pt solid #cbd5e1;
+  border-radius: 4pt;
+  padding: 4pt 5pt;
+  background: #ffffff;
+  vertical-align: top;
+  text-align: center;
+  font-size: 8.5pt;
+}
+.opt-grid-label {
+  font-weight: 700;
+  color: #111827;
+  text-align: left;
+  margin-bottom: 2pt;
+  font-size: 8.8pt;
+}
+.opt-grid-figures img {
+  max-width: 168pt;
+  max-height: 96pt;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
 .opt-line {
   margin: 1.5pt 0 1.5pt 14pt;
   font-size: 9.2pt;
@@ -881,7 +1034,7 @@ body {
 }
 .figure-wrap img {
   max-width: 82%;
-  max-height: 170pt;
+  max-height: 150pt;
   border: 0.6pt solid #cbd5e1;
 }
 .figure-cap {
@@ -900,6 +1053,69 @@ code {
   font-size: 8.6pt;
 }
 """
+
+
+def _figure_payload_to_html(payload: str, *, img_class: str = "q-fig-img") -> str:
+    src = (payload or "").strip()
+    if not src:
+        return ""
+    if src.startswith("data:image/"):
+        return f'<img class="{img_class}" src="{html.escape(src, quote=True)}" alt="figure" />'
+    if "<svg" in src.lower():
+        return src
+    return ""
+
+
+def _render_question_figure_html(
+    q: QuizQuestion, assets_dir: Optional[Path] = None
+) -> Tuple[str, str]:
+    """Return `(below_stem_html, options_grid_html)` for printable PDF Story rendering."""
+    fig = q.figure_block if q.has_figure else None
+    if fig is None:
+        return "", ""
+
+    if fig.position == "OPTIONS_GRID" and fig.sub_figures_compiled:
+        opt_map: Dict[str, str] = {}
+        for idx, opt in enumerate(q.options or []):
+            m = re.match(r"^\s*([A-D])[.、:：\s]+(.*)$", opt.strip(), re.IGNORECASE)
+            if m:
+                opt_map[m.group(1).upper()] = m.group(2).strip()
+            else:
+                opt_map[chr(65 + idx)] = opt.strip()
+
+        rows: List[str] = []
+        for row_letters in (("A", "B"), ("C", "D")):
+            tds: List[str] = []
+            for letter in row_letters:
+                raw_sub = fig.sub_figures_compiled.get(letter, "")
+                graphic = _figure_payload_to_html(raw_sub, img_class="opt-fig-img")
+                raw_lbl = opt_map.get(letter, "")
+                extra_lbl = (
+                    ""
+                    if not raw_lbl or re.fullmatch(r"见选项\s*[A-D]\s*图", raw_lbl, re.IGNORECASE)
+                    else f'<div style="margin-top:2pt;">{_format_inline_text(raw_lbl, assets_dir)}</div>'
+                )
+                tds.append(
+                    f'<td><div class="opt-grid-label">({letter})</div>{graphic}{extra_lbl}</td>'
+                )
+            rows.append(f"<tr>{''.join(tds)}</tr>")
+
+        grid_html = f'<table class="opt-grid-figures">{"".join(rows)}</table>'
+        if fig.figure_caption:
+            grid_html += f'<div class="q-fig-caption">{_format_inline_text(fig.figure_caption, assets_dir)}</div>'
+        return "", grid_html
+
+    if fig.compiled_svg_or_base64:
+        graphic = _figure_payload_to_html(fig.compiled_svg_or_base64, img_class="q-fig-img")
+        if graphic:
+            cap_html = (
+                f'<div class="q-fig-caption">{_format_inline_text(fig.figure_caption, assets_dir)}</div>'
+                if fig.figure_caption
+                else ""
+            )
+            return f'<div class="q-fig-box">{graphic}{cap_html}</div>', ""
+
+    return "", ""
 
 
 def _build_quiz_exam_html(
@@ -964,6 +1180,7 @@ def _build_quiz_exam_html(
 
     def _render_question_block(q: QuizQuestion, num: int) -> str:
         prefix = f'<span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {_format_inline_text(q.tier, None)}]</span> '
+        below_fig_html, opt_fig_grid_html = _render_question_figure_html(q, assets_dir)
         if q.type == "mcq":
             # Add right-hand parenthesis only when the stem really lacks one
             paren_tail = "" if _has_blank_paren(q.question) else " &nbsp;（ &nbsp;&nbsp;&nbsp; ）"
@@ -974,7 +1191,9 @@ def _build_quiz_exam_html(
                 assets_dir=assets_dir,
             )
             opt_cells = ""
-            if q.options:
+            if opt_fig_grid_html:
+                opt_cells = opt_fig_grid_html
+            elif q.options:
                 max_len = max(len(o) for o in q.options)
                 if max_len <= 22 and len(q.options) == 4:
                     opt_cells = (
@@ -991,6 +1210,7 @@ def _build_quiz_exam_html(
             return (
                 '<div class="q-item">'
                 f"{stem_block_html}"
+                f"{below_fig_html}"
                 f"{opt_cells}"
                 "</div>"
             )
@@ -1004,6 +1224,7 @@ def _build_quiz_exam_html(
             return (
                 '<div class="q-item">'
                 f"{stem_block_html}"
+                f"{below_fig_html}"
                 "</div>"
             )
         stem_block_html = _render_question_stem_html(
@@ -1011,10 +1232,12 @@ def _build_quiz_exam_html(
             prefix_html=prefix,
             assets_dir=assets_dir,
         )
+        ans_h = max(64, int(q.print_space_height_px * 0.7)) if q.print_space_height_px > 0 else 64
         return (
             '<div class="q-item">'
             f"{stem_block_html}"
-            '<div class="answer-lines">&nbsp;</div>'
+            f"{below_fig_html}"
+            f'<div class="answer-lines" style="height:{ans_h}pt;">&nbsp;</div>'
             "</div>"
         )
 
@@ -1177,8 +1400,11 @@ def _build_study_guide_companion_examples_html(
     ]
     for idx, q in enumerate(qs, start=1):
         type_cn = "单选" if q.type == "mcq" else ("填空" if q.type == "fill_blank" else "简答")
+        below_fig_html, opt_fig_grid_html = _render_question_figure_html(q, assets_dir)
         opts_html = ""
-        if q.options:
+        if opt_fig_grid_html:
+            opts_html = opt_fig_grid_html
+        elif q.options:
             opts_html = "<div style='margin:2pt 0 3pt 10pt;font-size:9pt;'>" + " &nbsp;&nbsp; ".join(
                 _format_inline_text(o, assets_dir) for o in q.options
             ) + "</div>"
@@ -1187,6 +1413,7 @@ def _build_study_guide_companion_examples_html(
             <div class="example-stem-box">
               <strong>【配套演练 {idx}｜{type_cn} · {_format_inline_text(q.tier, assets_dir)} · {q.score}分】</strong>
               {_format_inline_text(q.question, assets_dir)}
+              {below_fig_html}
               {opts_html}
             </div>
             <div class="example-sol-box">
