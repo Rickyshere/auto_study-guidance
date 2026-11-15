@@ -20,7 +20,9 @@ import httpx
 from app.schemas import FreeAiAppItem, FreeAiAuthConfig, HarnessConfig, HarnessStatusItem
 
 WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-VENV_SCRIPTS = Path(r"D:\auto_study_guidance\backend\.venv\Scripts")
+# 由本文件位置推导 backend 目录（app/router/x.py → parents[2]），不写死盘符
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+VENV_SCRIPTS = BACKEND_DIR / ".venv" / "Scripts"
 VENV_PYTHON = VENV_SCRIPTS / "python.exe"
 
 
@@ -527,7 +529,7 @@ async def stream_manage_cli_harness(
                 "log_line": f"[install] writing {wrapper_cmd}",
             }
             wrapper_cmd.write_text(
-                f'@echo off\r\n"{py_exe}" "D:\\auto_study_guidance\\backend\\app\\router\\dsh_cli.py" %*\r\n',
+                f'@echo off\r\n"{py_exe}" "{Path(__file__).resolve().parent / "dsh_cli.py"}" %*\r\n',
                 encoding="utf-8",
             )
             yield {

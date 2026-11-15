@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -25,10 +26,12 @@ from app.schemas import (
 )
 
 WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-TOOLS_DIR = Path(r"D:\auto_study_guidance\backend\tools")
+# 全部由本文件位置推导，避免写死盘符后把工具/虚拟环境定位到别的目录树
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+TOOLS_DIR = BACKEND_DIR / "tools"
 OXR_REPO_DIR = TOOLS_DIR / "oxr"
 OCR_STATE_FILE = TOOLS_DIR / "ocr_installed_state.json"
-VENV_PYTHON = Path(r"D:\auto_study_guidance\backend\.venv\Scripts\python.exe")
+VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
 
 
 def _load_ocr_state() -> Dict[str, Any]:
@@ -1286,37 +1289,53 @@ async def _extract_with_somark_free_api(image_path: Path, settings: RouterSettin
         return ""
 
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        for ep in (f"{base_url}/parse/sync", f"{base_url}/parse"):
-            try:
-                resp = await client.post(
-                    ep,
-                    files={"file": (image_path.name, raw_bytes, mime)},
-                    data={"api_key": api_key},
-                )
-            except Exception as exc:
-                _set_somark_error(f"连接失败：{type(exc).__name__}", hard=True)
-                continue
-            if resp.status_code == 404:
-                _set_somark_error(f"接口地址不存在（{ep}），请检查 API 地址", hard=True)
-                continue
-            if resp.status_code != 200:
-                _set_somark_error(f"接口返回 HTTP {resp.status_code}", hard=True)
-                continue
-            try:
-                data = resp.json()
-            except Exception:
-                _set_somark_error("接口返回的不是 JSON（地址可能填成了文档网页）", hard=True)
-                continue
-            code = data.get("code") if isinstance(data, dict) else None
-            if code not in (None, 0, 200, "0"):
-                message = str((data or {}).get("message") or "").strip()[:80]
-                _set_somark_error(f"接口返回 code={code}{('：' + message) if message else ''}", hard=True)
-                continue
-            text = _extract_markdown_from_parse_payload(data)
-            if text:
-                _set_somark_error("")
-                return text
-            _set_somark_error("接口返回成功但没有文本层")
+        for attempt in range(2):
+            hard_stop = False
+            for ep in (f"{base_url}/parse/sync", f"{base_url}/parse"):
+                try:
+                    resp = await client.post(
+                        ep,
+                        files={"file": (image_path.name, raw_bytes, mime)},
+                        data={"api_key": api_key},
+                    )
+                except Exception as exc:
+                    _set_somark_error(f"连接失败：{type(exc).__name__}", hard=True)
+                    hard_stop = True
+                    break
+                if resp.status_code == 404:
+                    _set_somark_error(f"接口地址不存在（{ep}），请检查 API 地址", hard=True)
+                    hard_stop = True
+                    break
+                if resp.status_code != 200:
+                    # 413/429/5xx 是「这一页/这一刻」的问题，不该把整本文档的云端识别全关掉，
+                    # 所以只记录原因、不熔断。
+                    _set_somark_error(f"接口返回 HTTP {resp.status_code}", hard=False)
+                    continue
+                try:
+                    data = resp.json()
+                except Exception:
+                    _set_somark_error("接口返回的不是 JSON（地址可能填成了文档网页）", hard=True)
+                    hard_stop = True
+                    break
+                code = data.get("code") if isinstance(data, dict) else None
+                if code not in (None, 0, 200, "0"):
+                    message = str((data or {}).get("message") or "").strip()[:80]
+                    _set_somark_error(f"接口返回 code={code}{('：' + message) if message else ''}", hard=False)
+                    continue
+                text = _extract_markdown_from_parse_payload(data)
+                if text:
+                    cleaned = sanitize_ocr_text(text)
+                    if cleaned:
+                        _set_somark_error("")
+                        return cleaned
+                    _set_somark_error("接口只回了图片数据，没有可用文字")
+                    continue
+                _set_somark_error("接口返回成功但没有文本层")
+            if hard_stop:
+                break
+            # 免费 API 排队时偶发「成功但空」，这种一定是重试一次才有救的
+            if attempt == 0:
+                await asyncio.sleep(2.0)
     return ""
 
 
@@ -1407,6 +1426,45 @@ async def _extract_with_paddleocr(image_path: Path) -> str:
         return ""
 
 
+_BINARY_LINE_HINT = ("data:image", "base64,", "/9j/", "iVBORw0KGgo")
+
+
+def _looks_like_binary(line: str) -> bool:
+    """判断一行是不是被当成文本吐出来的图片/二进制内容。"""
+    stripped = line.strip()
+    if len(stripped) < 120:
+        return False
+    if any(hint in stripped for hint in _BINARY_LINE_HINT):
+        return True
+    cjk = sum(1 for ch in stripped if "\u4e00" <= ch <= "\u9fff")
+    if cjk:
+        return False
+    alnum = sum(1 for ch in stripped if ch.isalnum() or ch in "+/=_-")
+    return alnum / max(1, len(stripped)) > 0.92
+
+
+def sanitize_ocr_text(text: str) -> str:
+    """清掉 OCR 结果里的二进制垃圾与 base64 图块。
+
+    实测本地 MinerU 4.x 的 basic 档位会把整页原图的 base64 塞进 markdown，
+    一行 20k 字符的乱码混进教材正文，比识别失败更糟糕（下游会照着重写）。
+    """
+    if not text:
+        return ""
+    kept: List[str] = []
+    dropped = 0
+    for line in text.splitlines():
+        if _looks_like_binary(line):
+            dropped += 1
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    cleaned = re.sub(r"!\[[^\]]*\]\(data:image[^)]*\)", "", cleaned)
+    if dropped and not cleaned:
+        return ""
+    return cleaned
+
+
 def _extract_text_from_parse_json(data: Any) -> str:
     """从 MinerU / OXR 服务的解析响应里取正文（新版 mineru-api 在 files[].content.markdown）。"""
     if isinstance(data, str):
@@ -1461,7 +1519,7 @@ async def _extract_with_http_service(image_path: Path, service_url: str) -> str:
                 continue
             text = _extract_text_from_parse_json(data)
             if text:
-                return text
+                return sanitize_ocr_text(text)
     return ""
 
 

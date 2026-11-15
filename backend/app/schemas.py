@@ -216,6 +216,11 @@ class DocumentIR(BaseModel):
     # 避免用户拿到一份自己没看过、可能有识别错误的资料包。
     ocr_confirmed: bool = False
     ocr_confirmed_at: Optional[str] = None
+    # 逐页 OCR 体检：总页数 / 真正拿到文字的页数 / 没拿到文字的页号。
+    # 只有总字数时，用户看不出「31 页里其实 29 页没识别出来」。
+    ocr_pages_total: int = 0
+    ocr_pages_ok: int = 0
+    ocr_failed_pages: List[int] = Field(default_factory=list)
 
 
 class ChapterTextUpdate(BaseModel):

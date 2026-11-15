@@ -40,6 +40,8 @@ export const OcrResultReview: React.FC<Props> = ({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [reparsing, setReparsing] = useState(false);
+  const [reparseMsg, setReparseMsg] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const projectId = documentIr?.project_id || '';
@@ -67,6 +69,9 @@ export const OcrResultReview: React.FC<Props> = ({
   ).length;
   const totalChars = documentIr.total_chars || 0;
   const emptyResult = totalChars === 0;
+  const failedPages = documentIr.ocr_failed_pages || [];
+  const scannedTotal = documentIr.ocr_pages_total || 0;
+  const partialFailure = !emptyResult && failedPages.length > 0;
   const engineLabel =
     documentIr.oxr_engine_used ||
     (documentIr.project_type === 'exam_paper' ? 'SoMark OXR' : '本地 PDF 文本层 / OCR');
@@ -100,6 +105,28 @@ export const OcrResultReview: React.FC<Props> = ({
       setError(e?.message || '保存订正失败');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleReparse = async () => {
+    setReparsing(true);
+    setError(null);
+    setReparseMsg('正在按当前 OCR 引擎重新识别整本文件…');
+    try {
+      const detail = await api.reparseProjectStream(documentIr.project_id, (evt) => {
+        setReparseMsg(`${evt.percent ?? 0}% · ${evt.message || '识别中…'}`);
+      });
+      if (detail?.document_ir) {
+        setDrafts({});
+        setActiveChapterId(detail.document_ir.chapters[0]?.chapter_id || '');
+        onDocumentChanged(detail.document_ir);
+      }
+      setReparseMsg('');
+    } catch (e: any) {
+      setError(e?.message || '重新识别失败');
+      setReparseMsg('');
+    } finally {
+      setReparsing(false);
     }
   };
 
@@ -154,6 +181,24 @@ export const OcrResultReview: React.FC<Props> = ({
             </span>
           </div>
         </div>
+
+        {/* 部分页识别失败：总字数不为 0 时最容易误判「都识别好了」，必须点名 */}
+        {partialFailure && (
+          <div
+            className="mx-5 mt-4 p-3 rounded-2xl border text-[12px] leading-relaxed"
+            style={{ borderColor: '#FCD34D', backgroundColor: '#FFFBEB', color: '#92400E' }}
+          >
+            <div className="font-bold flex items-center gap-1.5 mb-1">
+              <AlertTriangle className="w-4 h-4" />
+              {scannedTotal || chapters.length} 页扫描页里只有 {(documentIr.ocr_pages_ok || 0) || chapters.length} 页识别出文字
+            </div>
+            第{' '}
+            {failedPages.slice(0, 20).join('、')}
+            {failedPages.length > 20 ? ` 等 ${failedPages.length} 页` : ' 页'}没取到文字，
+            这些页的内容不会出现在生成的讲义与题目里。可以先去「设置 → OCR 文本识别」确认引擎真的可用，
+            再重新上传；也可以直接在下面手动补上这些页的关键内容。
+          </div>
+        )}
 
         {/* Empty result warning */}
         {emptyResult && (
@@ -265,6 +310,21 @@ export const OcrResultReview: React.FC<Props> = ({
               : '确认后进入学习场景选择，生成本次资料。'}
           </div>
           <div className="flex items-center gap-2">
+            {reparseMsg && (
+              <span className="text-[11px] font-semibold" style={{ color: '#3B5BDB' }}>
+                {reparseMsg}
+              </span>
+            )}
+            <SpringButton
+              springLabel="重新识别所有页"
+              onClick={handleReparse}
+              disabled={reparsing || confirming}
+              className="px-3 py-2 rounded-xl text-[11.5px] font-bold flex items-center gap-1.5"
+              style={{ backgroundColor: 'var(--bg-surface)', color: '#B45309', border: '1px solid #FCD34D' }}
+            >
+              {reparsing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+              重新识别
+            </SpringButton>
             <SpringButton
               springLabel="重新上传文件"
               onClick={onRequestReupload}

@@ -283,6 +283,14 @@ export const api = {
     requestJson<DocumentIR>(`/api/projects/${encodeURIComponent(projectId)}/document/confirm`, {
       method: 'POST',
     }),
+
+  /** 换好 OCR 引擎后，对已上传的原文件重新识别一遍（不用重新上传整本书） */
+  reparseProjectStream: (projectId: string, onProgress: (evt: SseProgressEvent) => void) =>
+    postSseStream<ProjectDetailResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/reparse`,
+      {},
+      onProgress
+    ),
   renameProject: (projectId: string, title: string) =>
     requestJson<{ status: string; workspace_title: string; display_name: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/rename`,

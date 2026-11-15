@@ -1,11 +1,12 @@
-﻿# Auto Study Guidance · 静默启动脚本 (隐藏全部终端窗口)
+# Auto Study Guidance · 静默启动脚本 (隐藏全部终端窗口)
 param(
     [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
 
-$Root = "D:\auto_study_guidance"
+# 项目根目录 = 本脚本所在目录，不写死盘符（换机器/换位置也能直接跑）
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendDir = Join-Path $Root "backend"
 $FrontendDir = Join-Path $Root "frontend"
 $PythonExe = Join-Path $BackendDir ".venv\Scripts\python.exe"

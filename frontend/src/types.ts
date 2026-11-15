@@ -202,6 +202,10 @@ export interface DocumentIR {
   /** OCR/解析结果是否已被用户人工核对确认（未确认时不允许进入生成） */
   ocr_confirmed?: boolean;
   ocr_confirmed_at?: string;
+  /** 逐页 OCR 体检：扫描页总数 / 成功页数 / 失败页号 */
+  ocr_pages_total?: number;
+  ocr_pages_ok?: number;
+  ocr_failed_pages?: number[];
 }
 
 export interface DeliverableConfig {

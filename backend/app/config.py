@@ -8,7 +8,10 @@ from typing import Tuple
 
 from app.schemas import RouterSettings
 
-BASE_DIR = Path(r"D:\auto_study_guidance\backend")
+# 以本文件位置反推 backend 目录，绝不能写死盘符路径：
+# 写死会在换机器/换安装位置时凭空创建一个 D:\auto_study_guidance 目录，
+# 用户的工程数据就跑到项目文件夹外面去了。
+BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
 SETTINGS_FILE = DATA_DIR / "settings.json"

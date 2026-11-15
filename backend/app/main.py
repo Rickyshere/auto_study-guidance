@@ -101,7 +101,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.2.4",
+    version="1.3.0",
 )
 
 ALLOWED_ORIGINS = [
@@ -197,7 +197,9 @@ def _save_package(project_id: str, package: StudyPackage) -> None:
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
-    return {"status": "ok", "workspace": r"D:\auto_study_guidance"}
+    from app.config import BASE_DIR
+
+    return {"status": "ok", "workspace": str(BASE_DIR.parent)}
 
 
 @app.get("/api/providers/status", response_model=ProviderStatusResponse)
@@ -719,6 +721,81 @@ async def confirm_document_ocr(project_id: str) -> DocumentIR:
     doc_ir.ocr_confirmed_at = datetime.now().isoformat(timespec="seconds")
     _save_project_ir(doc_ir)
     return doc_ir
+
+
+@app.post("/api/projects/{project_id}/reparse")
+async def reparse_project(project_id: str) -> Any:
+    """重新识别已上传的原文件（换好 OCR 引擎后，不用重新上传整本书）。
+
+    会清掉旧的章节切分与识别结果，从头按当前引擎重新跑一遍，并重置「已确认」状态。
+    """
+    doc_ir = _load_project_ir(project_id)
+    pdir = _safe_project_dir(project_id)
+    meta_files = {"document_ir.json", "blueprint.json", "study_package.json", "section_practice.json"}
+    source = None
+    for candidate in pdir.iterdir():
+        if candidate.is_file() and candidate.name not in meta_files and not candidate.name.startswith("."):
+            if candidate.suffix.lower() in SUPPORTED_EXTENSIONS | SUPPORTED_EXAM_EXTENSIONS:
+                source = candidate
+                break
+    if source is None:
+        raise HTTPException(status_code=404, detail="找不到原始上传文件，无法重新识别")
+
+    settings = load_settings()
+
+    async def event_stream():
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_progress(percent: int, stage: str, message: str):
+            payload = json.dumps(
+                {"type": "progress", "percent": percent, "stage": stage, "message": message},
+                ensure_ascii=False,
+            )
+            await queue.put(f"data: {payload}\n\n")
+
+        async def runner():
+            try:
+                assets_dir = pdir / "assets"
+                assets_dir.mkdir(parents=True, exist_ok=True)
+                fresh = await parse_uploaded_file(source, project_id, assets_dir, settings, progress_cb=on_progress)
+                fresh.workspace_title = doc_ir.workspace_title
+                fresh.project_type = doc_ir.project_type
+                _save_project_ir(fresh)
+                blueprint = build_default_blueprint_from_ir(fresh, get_preset("A_beginner"))
+                _save_blueprint(project_id, blueprint)
+                detail = ProjectDetailResponse(document_ir=fresh, blueprint=blueprint, study_package=None)
+                payload = json.dumps(
+                    {
+                        "type": "complete",
+                        "percent": 100,
+                        "message": (
+                            f"重新识别完成：{len(fresh.chapters)} 段、{fresh.total_chars:,} 字"
+                            f"（{fresh.ocr_pages_ok}/{fresh.ocr_pages_total or fresh.total_pages_or_slides} 页成功）"
+                        ),
+                        "detail": detail.model_dump(),
+                    },
+                    ensure_ascii=False,
+                )
+                await queue.put(f"data: {payload}\n\n")
+            except Exception as exc:
+                err = json.dumps({"type": "error", "message": f"重新识别失败: {exc}"}, ensure_ascii=False)
+                await queue.put(f"data: {err}\n\n")
+            finally:
+                await queue.put("__END__")
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item == "__END__":
+                    break
+                yield item
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.delete("/api/projects/{project_id}/package")

@@ -252,7 +252,7 @@ def test_vram_ocr_dsh_and_ai_fill():
     uninst_resp = client.post("/api/harnesses/uninstall", json={"cli_name": "dsh"})
     assert uninst_resp.status_code == 200
     assert uninst_resp.json()["ok"] is True
-    assert not Path(r"D:\auto_study_guidance\backend\.venv\Scripts\dsh.cmd").exists()
+    assert not (Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "dsh.cmd").exists()
 
     # Restore project DSH shim after uninstall test
     restore_resp = client.post("/api/harnesses/install", json={"cli_name": "dsh"})

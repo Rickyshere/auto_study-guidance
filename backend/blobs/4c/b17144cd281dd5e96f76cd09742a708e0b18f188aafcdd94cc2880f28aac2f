@@ -1,0 +1,37 @@
+有 $\sigma \rightarrow \sigma^{*}, \quad n \rightarrow \sigma^{*}$ 跃迁，后者吸收峰在227nm， $\varepsilon$ 为900，为中强吸收。
+
+电子由基态跃迁到激发态时所需能量是不同的，所以吸收不同波长的光能。所需光能大小，由图4-3所示，其顺序为
+
+$$
+\mathtt { o } { \twoheadrightarrow } \mathtt { o } ^ { * } { \geqslant } \mathtt { n } { \twoheadrightarrow } \mathtt { o } ^ { * } { \geqslant } \pi { \twoheadrightarrow } \pi ^ { * } { \geqslant } \mathtt { n } { \twoheadrightarrow } \pi ^ { * }
+$$
+
+其中 $n \rightarrow \pi^{*}$ 跃迁所需能量在紫外-可见光区，单独的 $\pi \rightarrow \pi^{*}$ 与 $n \rightarrow \sigma^{*}$ 跃迁所需能量差不多，它们都靠近200nm一边，在吸收光谱上呈末端吸收。另外， $\pi \rightarrow \pi^{*}$ 跃迁的摩尔吸光系数比 $n \rightarrow \pi^{*}$ 大得多。若 $\pi \rightarrow \pi^{*}$ 有共轭双键时，由于电子离域，易激发，所需能量减小，如丁二烯的 $\lambda_{\max}$ 为217nm，ε为21000。
+
+除以上四种基本跃迁外，某些无机配合物分子和有机化合物分子受到电磁辐射，电子从电子给予体向电子接受体相联系的轨道跃迁，称为电荷转移跃迁。电荷转移跃迁是一个内氧化还原过程，其相应的吸收光谱称为电荷转移吸收光谱。电荷转移吸收的波长取决于电子给予体和电子接受体所对应的电子轨道的能量差，这类光谱的最大特点是摩尔吸光系数较大 $( \varepsilon_{ max } > 10^{4} )$ ，灵敏度高，可用于定量分析。
+
+还有位于可见光区，吸光较弱 $( \varepsilon < 100 )$ 的配位场跃迁。元素周期表中第四、第五周期的过渡金属元素分别含有3d和4d轨道，锕系和镧系元素分别含有4f和5f轨道，在配体存在下，过渡元素能量相等的5个d轨道及镧系、钢系元素的7个f轨道分别分裂成几组能量不等的d轨道和f轨道。当它们吸收光子时，低能态的d电子和f电子会分别跃迁到高能态的d轨道或f轨道上，这种跃迁必须在配体的配位场作用下才能够发生，因此称为配位场跃迁。
+
+## 3. 生色团和助色团
+
+(1) 生色团 有机化合物分子结构中有 $\pi \rightarrow \pi^{*}$ 或 $n \rightarrow \pi^{*}$ 跃迁的基团，如 $\begin{aligned}\sum C = C \leq\end{aligned}$ $\begin{aligned}\geq  C  =  O  、 - C  \equiv  C \end{aligned}$ 一等，能在紫外-可见光范围内产生吸收。这样的基团为生色团。
+
+(2)助色团与生色团或饱和烃相连，能使吸收峰向长波方向移动，并使吸收强度增加的带有杂原子的饱和基团，如 $\mathrm{—OH 、— NH_{2}}$ 及卤素等。
+
+吸收峰向长波方向移动的现象称为红移或长移，向短波方向移动的现象称为蓝移或短移。
+
+## 4. 吸收带
+
+吸收带就是吸收峰在紫外-可见光谱中的位置。根据分子结构与取代基团的种类，把吸收带分为四种类型，在解析光谱时可以从这些吸收带的归属，推测化合物分子结构的信息。
+
+(1) R带由 $n \rightarrow \pi^{*}$ 跃迁引起的吸收带，是含杂原子的不饱和基团如 $\sum C = O$ $一 NO 、一 NO _{2}$ $-N=N$ 一等这类生色团的特征吸收带。它的特点是处于较长波带范围（250\~500nm），是弱吸收 $( \varepsilon < 100 )$
+
+(2) K 带是由共轭双键中的 $\pi \rightarrow \pi^{*}$ 跃迁引起的吸收带。其 $\varepsilon \geq 10^{4}$ ，为强吸收。随共轭双键增加，产生长移，且吸收强度增加。
+
+例如: CH2=CH—CH=CH₂π→π
+
+K带 $\lambda_{ max } = 217   nm  \quad \varepsilon = 21  000$
+
+$$
+\mathrm{CH}_{2} \xlongequal\ \mathrm{CH}-\mathrm{CH} \xlongequal\ \mathrm{CH}-\mathrm{CH} \xlongequal\ \mathrm{CH}_{2} \quad \pi \rightarrow \pi^{*}
+$$

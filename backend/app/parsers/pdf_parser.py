@@ -37,6 +37,25 @@ def extract_key_terms(text: str, limit: int = 8) -> List[str]:
     return candidates[:limit]
 
 
+def _trace_ocr_page(assets_dir: Path, page_num: int, chars: int, engine: str) -> None:
+    """把每页 OCR 的结果写进 <project>/logs/ocr_trace.log，出问题能定位到具体页与原因。"""
+    try:
+        from datetime import datetime
+
+        from app.parsers.ocr_engine import somark_last_error
+
+        log_dir = assets_dir.parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        line = (
+            f"{datetime.now().isoformat(timespec='seconds')} page={page_num} "
+            f"chars={chars} engine={engine} err={somark_last_error()!r}\n"
+        )
+        with (log_dir / "ocr_trace.log").open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception:
+        pass
+
+
 async def parse_pdf(
     file_path: Path,
     project_id: str,
@@ -51,6 +70,8 @@ async def parse_pdf(
     all_assets: List[AssetItem] = []
     ocr_applied = False
     scanned_pages = 0
+    ocr_pages_ok = 0
+    ocr_failed_pages: List[int] = []
 
     if progress_cb:
         await progress_cb(8, "ocr_init", f"已读取 PDF 共 {total_pages} 页，正在启动版面分析与 OCR 识别...")
@@ -117,6 +138,11 @@ async def parse_pdf(
             if ocr_text:
                 text = ocr_text
                 ocr_applied = True
+                ocr_pages_ok += 1
+                _trace_ocr_page(assets_dir, page_num, len(ocr_text), settings.ocr_config.active_engine)
+            else:
+                ocr_failed_pages.append(page_num)
+                _trace_ocr_page(assets_dir, page_num, 0, settings.ocr_config.active_engine)
             if not assets_here:
                 scan_asset = AssetItem(
                     asset_id=f"p{page_num}_scan",
@@ -192,6 +218,16 @@ async def parse_pdf(
                     detected_starts.append((heading, p))
 
         if len(detected_starts) >= 2:
+            # 第一个标题不一定在第 1 页（扫描件常常开头几页没被认出标题）。若直接从这里开始建章节，
+            # 开头那些有文字的页会被整段丢掉 —— 之前 31 页的教材只留下第 30-31 页就是这个问题。
+            if detected_starts[0][1] > 1:
+                head_text = "\n\n".join(
+                    f"[第 {p} 页]\n{page_texts.get(p, '')}"
+                    for p in range(1, detected_starts[0][1])
+                    if page_texts.get(p, "").strip()
+                )
+                if head_text.strip():
+                    detected_starts.insert(0, (f"开头 {detected_starts[0][1] - 1} 页", 1))
             for idx, (title, start_p) in enumerate(detected_starts):
                 end_p = detected_starts[idx + 1][1] - 1 if idx + 1 < len(detected_starts) else total_pages
                 end_p = max(start_p, end_p)
@@ -258,6 +294,17 @@ async def parse_pdf(
                 f"{('（' + err + '）') if err else ''}；只切出 {len(chapters)} 段、{total_chars:,} 字，"
                 "后续资料只能依据标题推演。请到「设置 → OCR 文本识别」点一键按钮把它真正跑通。",
             )
+        elif ocr_failed_pages:
+            # 部分页失败比全失败更危险：总字数不为 0，用户会以为整本都识别好了。
+            shown = "、".join(str(p) for p in ocr_failed_pages[:12])
+            more = f" 等 {len(ocr_failed_pages)} 页" if len(ocr_failed_pages) > 12 else ""
+            await progress_cb(
+                100,
+                "done",
+                f"⚠ {scanned_pages} 页扫描页中只有 {ocr_pages_ok} 页识别出文字，"
+                f"第 {shown}{more} 页没取到字{f'（{somark_last_error()}）' if somark_last_error() else ''}；"
+                f"共 {len(chapters)} 段、{total_chars:,} 字，缺的页在生成时会缺失内容。",
+            )
         else:
             await progress_cb(100, "done", f"OCR 与章节切片完成！共识别 {len(chapters)} 个章节、{total_chars:,} 字。")
     return DocumentIR(
@@ -267,6 +314,9 @@ async def parse_pdf(
         total_pages_or_slides=total_pages,
         total_chars=total_chars,
         ocr_applied=ocr_applied,
+        ocr_pages_total=scanned_pages,
+        ocr_pages_ok=ocr_pages_ok,
+        ocr_failed_pages=ocr_failed_pages,
         chapters=chapters,
         all_assets=all_assets,
     )
