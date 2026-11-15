@@ -22,7 +22,7 @@ import { BlueprintNegotiator } from './components/BlueprintNegotiator';
 import { ExamPaperWorkbench, ExamProgressState } from './components/ExamPaperWorkbench';
 import { LiquidGlassCanvas, LiquidGlassOptics } from './components/LiquidGlassCanvas';
 import { OnboardingGuideModal } from './components/OnboardingGuideModal';
-import { OcrResultReview } from './components/OcrResultReview';
+import { OcrReviewStep } from './components/OcrReviewStep';
 import { DEFAULT_LIQUID_OPTICS, RouterConfigModal } from './components/RouterConfigModal';
 import { StudioTabKey, StudyStudio } from './components/StudyStudio';
 import { UpdatePushModal } from './components/UpdatePushModal';
@@ -133,8 +133,6 @@ export function App() {
   } | null>(null);
   const [examProgress, setExamProgress] = useState<ExamProgressState | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // OCR 结束后的「识别结果确认」步骤：上传完成就弹出，确认前不放行到生成
-  const [ocrReviewOpen, setOcrReviewOpen] = useState(false);
 
   // Free AI Proxy Authorization & Cloud Missing Prompt Modals
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -313,8 +311,6 @@ export function App() {
         prev ? { ...prev, active: false, percent: 100, message: `识别完成！共 ${detail.document_ir.chapters.length} 章节` } : null
       );
       setWorkflowStep(2);
-      // OCR 一结束就把识别原文交给用户核对，确认后才允许继续
-      setOcrReviewOpen(true);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -357,7 +353,8 @@ export function App() {
       setOcrProgress((prev) =>
         prev ? { ...prev, active: false, percent: 100, message: `示例课件 OCR 完成！共 ${detail.document_ir.chapters.length} 个章节` } : null
       );
-      setWorkflowStep(2);
+      // 示例资料由服务端标成已确认，直接进入场景选择
+      setWorkflowStep(3);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -409,7 +406,7 @@ export function App() {
             }
           : null
       );
-      setOcrReviewOpen(true);
+      setWorkflowStep(2);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -460,6 +457,7 @@ export function App() {
             }
           : null
       );
+      setWorkflowStep(3);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -479,14 +477,11 @@ export function App() {
       setUploadMode(detail.document_ir.project_type === 'exam_paper' ? 'exam_paper' : 'courseware');
       setBlueprint(detail.blueprint || null);
       setStudyPackage(detail.study_package || null);
-      // 上次没核对完就离开的项目，重新打开时继续把识别原文摆出来（老项目没有该字段，不打扰）
-      if (detail.document_ir.ocr_confirmed === false) {
-        setOcrReviewOpen(true);
-      }
       if (detail.study_package) {
         autoSwitchTabForPackage(detail.study_package);
       } else {
-        setWorkflowStep(3);
+        // 还没确认识别结果的资料，直接停在第 2 步；已确认的照旧进场景选择
+        setWorkflowStep(detail.document_ir.ocr_confirmed === false ? 2 : 3);
         setActiveMainView('workflow');
       }
     } catch (e: any) {
@@ -519,7 +514,6 @@ export function App() {
     setWorkflowStep(1);
     setActiveMainView('workflow');
     setUploadMode('courseware');
-    setOcrReviewOpen(false);
   };
 
   const handleRenameProject = async (projectId: string, title: string) => {
@@ -807,9 +801,19 @@ export function App() {
     }
     if (!studyPackage) {
       if (documentIr.project_type === 'exam_paper') {
-        return [{ value: 'workflow', label: '② 试卷 OXR 与四子 Agent 组卷' }];
+        return [
+          {
+            value: 'workflow',
+            label: workflowStep === 2 ? '② 试卷识别结果确认' : '③ 试卷 OXR 与四子 Agent 组卷',
+          },
+        ];
       }
-      return [{ value: 'workflow', label: workflowStep === 2 ? '② OCR 识别与显存配置' : '③ 选择 A/B/C 场景与参数' }];
+      return [
+        {
+          value: 'workflow',
+          label: workflowStep === 2 ? '② 识别结果确认' : '③ 选择 A/B/C 场景与参数',
+        },
+      ];
     }
 
     const isExamMode =
@@ -913,7 +917,10 @@ export function App() {
               value={activeMainView}
               onChange={(v) => {
                 setActiveMainView(v);
-                if (v === 'workflow' && documentIr && workflowStep === 1) setWorkflowStep(3);
+                // 回到工作流视图时，没确认识别结果的资料先停在第二步
+                if (v === 'workflow' && documentIr && workflowStep === 1) {
+                  setWorkflowStep(documentIr.ocr_confirmed === false ? 2 : 3);
+                }
               }}
               options={topbarOptions}
             />
@@ -1066,7 +1073,14 @@ export function App() {
                 onBackToStudio={() => {
                   if (studyPackage) autoSwitchTabForPackage(studyPackage);
                 }}
-                onOpenOcrReview={documentIr ? () => setOcrReviewOpen(true) : undefined}
+                onOpenOcrReview={
+                  documentIr
+                    ? () => {
+                        setWorkflowStep(2);
+                        setActiveMainView('workflow');
+                      }
+                    : undefined
+                }
               />
             </aside>
           )}
@@ -1238,7 +1252,17 @@ export function App() {
                 </div>
               </div>
             ) : activeMainView === 'workflow' || !studyPackage ? (
-              documentIr?.project_type === 'exam_paper' || (ocrProgress?.active && uploadMode === 'exam_paper') ? (
+              workflowStep === 2 && documentIr && !ocrProgress?.active ? (
+                <OcrReviewStep
+                  documentIr={documentIr}
+                  onDocumentChanged={(ir) => setDocumentIr(ir)}
+                  onConfirmed={(ir) => {
+                    setDocumentIr(ir);
+                    setWorkflowStep(3);
+                  }}
+                  onRequestReupload={handleNewWorkspace}
+                />
+              ) : documentIr?.project_type === 'exam_paper' || (ocrProgress?.active && uploadMode === 'exam_paper') ? (
                 <ExamPaperWorkbench
                   documentIr={documentIr}
                   ocrProgress={ocrProgress}
@@ -1393,20 +1417,6 @@ export function App() {
             </div>
           </div>
         )}
-
-        <OcrResultReview
-          open={ocrReviewOpen && Boolean(documentIr)}
-          documentIr={documentIr}
-          onDocumentChanged={(ir) => setDocumentIr(ir)}
-          onConfirmed={(ir) => {
-            setDocumentIr(ir);
-            setOcrReviewOpen(false);
-          }}
-          onRequestReupload={() => {
-            setOcrReviewOpen(false);
-            handleNewWorkspace();
-          }}
-        />
 
         <RouterConfigModal
           open={configOpen}

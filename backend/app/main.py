@@ -537,6 +537,8 @@ async def upload_document_stream(
 async def load_demo_project() -> ProjectDetailResponse:
     settings = load_settings()
     doc_ir = await create_demo_courseware_project(settings)
+    # 示例资料是内置的，本来就不需要用户核对，直接标成已确认
+    doc_ir.ocr_confirmed = True
     _save_project_ir(doc_ir)
     preset = get_preset("A_beginner")
     blueprint = build_default_blueprint_from_ir(doc_ir, preset)
@@ -554,6 +556,7 @@ async def load_demo_project_stream():
             await asyncio.sleep(0.18)
             yield f"data: {json.dumps({'type': 'progress', 'percent': 48, 'stage': 'ocr_vision', 'message': '正在识别课件公式图片并校验 LaTeX 块...'}, ensure_ascii=False)}\n\n"
             doc_ir = await create_demo_courseware_project(settings)
+            doc_ir.ocr_confirmed = True
             _save_project_ir(doc_ir)
             yield f"data: {json.dumps({'type': 'progress', 'percent': 86, 'stage': 'ocr_done', 'message': f'已提取 {len(doc_ir.chapters)} 个章节与核心关键词，正在生成目录大纲...'}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.12)
@@ -647,6 +650,7 @@ async def load_demo_exam_stream():
             yield f"data: {json.dumps({'type': 'progress', 'percent': 12, 'stage': 'oxr_probe', 'message': '正在探查本地 OXR 服务状态（仅探查不下载）...'}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.14)
             doc_ir = await create_demo_exam_paper_project(settings)
+            doc_ir.ocr_confirmed = True
             _save_project_ir(doc_ir)
             yield f"data: {json.dumps({'type': 'progress', 'percent': 65, 'stage': 'oxr_scanning', 'message': doc_ir.oxr_probe_summary}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.14)

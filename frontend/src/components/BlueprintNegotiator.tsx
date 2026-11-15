@@ -197,8 +197,8 @@ export const BlueprintNegotiator: React.FC<Props> = ({
         className="asg-card p-3.5 flex flex-wrap items-center justify-between gap-2"
       >
         {[
-          { step: 1 as const, label: '1. 资料上传', done: Boolean(documentIr) },
-          { step: 2 as const, label: '2. 文档解析与 OCR', done: Boolean(documentIr && !ocrProgress?.active) },
+          { step: 1 as const, label: '1. 资料上传与 OCR', done: Boolean(documentIr) },
+          { step: 2 as const, label: '2. 识别结果确认', done: Boolean(documentIr?.ocr_confirmed) },
           { step: 3 as const, label: '3. 场景选择与生成', done: Boolean(blueprint?.confirmed) },
         ].map((item, idx) => {
           const active = workflowStep === item.step;
@@ -229,8 +229,8 @@ export const BlueprintNegotiator: React.FC<Props> = ({
         })}
       </div>
 
-      {/* STEP 2: OCR Progress & VRAM-Tiered Engine Card */}
-      {(workflowStep === 2 || ocrProgress?.active) && (
+      {/* 第二步「识别结果确认」由 OcrReviewStep 整屏接管；这里只保留上传/识别进度 */}
+      {ocrProgress?.active && (
         <div data-glass-panel="true" className="asg-card p-6 space-y-4 asg-drawer-enter">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
