@@ -968,6 +968,26 @@ def _build_cli_command(
     return [exe], False
 
 
+def _timeout_verdict(
+    now: float,
+    started_at: float,
+    last_activity: float,
+    idle_limit: float,
+    total_limit: float,
+) -> Optional[str]:
+    """Decide whether a running CLI attempt must be aborted as a timeout.
+
+    `idle_limit` is a *stall* window: as long as the child keeps emitting output the
+    clock keeps moving, so a long but productive generation is never cut off. The
+    second gate (`total_limit`) only exists so a half-dead process cannot hang forever.
+    """
+    if now - started_at > total_limit:
+        return "total"
+    if now - last_activity > idle_limit:
+        return "idle"
+    return None
+
+
 async def _run_cli_attempt(
     cmd: List[str],
     cli_label: str,
@@ -977,6 +997,7 @@ async def _run_cli_attempt(
     expect_stream_json: bool,
     cancel_token: Optional[HarnessCancelToken],
     status_cb: Optional[Callable[[str], Any]],
+    max_total_seconds: int = 1800,
 ) -> str:
     if cancel_token:
         cancel_token.raise_if_cancelled()
@@ -1043,7 +1064,11 @@ async def _run_cli_attempt(
     eof_count = 0
     total_stream_chars = 0
     last_delta_notify = 0.0
-    deadline = time.monotonic() + max(5, timeout_seconds)
+    started_at = time.monotonic()
+    last_activity = started_at
+    last_stall_notice = 0.0
+    idle_limit = float(max(5, timeout_seconds))
+    total_limit = float(max(idle_limit, max_total_seconds))
 
     try:
         while eof_count < 2:
@@ -1051,9 +1076,24 @@ async def _run_cli_attempt(
                 _kill_process_tree(proc)
                 raise asyncio.CancelledError("任务已被用户取消")
 
-            if time.monotonic() > deadline:
+            now = time.monotonic()
+            verdict = _timeout_verdict(now, started_at, last_activity, idle_limit, total_limit)
+            if verdict == "total":
                 _kill_process_tree(proc)
-                raise TimeoutError(f"{cli_label} CLI 执行超时 ({timeout_seconds}s)")
+                raise TimeoutError(
+                    f"{cli_label} 总时长超过 {int(total_limit)}s 上限，已终止（可在设置中调大 max_total_seconds）"
+                )
+            if verdict == "idle":
+                _kill_process_tree(proc)
+                raise TimeoutError(
+                    f"{cli_label} 已连续 {int(now - last_activity)}s 没有任何输出（停滞上限 {int(idle_limit)}s），已终止"
+                )
+            if now - last_activity > 60 and now - last_stall_notice > 30:
+                last_stall_notice = now
+                await _emit_status(
+                    status_cb,
+                    f"{cli_label} 仍在生成，已 {int(now - last_activity)}s 无新输出…",
+                )
 
             drained = False
             while True:
@@ -1123,6 +1163,9 @@ async def _run_cli_attempt(
                         final_result_text = parsed["text"]
                         await _emit_status(status_cb, parsed["status"])
 
+            if drained:
+                # 只要子进程还在吐字，就把停滞计时器重置，长任务不会被按时长掐断。
+                last_activity = time.monotonic()
             if eof_count >= 2:
                 break
             await asyncio.sleep(0.02 if drained else 0.05)
@@ -1277,6 +1320,7 @@ async def run_cli_harness(
                     expect_stream_json=expect_stream_json,
                     cancel_token=cancel_token,
                     status_cb=status_cb,
+                    max_total_seconds=int(getattr(harness_config, "max_total_seconds", 1800)),
                 )
             except asyncio.CancelledError:
                 raise

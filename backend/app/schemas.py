@@ -46,7 +46,11 @@ class CloudConfig(BaseModel):
 class HarnessConfig(BaseModel):
     preferred_cli: Literal["dsh", "claude", "codex", "gemini", "custom"] = "dsh"
     custom_command_template: str = ""
+    # 停滞超时：子进程连续这么久没有任何新输出才算“卡死”（不是总时长上限，
+    # 长时间流式生成只要有新内容就会不断续期）。
     timeout_seconds: int = 180
+    # 总时长兜底：防止进程半死不活地无限拖着，默认 30 分钟。
+    max_total_seconds: int = 1800
     max_retries: int = 2
 
 

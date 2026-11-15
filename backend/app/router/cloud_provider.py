@@ -6,6 +6,11 @@ import httpx
 
 from app.schemas import CloudConfig
 
+# 云端接口是非流式调用：服务端在生成结束前不会返回任何字节，所以 read 超时实际等于
+# “整段生成允许花多久”。120s 对长篇讲义（数千字 + 大量公式）明显偏紧，这里放宽到 10 分钟，
+# 连接阶段仍然只给 15s，避免把机网络问题也一起等成 10 分钟。
+CLOUD_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=120.0, pool=15.0)
+
 
 def _scrub_secret(msg: str, api_key: str) -> str:
     cleaned = msg or ""
@@ -40,7 +45,7 @@ async def call_cloud_llm(
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
         }
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT) as client:
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code >= 400:
                 raise RuntimeError(f"Anthropic API 错误 {resp.status_code}: {_scrub_secret(resp.text[:300], config.api_key)}")
@@ -63,7 +68,7 @@ async def call_cloud_llm(
         ],
         "temperature": 0.3,
     }
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT) as client:
         resp = await client.post(url, json=payload, headers=headers)
         if resp.status_code >= 400:
             raise RuntimeError(f"Cloud API 错误 {resp.status_code}: {_scrub_secret(resp.text[:300], config.api_key)}")
