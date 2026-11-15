@@ -112,6 +112,16 @@ def _format_inline_text(raw: str, assets_dir: Optional[Path] = None) -> str:
     return escaped
 
 
+# 题干里已经带了作答括号（全角/半角、里面是普通空格/全角空格/若干空格都算）。
+# 之前只认 "（）" "（ ）" "( )" 三种写法，模型写成「（　）」或「（  ）」时就被判成没括号，
+# 于是又补了一个 → 卷面上出现两个括号。
+_BLANK_PAREN_RE = re.compile(r"[（(][\s\u3000\u00a0]*[）)]")
+
+
+def _has_blank_paren(text: str) -> bool:
+    return bool(_BLANK_PAREN_RE.search(text or ""))
+
+
 _MERMAID_ARROW_RE = re.compile(r"\s*(?:-{2,}>|={2,}>|-\.->|-{3}|={3}|--[ox])\s*(?:\|[^|]*\|)?")
 _MERMAID_NODE_RE = re.compile(r"([A-Za-z0-9_]+)\s*(?:\[|\(|\{)+([^\]\)\}]*)[\]\)\}]+")
 
@@ -955,12 +965,8 @@ def _build_quiz_exam_html(
     def _render_question_block(q: QuizQuestion, num: int) -> str:
         prefix = f'<span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {_format_inline_text(q.tier, None)}]</span> '
         if q.type == "mcq":
-            # Add right-hand parenthesis if question lacks one
-            paren_tail = (
-                ""
-                if ("（）" in q.question or "（ ）" in q.question or "( )" in q.question)
-                else " &nbsp;（ &nbsp;&nbsp;&nbsp; ）"
-            )
+            # Add right-hand parenthesis only when the stem really lacks one
+            paren_tail = "" if _has_blank_paren(q.question) else " &nbsp;（ &nbsp;&nbsp;&nbsp; ）"
             stem_block_html = _render_question_stem_html(
                 q.question,
                 prefix_html=prefix,
