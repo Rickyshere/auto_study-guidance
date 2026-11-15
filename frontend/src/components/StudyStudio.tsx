@@ -119,7 +119,7 @@ function downloadText(filename: string, content: string, mime = 'text/markdown;c
   URL.revokeObjectURL(url);
 }
 
-/** 按二级标题把讲义切成"节"，用于逐节学习模式（无二级标题时整篇算一节）。 */
+/** 按二级标题把讲义切成"节"，仅在拿不到后端分节结果时兜底（无二级标题时整篇算一节）。 */
 function splitNoteSections(md: string): { title: string; body: string }[] {
   const text = (md || '').trim();
   if (!text) return [];
@@ -133,6 +133,14 @@ function splitNoteSections(md: string): { title: string; body: string }[] {
   }
   return sections.length > 0 ? sections : [{ title: '全文', body: text }];
 }
+
+/** 逐节学习用的「节」：sectionId 与分节练习一一对应，practiceRequired=false 表示读完即可放行 */
+type NoteStep = {
+  title: string;
+  body: string;
+  sectionId: string | null;
+  practiceRequired: boolean;
+};
 
 function GraphicPayloadNode({ payload, alt }: { payload?: string | null; alt?: string }) {
   const src = (payload || '').trim();
@@ -381,18 +389,42 @@ export const StudyStudio: React.FC<Props> = ({
   // 讲义打印形态：纯净版 / 带页边批注的康奈尔版
   const [handoutPrintMode, setHandoutPrintMode] = useState<'clean' | 'cornell'>('clean');
 
-  const noteMdSections = useMemo(
-    () => splitNoteSections(studyPackage.study_notes_markdown || ''),
-    [studyPackage.study_notes_markdown]
+  // 逐节学习：节划分以后端切分结果为准（与分节练习共用 section_id，避免前后端各切一次对不上）
+  const [noteSectionsReady, setNoteSectionsReady] = useState(false);
+  const noteSteps = useMemo<NoteStep[]>(() => {
+    if (noteSections.length > 0) {
+      return noteSections.map((s) => ({
+        title: s.title,
+        body:
+          s.markdown && s.markdown.trim()
+            ? s.markdown
+            : `## ${s.title}\n\n（后端未返回本节正文，请刷新页面或切到「整份预览」阅读全文。）`,
+        sectionId: s.section_id,
+        practiceRequired: s.practice_required !== false,
+      }));
+    }
+    if (!noteSectionsReady) return [];
+    // 后端没给出小节时兜底：本地按标题切，且不强制练习（没有 section_id 也就没法生成分节练习）
+    return splitNoteSections(studyPackage.study_notes_markdown || '').map((x) => ({
+      title: x.title,
+      body: x.body,
+      sectionId: null,
+      practiceRequired: false,
+    }));
+  }, [noteSections, noteSectionsReady, studyPackage.study_notes_markdown]);
+  const notesProgressKey = `asg_notes_progress_v2_${documentIr?.project_id || 'p'}_${(studyPackage.study_notes_markdown || '').length}`;
+  /** 只有需要出题的小节才出现在「分节练习」选择条里（导览类小节不生成练习） */
+  const practiceSections = useMemo(
+    () => noteSections.filter((s) => s.practice_required !== false),
+    [noteSections]
   );
-  const notesProgressKey = `asg_notes_progress_${documentIr?.project_id || 'p'}_${(studyPackage.study_notes_markdown || '').length}`;
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(notesProgressKey);
       if (!raw) return;
       const parsed = JSON.parse(raw) as { idx?: number; unlocked?: number; read?: Record<string, boolean> };
-      if (typeof parsed.idx === 'number') setNoteStepIdx(Math.min(parsed.idx, Math.max(0, noteMdSections.length - 1)));
+      if (typeof parsed.idx === 'number') setNoteStepIdx(Math.max(0, parsed.idx));
       if (typeof parsed.unlocked === 'number') setNoteUnlocked(Math.max(1, parsed.unlocked));
       if (parsed.read) setNoteReadAck(parsed.read as Record<number, boolean>);
     } catch {
@@ -400,6 +432,13 @@ export const StudyStudio: React.FC<Props> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notesProgressKey]);
+
+  // 节数确定后把本机进度收敛到合法范围（旧版本切分方式不同，索引可能越界）
+  useEffect(() => {
+    if (noteSteps.length === 0) return;
+    setNoteStepIdx((idx) => Math.min(idx, noteSteps.length - 1));
+    setNoteUnlocked((u) => Math.max(1, Math.min(u, noteSteps.length)));
+  }, [noteSteps.length]);
 
   useEffect(() => {
     try {
@@ -411,18 +450,6 @@ export const StudyStudio: React.FC<Props> = ({
       /* 忽略隐私模式下的写入失败 */
     }
   }, [notesProgressKey, noteStepIdx, noteUnlocked, noteReadAck]);
-
-  /** 本节练习是否"做完了"（每题都作答过） */
-  const isSectionPracticeDone = (sectionId?: string | null) => {
-    if (!sectionId) return false;
-    const paper = sectionPapers[sectionId];
-    if (!paper || !paper.questions?.length) return false;
-    const ans = answersByPaper[paper.paper_id || 'default'] || {};
-    return paper.questions.every((q) => (ans[q.id] || '').trim().length > 0);
-  };
-  const currentNoteSection = noteMdSections[noteStepIdx];
-  const currentNoteSectionId = noteSections[noteStepIdx]?.section_id || null;
-  const currentSectionReady = Boolean(noteReadAck[noteStepIdx]) && isSectionPracticeDone(currentNoteSectionId);
 
   /** 点击 TOC 标题后滚到讲义里对应的标题（不依赖 markdown 渲染器注入 id） */
   const scrollToNoteHeading = (title: string) => {
@@ -487,19 +514,44 @@ export const StudyStudio: React.FC<Props> = ({
   const [generatingVariantId, setGeneratingVariantId] = useState<string | null>(null);
   const [variantError, setVariantError] = useState<string | null>(null);
 
+  /** 本节练习是否"做完了"（每题都作答过）——必须放在 answersByPaper 之后声明 */
+  const isSectionPracticeDone = (sectionId?: string | null) => {
+    if (!sectionId) return false;
+    const paper = sectionPapers[sectionId];
+    if (!paper || !paper.questions?.length) return false;
+    const ans = answersByPaper[paper.paper_id || 'default'] || {};
+    return paper.questions.every((q) => (ans[q.id] || '').trim().length > 0);
+  };
+  const currentNoteStep = noteSteps[noteStepIdx];
+  const currentNoteSection = currentNoteStep;
+  const currentNoteSectionId = currentNoteStep?.sectionId || null;
+  const currentPracticeRequired = currentNoteStep ? currentNoteStep.practiceRequired : true;
+  const currentPracticeDone = isSectionPracticeDone(currentNoteSectionId);
+  const currentSectionReady =
+    Boolean(noteReadAck[noteStepIdx]) && (!currentPracticeRequired || currentPracticeDone);
+
   // 拉取讲义小节列表（讲义 TOC 与分节练习共用）
   useEffect(() => {
     if (activeTab !== 'section_practice' && activeTab !== 'notes') return;
     const pid = documentIr?.project_id;
-    if (!pid) return;
+    if (!pid) {
+      setNoteSectionsReady(true);
+      return;
+    }
     let cancelled = false;
     api
       .getNoteSections(pid)
       .then((res) => {
-        if (!cancelled) setNoteSections(res.sections || []);
+        if (!cancelled) {
+          setNoteSections(res.sections || []);
+          setNoteSectionsReady(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setNoteSections([]);
+        if (!cancelled) {
+          setNoteSections([]);
+          setNoteSectionsReady(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -1128,7 +1180,7 @@ export const StudyStudio: React.FC<Props> = ({
               </div>
 
               {/* 学习路径：逐节学习（读完 + 做完本节练习才解锁下一节）或整份预览 */}
-              {(noteSections.length > 0 || noteMdSections.length > 0) && (
+              {(noteSteps.length > 0 || noteSections.length > 0) && (
                 <div
                   className="asg-card no-print"
                   data-glass-panel="true"
@@ -1136,7 +1188,7 @@ export const StudyStudio: React.FC<Props> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--asg-brand-primary)' }}>
-                      学习路径（共 {noteMdSections.length} 节 · 已解锁 {Math.min(noteUnlocked, noteMdSections.length)} 节）
+                      学习路径（共 {noteSteps.length} 节 · 已解锁 {Math.min(noteUnlocked, noteSteps.length)} 节）
                     </span>
                     <div style={{ display: 'inline-flex', gap: '6px' }}>
                       <button
@@ -1176,11 +1228,12 @@ export const StudyStudio: React.FC<Props> = ({
 
                   {notesMode === 'step' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {noteMdSections.map((s, i) => {
+                      {noteSteps.map((s, i) => {
                         const locked = i >= noteUnlocked;
                         const isCurrent = i === noteStepIdx;
-                        const isDone = Boolean(noteReadAck[i]) && isSectionPracticeDone(noteSections[i]?.section_id);
-                        const secId = noteSections[i]?.section_id;
+                        const secId = s.sectionId;
+                        const isDone =
+                          Boolean(noteReadAck[i]) && (!s.practiceRequired || isSectionPracticeDone(secId));
                         return (
                           <div
                             key={`${s.title}-${i}`}
@@ -1212,8 +1265,13 @@ export const StudyStudio: React.FC<Props> = ({
                               title={locked ? '先完成上一节（读完 + 做完本节练习）才能进入' : `进入：${s.title}`}
                             >
                               {locked ? '🔒' : isDone ? '✅' : isCurrent ? '▶' : '○'} {i + 1}. {s.title}
+                              {!s.practiceRequired && (
+                                <span style={{ marginLeft: '6px', fontSize: '11px', color: 'var(--asg-text-muted)' }}>
+                                  （只读）
+                                </span>
+                              )}
                             </button>
-                            {!locked && (
+                            {!locked && s.practiceRequired && (
                               <button
                                 type="button"
                                 disabled={!secId || sectionBusyId === secId}
@@ -1253,15 +1311,21 @@ export const StudyStudio: React.FC<Props> = ({
                 {notesMode === 'full' ? (
                   <HandoutReader
                     markdown={studyPackage.study_notes_markdown || ''}
+                    blockScope="full"
                     projectId={documentIr?.project_id}
                     studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
                     documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
                     printMode={handoutPrintMode}
                   />
+                ) : noteSteps.length === 0 ? (
+                  <div style={{ fontSize: '13px', color: 'var(--asg-text-muted)', padding: '24px 0' }}>
+                    正在按讲义结构切分小节…
+                  </div>
                 ) : (
                   <>
                     <HandoutReader
                       markdown={currentNoteSection?.body || ''}
+                      blockScope={currentNoteSectionId || `step-${noteStepIdx}`}
                       projectId={documentIr?.project_id}
                       studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
                       documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
@@ -1273,13 +1337,16 @@ export const StudyStudio: React.FC<Props> = ({
                       style={{ marginTop: '18px', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}
                     >
                       <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--asg-text-secondary)' }}>
-                        第 {noteStepIdx + 1} / {noteMdSections.length} 节 · 完成本节需两步：
+                        第 {noteStepIdx + 1} / {noteSteps.length} 节 ·{' '}
+                        {currentPracticeRequired ? '完成本节需两步：' : '本节为导览/小结（只读），读完即可进入下一节'}
                         <span style={{ color: noteReadAck[noteStepIdx] ? 'var(--asg-brand-primary)' : 'inherit' }}>
-                          {' '}① 已读完
+                          {currentPracticeRequired ? ' ① 已读完' : ' 已读完'}
                         </span>
-                        <span style={{ color: isSectionPracticeDone(currentNoteSectionId) ? 'var(--asg-brand-primary)' : 'inherit' }}>
-                          {' '}② 已做完本节练习
-                        </span>
+                        {currentPracticeRequired && (
+                          <span style={{ color: currentPracticeDone ? 'var(--asg-brand-primary)' : 'inherit' }}>
+                            {' '}② 已做完本节练习
+                          </span>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         <button
@@ -1299,30 +1366,32 @@ export const StudyStudio: React.FC<Props> = ({
                         >
                           {noteReadAck[noteStepIdx] ? '✓ 本节已读完' : '标记本节已读完'}
                         </button>
+                        {currentPracticeRequired && (
+                          <button
+                            type="button"
+                            disabled={!currentNoteSectionId || sectionBusyId === currentNoteSectionId}
+                            onClick={() => {
+                              if (!currentNoteSectionId) return;
+                              onChangeTab('section_practice');
+                              void openSectionPractice(currentNoteSectionId);
+                            }}
+                            style={{
+                              padding: '6px 14px',
+                              borderRadius: '9999px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: currentNoteSectionId ? 'pointer' : 'not-allowed',
+                              border: '1px solid var(--asg-brand-primary)',
+                              backgroundColor: 'var(--asg-brand-tint)',
+                              color: 'var(--asg-brand-primary)',
+                            }}
+                          >
+                            {currentPracticeDone ? '✓ 本节练习已完成' : '去做本节练习'}
+                          </button>
+                        )}
                         <button
                           type="button"
-                          disabled={!currentNoteSectionId || sectionBusyId === currentNoteSectionId}
-                          onClick={() => {
-                            if (!currentNoteSectionId) return;
-                            onChangeTab('section_practice');
-                            void openSectionPractice(currentNoteSectionId);
-                          }}
-                          style={{
-                            padding: '6px 14px',
-                            borderRadius: '9999px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: currentNoteSectionId ? 'pointer' : 'not-allowed',
-                            border: '1px solid var(--asg-brand-primary)',
-                            backgroundColor: 'var(--asg-brand-tint)',
-                            color: 'var(--asg-brand-primary)',
-                          }}
-                        >
-                          {isSectionPracticeDone(currentNoteSectionId) ? '✓ 本节练习已完成' : '去做本节练习'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!currentSectionReady || noteStepIdx >= noteMdSections.length - 1}
+                          disabled={!currentSectionReady || noteStepIdx >= noteSteps.length - 1}
                           onClick={() => {
                             const next = noteStepIdx + 1;
                             setNoteStepIdx(next);
@@ -1344,12 +1413,14 @@ export const StudyStudio: React.FC<Props> = ({
                             color: currentSectionReady ? '#FFFFFF' : 'var(--asg-text-muted)',
                           }}
                         >
-                          {noteStepIdx >= noteMdSections.length - 1 ? '已是最后一节' : '进入下一节 →'}
+                          {noteStepIdx >= noteSteps.length - 1 ? '已是最后一节' : '进入下一节 →'}
                         </button>
                       </div>
                       {!currentSectionReady && (
                         <div style={{ fontSize: '11.5px', color: 'var(--asg-text-muted)' }}>
-                          读完并做完本节练习后，「进入下一节」会自动解锁；想先整体通读可切到「整份预览」。
+                          {currentPracticeRequired
+                            ? '读完并做完本节练习后，「进入下一节」会自动解锁；想先整体通读可切到「整份预览」。'
+                            : '标记本节已读完后，「进入下一节」就会解锁；想先整体通读可切到「整份预览」。'}
                         </div>
                       )}
                     </div>
@@ -1376,16 +1447,16 @@ export const StudyStudio: React.FC<Props> = ({
                   分节练习 · 只考讲义里选中的这一节
                 </span>
                 <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
-                  共 {noteSections.length} 节
+                  共 {practiceSections.length} 节
                 </span>
               </div>
-              {noteSections.length === 0 ? (
+              {practiceSections.length === 0 ? (
                 <div style={{ fontSize: '12.5px', color: 'var(--asg-text-secondary)' }}>
                   当前讲义没有可切分的小节标题；请先确认讲义已生成。
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                  {noteSections.map((s, i) => {
+                  {practiceSections.map((s, i) => {
                     const isCur = s.section_id === activeSectionId;
                     const isBusy = sectionBusyId === s.section_id;
                     return (

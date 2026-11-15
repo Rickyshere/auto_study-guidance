@@ -711,6 +711,25 @@ mark.hl-red-wave {
   text-underline-offset: 4px;
   cursor: pointer;
 }
+mark.hl-yellow,
+mark.hl-green,
+mark.hl-red-wave {
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+mark[data-annotation-id]:hover {
+  filter: brightness(0.94) saturate(1.15);
+  outline: 1px dashed rgba(15, 23, 42, 0.28);
+  outline-offset: 1px;
+}
+.selection-action-pill.cancel-pill {
+  padding: 4px 8px;
+}
+.selection-action-pill.cancel-pill button {
+  min-width: auto;
+  padding: 0 6px;
+  white-space: nowrap;
+}
 .handout-svg .interactive-hotspot:hover {
   filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.6));
   cursor: pointer;

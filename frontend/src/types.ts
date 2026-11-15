@@ -412,6 +412,10 @@ export interface NoteSectionItem {
   title: string;
   level: number;
   char_count: number;
+  /** 该节的 Markdown 原文（含标题行）：逐节学习模式直接渲染这一段 */
+  markdown?: string;
+  /** 是否强制「做完本节练习」才放行下一节；导览类小节为 false */
+  practice_required?: boolean;
   has_practice: boolean;
 }
 

@@ -18,10 +18,18 @@ from app.schemas import ChapterNode, DocumentIR, QuestionFigureBlock, QuizPaper,
 from app.workflows.generator import normalize_markdown_math
 from app.workflows.visual_compiler import compile_figure_block_with_fallbacks
 
-_HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*$")
+_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*$")
 _SECTION_ID_RE = re.compile(r"[^a-z0-9]+")
 MAX_SECTIONS = 24
 EXCERPT_LIMIT = 2600
+# 少于这么多字的「节」当作空标题丢掉（正文太短也给不出题）
+MIN_SECTION_CHARS = 20
+# 「第 1 节 / 第三讲 / 第2课」这类标题才是真正可以出题的知识小节
+_SECTION_MARK_RE = re.compile(r"第\s*[0-9一二三四五六七八九十百]+\s*[节讲课]")
+# 这类小节只用来导览/说明，读完就该放行，不该卡练习
+_OPTIONAL_TITLE_RE = re.compile(
+    r"(学习地图|知识地图|思维导图|导览|导读|学习目标|学习路线|使用说明|讲义说明|前言|引言|序言|目录)"
+)
 
 
 def _slugify(title: str, index: int) -> str:
@@ -29,8 +37,29 @@ def _slugify(title: str, index: int) -> str:
     return f"sec_{index + 1:02d}" + (f"_{ascii_part[:24]}" if ascii_part else "")
 
 
+_SKIP_TITLE_WORDS = (
+    "参考答案",
+    "答案与解析",
+    "答案",
+    "目录",
+    "附录",
+    "单元检测",
+    "检测卷",
+    "单元基本功",
+    "期中",
+    "期末",
+    "试卷",
+    "作业",
+    "索引",
+)
+
+
 def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
-    """把讲义 Markdown 切成「节」：优先 H1，其次 H2；忽略"参考答案"等尾部结构。"""
+    """把讲义 Markdown 切成「节」：优先 H1，其次 H2；忽略"参考答案"等尾部结构。
+
+    每一节同时带 `markdown`（标题 + 正文，前端按节渲染就用这一段，保证和分节练习
+    一一对应）和 `practice_required`（导览类小节读完即可，不强制做题）。
+    """
     if not (markdown or "").strip():
         return []
 
@@ -58,33 +87,22 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
         # 只有一两个 H1 时退化到 H2，让分节更有意义
         top = [h for h in headings if h[0] <= min_level + 1]
 
-    skip_words = (
-        "参考答案",
-        "答案与解析",
-        "目录",
-        "附录",
-        "单元检测",
-        "检测卷",
-        "期中",
-        "期末",
-        "试卷",
-        "作业",
-    )
-    _SECTION_MARK_RE = re.compile(r"第\s*[0-9一二三四五六七八九十百]+\s*[节讲课篇]")
     sections: List[Dict[str, Any]] = []
     for order, (level, line_no, title) in enumerate(top):
-        if any(w in title for w in skip_words):
+        if any(w in title for w in _SKIP_TITLE_WORDS):
             continue
         end_line = top[order + 1][1] if order + 1 < len(top) else len(lines)
-        body = "\n".join(lines[line_no + 1 : end_line]).strip()
+        body = "\n".join(lines[line_no + 1 : end_line])
         body = re.sub(r"@@ASG_PAGE_BREAK@@", "", body).strip()
-        if len(body) < 60:
+        if len(body) < MIN_SECTION_CHARS:
             continue
+        full = re.sub(r"@@ASG_PAGE_BREAK@@", "", "\n".join(lines[line_no:end_line])).strip()
         sections.append(
             {
                 "section_id": _slugify(title, len(sections)),
                 "title": title,
                 "level": level,
+                "markdown": full,
                 "excerpt": body[:EXCERPT_LIMIT],
                 "char_count": len(body),
             }
@@ -92,15 +110,28 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
         if len(sections) >= MAX_SECTIONS:
             break
 
-    # 第一个标题通常是讲义自己的大标题（如「第02章 … 详细自学案」），不是可练的小节
-    if len(sections) >= 2:
-        first = sections[0]
-        rest = sections[1:]
-        rest_are_sections = sum(1 for s in rest if _SECTION_MARK_RE.search(s["title"])) >= max(
-            1, len(rest) // 2
-        )
-        if rest_are_sections and not _SECTION_MARK_RE.search(first["title"]):
-            sections = rest
+    if len(sections) < 2:
+        for s in sections:
+            s["practice_required"] = True
+        return sections
+
+    # 第一个标题有时是讲义自己的大标题（如「第02章 … 详细自学案」），不是可学的小节
+    first = sections[0]
+    rest = sections[1:]
+    rest_are_sections = sum(1 for s in rest if _SECTION_MARK_RE.search(s["title"])) >= max(
+        1, len(rest) // 2
+    )
+    doc_title_like = bool(re.search(r"第\s*[0-9一二三四五六七八九十百]+\s*[章篇部]", first["title"]))
+    if rest_are_sections and not _SECTION_MARK_RE.search(first["title"]) and doc_title_like:
+        sections = rest
+
+    has_section_marks = any(_SECTION_MARK_RE.search(s["title"]) for s in sections)
+    for s in sections:
+        if has_section_marks:
+            # 结构清晰的讲义：只给「第 N 节」出题，导览页只读
+            s["practice_required"] = bool(_SECTION_MARK_RE.search(s["title"]))
+        else:
+            s["practice_required"] = not _OPTIONAL_TITLE_RE.search(s["title"])
     return sections
 
 

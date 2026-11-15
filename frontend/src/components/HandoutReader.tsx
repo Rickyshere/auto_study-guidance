@@ -14,6 +14,8 @@ const BLOCK_SELECTOR = 'p, li, blockquote, .math-block, table, h1, h2, h3, h4, p
 
 interface Props {
   markdown: string;
+  /** 块 id 命名空间：同 id 的块在两处渲染（逐节 / 整份）里能对上，避免批注错位 */
+  blockScope?: string;
   projectId?: string;
   studyMode: string;
   documentTitle: string;
@@ -30,6 +32,12 @@ interface PillState {
   end: number;
 }
 
+interface CancelState {
+  annotationId: string;
+  left: number;
+  top: number;
+}
+
 interface LiveCard {
   id: string;
   title: string;
@@ -38,6 +46,7 @@ interface LiveCard {
   anchorTop: number;
   pinned: boolean;
   quote: string;
+  blockId: string;
 }
 
 const COLOR_CLASS: Record<AnnotationColor, string> = {
@@ -48,6 +57,25 @@ const COLOR_CLASS: Record<AnnotationColor, string> = {
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** 块文字的短哈希：同一段文字在「逐节学习」和「整份预览」里拿到同一个块 id */
+function blockHash(el: Element): string {
+  const text = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+  let h = 5381;
+  for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) >>> 0;
+  return h.toString(36).slice(-7);
+}
+
+/** 把某条批注对应的 <mark> 还原成纯文本（取消高亮时用） */
+function unwrapAnnotation(root: ParentNode, annotationId: string) {
+  root.querySelectorAll(`mark[data-annotation-id="${annotationId}"]`).forEach((mark) => {
+    const parent = mark.parentNode;
+    if (!parent) return;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+    if (typeof (parent as Element).normalize === 'function') (parent as Element).normalize();
+  });
 }
 
 /** 某个文本节点位置在块内的字符偏移 */
@@ -105,6 +133,7 @@ function wrapBlockRange(block: Element, start: number, end: number, cls: string,
 
 export const HandoutReader: React.FC<Props> = ({
   markdown,
+  blockScope = 'main',
   projectId,
   studyMode,
   documentTitle,
@@ -113,13 +142,18 @@ export const HandoutReader: React.FC<Props> = ({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [annotations, setAnnotations] = useState<HandoutAnnotation[]>([]);
+  const [renderedBlockIds, setRenderedBlockIds] = useState<Set<string> | null>(null);
   const [pill, setPill] = useState<PillState | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CancelState | null>(null);
   const [liveCards, setLiveCards] = useState<LiveCard[]>([]);
   const [busyAction, setBusyAction] = useState<MicroTutorAction | null>(null);
   const [sideHeights, setSideHeights] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<string>('');
 
-  const studyKey = useMemo(() => `${projectId || 'p'}:${markdown.length}`, [projectId, markdown.length]);
+  const studyKey = useMemo(
+    () => `${projectId || 'p'}:${blockScope}:${markdown.length}`,
+    [projectId, blockScope, markdown.length]
+  );
 
   // 1) 载入既有批注
   useEffect(() => {
@@ -143,9 +177,21 @@ export const HandoutReader: React.FC<Props> = ({
     const blocks = Array.from(root.querySelectorAll(BLOCK_SELECTOR)).filter(
       (node) => !node.closest('table') || node.tagName.toLowerCase() === 'table'
     );
-    blocks.forEach((node, idx) => {
-      node.setAttribute('data-block-id', `blk-${String(idx).padStart(4, '0')}`);
+    const seen = new Map<string, number>();
+    const ids: string[] = [];
+    blocks.forEach((node) => {
+      const key = `blk-${blockHash(node)}`;
+      const dup = seen.get(key) || 0;
+      seen.set(key, dup + 1);
+      const id = `${key}-${dup}`;
+      node.setAttribute('data-block-id', id);
+      ids.push(id);
     });
+    const present = new Set(ids);
+    // 只有当前渲染出来的段落属于「本节」；其余小节的高亮/页边卡不在这里显示
+    setRenderedBlockIds((prev) =>
+      prev && prev.size === present.size && ids.every((id) => prev.has(id)) ? prev : present
+    );
     root.querySelectorAll('svg').forEach((svg, figIdx) => {
       svg.setAttribute('data-figure-id', `fig-${figIdx + 1}`);
       svg.classList.add('handout-svg');
@@ -160,6 +206,7 @@ export const HandoutReader: React.FC<Props> = ({
     // 回填已存高亮（按块 id + 原文引用重定位）
     for (const ann of annotations) {
       if (ann.target_type !== 'TEXT_RANGE' || !ann.anchor.block_id) continue;
+      if (!present.has(ann.anchor.block_id)) continue;
       if (root.querySelector(`mark[data-annotation-id="${ann.annotation_id}"]`)) continue;
       const block = root.querySelector(`[data-block-id="${ann.anchor.block_id}"]`);
       if (!block) continue;
@@ -218,13 +265,19 @@ export const HandoutReader: React.FC<Props> = ({
       const target = e.target as HTMLElement | null;
       if (target?.closest('.selection-action-pill')) return;
       if (!target?.closest('.handout-workspace')) setPill(null);
+      if (!target?.closest('mark[data-annotation-id]')) setCancelTarget(null);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, []);
 
   // 4) 调用 Agent 5
-  const requestCard = async (action: MicroTutorAction, focus: string, context: string) => {
+  const requestCard = async (
+    action: MicroTutorAction,
+    focus: string,
+    context: string,
+    blockId = ''
+  ) => {
     if (!projectId) return;
     setBusyAction(action);
     setStatus('');
@@ -252,6 +305,7 @@ export const HandoutReader: React.FC<Props> = ({
           anchorTop,
           pinned: false,
           quote: focus,
+          blockId,
         },
       ]);
       setStatus(res.fallback ? '当前 AI 引擎不可用，已给出本地兜底提示' : '');
@@ -301,9 +355,10 @@ export const HandoutReader: React.FC<Props> = ({
       setStatus(e?.message || '批注保存失败');
     }
     window.getSelection()?.removeAllRanges();
+    const quote = pill.quote;
     setPill(null);
     if (action !== 'EXPLAIN_SIMPLE' || color !== 'AMBER_YELLOW') {
-      await requestCard(action, pill.quote, block?.textContent?.slice(0, 600) || '');
+      await requestCard(action, quote, block?.textContent?.slice(0, 600) || '', pill.blockId);
     }
   };
 
@@ -314,7 +369,7 @@ export const HandoutReader: React.FC<Props> = ({
       project_id: projectId,
       target_type: 'TEXT_RANGE',
       anchor: {
-        block_id: '',
+        block_id: card.blockId,
         start_offset: 0,
         end_offset: 0,
         exact_quote: card.quote,
@@ -341,9 +396,7 @@ export const HandoutReader: React.FC<Props> = ({
   };
 
   // 6) SVG 热点 → 关联段落高亮 + 看图说话
-  const handleNodeClick = async (e: React.MouseEvent) => {
-    const target = (e.target as Element | null)?.closest('[data-node-id]');
-    if (!target) return;
+  const runNodeAction = async (target: Element) => {
     const concept = target.getAttribute('data-concept') || '';
     const linked = target.getAttribute('data-linked-block');
     bodyRef.current?.querySelectorAll('.block-linked-active').forEach((el) => el.classList.remove('block-linked-active'));
@@ -351,13 +404,41 @@ export const HandoutReader: React.FC<Props> = ({
       const block = bodyRef.current?.querySelector(`[data-block-id="${linked}"]`);
       block?.classList.add('block-linked-active');
     }
-    await requestCard('EXPLAIN_SVG_NODE', concept || '图示节点', concept);
+    const ownerBlock = target.closest('[data-block-id]') as HTMLElement | null;
+    await requestCard('EXPLAIN_SVG_NODE', concept || '图示节点', concept, ownerBlock?.dataset.blockId || '');
   };
 
-  // 7) 页边卡片防重叠
+  // 6b) 点正文：SVG 热点 → 看图说话；点已高亮的地方 → 弹出「取消高亮」
+  const handleBodyClick = (e: React.MouseEvent) => {
+    const el = e.target as Element | null;
+    const hotspot = el?.closest('[data-node-id]');
+    if (hotspot) {
+      void runNodeAction(hotspot);
+      return;
+    }
+    const mark = el?.closest('mark[data-annotation-id]') as HTMLElement | null;
+    if (mark) {
+      const rect = mark.getBoundingClientRect();
+      setCancelTarget({
+        annotationId: mark.dataset.annotationId || '',
+        left: Math.min(window.innerWidth - 60, Math.max(60, rect.left + rect.width / 2)),
+        top: Math.max(24, rect.top - 8),
+      });
+      return;
+    }
+    setCancelTarget(null);
+  };
+
+  // 7) 页边卡片防重叠（只显示属于当前这一节的批注）
+  const visibleAnnotations = useMemo(() => {
+    if (!renderedBlockIds) return annotations;
+    return annotations.filter(
+      (a) => !a.anchor.block_id || renderedBlockIds.has(a.anchor.block_id)
+    );
+  }, [annotations, renderedBlockIds]);
   const pinnedCards = useMemo(
-    () => annotations.filter((a) => a.margin_card.is_pinned),
-    [annotations]
+    () => visibleAnnotations.filter((a) => a.margin_card.is_pinned),
+    [visibleAnnotations]
   );
   const layout: MarginCardLayout[] = useMemo(() => {
     const cards = [
@@ -384,9 +465,20 @@ export const HandoutReader: React.FC<Props> = ({
     try {
       await api.deleteAnnotation(projectId, annotationId);
       setAnnotations((prev) => prev.filter((a) => a.annotation_id !== annotationId));
+      if (bodyRef.current) unwrapAnnotation(bodyRef.current, annotationId);
     } catch (e: any) {
       setStatus(e?.message || '删除失败');
     }
+  };
+
+  /** 取消一条高亮：撤掉 mark + 删掉后端批注（页面上不再残留黄色块） */
+  const cancelHighlight = async () => {
+    if (!cancelTarget) return;
+    const id = cancelTarget.annotationId;
+    setCancelTarget(null);
+    if (bodyRef.current) unwrapAnnotation(bodyRef.current, id);
+    await removeAnnotation(id);
+    setStatus('已取消这条高亮，可以重新划选');
   };
 
   return (
@@ -394,7 +486,7 @@ export const HandoutReader: React.FC<Props> = ({
       ref={wrapRef}
       className={`handout-workspace ${printMode === 'cornell' ? 'print-mode-cornell' : 'print-mode-clean'}`}
     >
-      <div className="handout-main" onMouseUp={handleSelection} onTouchEnd={handleSelection} onClick={handleNodeClick}>
+      <div className="handout-main" onMouseUp={handleSelection} onTouchEnd={handleSelection} onClick={handleBodyClick}>
         <div className="asg-academic-prose handout-body" ref={bodyRef}>
           <MathMarkdown>{markdown}</MathMarkdown>
         </div>
@@ -503,6 +595,22 @@ export const HandoutReader: React.FC<Props> = ({
           </button>
           <button type="button" title="考我一下" disabled={Boolean(busyAction)} onClick={() => applyHighlight('AMBER_YELLOW', 'MICRO_QUIZ')}>
             <Bug className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {cancelTarget && (
+        <div
+          className="selection-action-pill cancel-pill"
+          style={{ left: `${cancelTarget.left}px`, top: `${cancelTarget.top}px` }}
+        >
+          <button type="button" title="取消这条高亮" onClick={() => void cancelHighlight()}>
+            <Trash2 className="w-3.5 h-3.5" />
+            <span style={{ fontSize: '12px', fontWeight: 700, marginLeft: '4px' }}>取消高亮</span>
+          </button>
+          <span className="pill-divider" />
+          <button type="button" title="关闭" onClick={() => setCancelTarget(null)}>
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}

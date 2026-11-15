@@ -967,6 +967,8 @@ async def list_note_sections(project_id: str) -> Dict[str, Any]:
                 "title": s["title"],
                 "level": s["level"],
                 "char_count": s["char_count"],
+                "markdown": s.get("markdown", ""),
+                "practice_required": bool(s.get("practice_required", True)),
                 "has_practice": s["section_id"] in cached,
             }
             for s in sections
