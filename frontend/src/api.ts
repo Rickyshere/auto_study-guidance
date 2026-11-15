@@ -239,6 +239,16 @@ export const api = {
   deleteProject: (projectId: string) =>
     requestJson<{ status: string }>(`/api/projects/${projectId}`, { method: 'DELETE' }),
 
+  renameProject: (projectId: string, title: string) =>
+    requestJson<{ status: string; workspace_title: string; display_name: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/rename`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }
+    ),
+
   revokeStudyPackage: (projectId: string) =>
     requestJson<{ status: string; blueprint?: StudyBlueprint | null }>(
       `/api/projects/${encodeURIComponent(projectId)}/package`,

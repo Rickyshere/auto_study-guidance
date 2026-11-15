@@ -1,14 +1,46 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.router.cloud_provider import call_cloud_llm
 from app.router.harness_provider import HarnessCancelToken, run_cli_harness
 from app.schemas import ProviderSelection, ProviderType, RouterSettings, StageName
+
+
+def _prompt_fingerprint(text: str) -> str:
+    """12-hex content digest + byte length, so any generated artifact can be traced back
+    to the exact prompt version that produced it."""
+    raw = (text or "").encode("utf-8")
+    return f"{len(raw)}B/{hashlib.sha256(raw).hexdigest()[:12]}"
+
+
+def _maybe_snapshot_prompt(stage: str, system_prompt: str, user_prompt: str) -> None:
+    """Opt-in full-prompt snapshot: set ASG_PROMPT_SNAPSHOT_DIR to dump every request.
+
+    Off by default so a normal run leaves no extra files behind.
+    """
+    snap_dir = (os.environ.get("ASG_PROMPT_SNAPSHOT_DIR") or "").strip()
+    if not snap_dir:
+        return
+    try:
+        target = Path(snap_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        digest = hashlib.sha256((system_prompt + "\x00" + user_prompt).encode("utf-8")).hexdigest()[:8]
+        out = target / f"{stamp}_{stage}_{digest}.md"
+        out.write_text(
+            f"<!-- stage: {stage} -->\n\n[SYSTEM]\n{system_prompt}\n\n[USER]\n{user_prompt}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 _LATEX_JSON_CMD_RE = re.compile(
@@ -158,11 +190,19 @@ class ModelRouter:
             provider = self.settings.active_provider if self.settings.active_provider in ("harness", "cloud") else "harness"
 
         effective_system_prompt = system_prompt
+        soul_note = ""
         if soul_file_path and soul_file_path.is_file():
             soul_raw = soul_file_path.read_text(encoding="utf-8", errors="replace").strip()
-            soul_tag = f"[Uploaded Soul File: {soul_file_path.name}]\n{soul_raw}"
-            if soul_tag not in effective_system_prompt:
-                effective_system_prompt = f"{soul_tag}\n\n{system_prompt}".strip()
+            soul_note = f" · soul {soul_file_path.name}/{_prompt_fingerprint(soul_raw)}"
+            # 只有内容尚未内联时才拼接，避免同一份 soul 重复下发。
+            if soul_raw and soul_raw not in effective_system_prompt:
+                effective_system_prompt = f"{soul_raw}\n\n{system_prompt}".strip()
+
+        self.routing_trace[f"{stage} · prompt"] = (
+            f"system {_prompt_fingerprint(effective_system_prompt)} · "
+            f"task {_prompt_fingerprint(user_prompt)}{soul_note}"
+        )
+        _maybe_snapshot_prompt(stage, effective_system_prompt, user_prompt)
 
         max_retries = max(0, int(getattr(self.settings.harness_config, "max_retries", 2)))
         try:

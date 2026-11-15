@@ -88,7 +88,20 @@ def test_presets_list():
     assert resp.status_code == 200
     presets = resp.json()
     ids = {p["preset_id"] for p in presets}
-    assert {"in_class_practice", "sync_practice", "self_test_exam", "self_study_guide", "exam_cheatsheet", "custom"} <= ids
+    # 产品只暴露三个场景预设；历史 ID 由 get_preset() 的别名表兼容。
+    assert ids == {"A_beginner", "B_consolidate", "C_sprint"}
+
+    from app.workflows.presets import get_preset
+
+    for legacy_id, scenario in {
+        "self_study_guide": "A_beginner",
+        "in_class_practice": "A_beginner",
+        "sync_practice": "B_consolidate",
+        "self_test_exam": "B_consolidate",
+        "exam_cheatsheet": "C_sprint",
+        "custom": "A_beginner",
+    }.items():
+        assert get_preset(legacy_id).preset_id == scenario
 
 
 def test_pptx_upload_negotiate_confirm_generate(tmp_path: Path):
@@ -109,18 +122,18 @@ def test_pptx_upload_negotiate_confirm_generate(tmp_path: Path):
     assert len(detail["document_ir"]["all_assets"]) >= 1
 
     try:
-        # Stage 1: Negotiate with custom requirements + preset "self_test_exam"
+        # Stage 1: Negotiate with custom requirements + preset "B_consolidate"
         neg = client.post(
             f"/api/projects/{project_id}/negotiate",
             json={
-                "preset_id": "self_test_exam",
+                "preset_id": "B_consolidate",
                 "user_prompt": "重点考察第1章，出5道选择题和2道简答题，满分100分",
                 "current_blueprint": detail["blueprint"],
             },
         )
         assert neg.status_code == 200
         bp = neg.json()
-        assert bp["preset_id"] == "self_test_exam"
+        assert bp["preset_id"] == "B_consolidate"
         assert bp["deliverables"]["mcq_count"] == 5
         assert bp["deliverables"]["short_answer_count"] == 2
         assert bp["ai_feedback_message"]
@@ -133,20 +146,27 @@ def test_pptx_upload_negotiate_confirm_generate(tmp_path: Path):
         assert gen.status_code == 200
         pkg = gen.json()
         assert pkg["blueprint_used"]["confirmed"] is True
-        assert "TCP" in pkg["study_notes_markdown"] or "网络" in pkg["study_notes_markdown"]
+        # 预设 B 不含详细自学案，内容回归要把速记表一起纳入（两者都必须体现课件原文）
+        delivered_text = (pkg["study_notes_markdown"] or "") + "\n" + (pkg["cheatsheet_markdown"] or "")
+        assert any(k in delivered_text for k in ("TCP", "网络", "OSI")), "生成内容未体现课件原文"
         assert pkg["cheatsheet_markdown"]
         assert len(pkg["quiz_paper"]["questions"]) == 5 + bp["deliverables"]["fill_blank_count"] + 2
         assert "flowchart" in pkg["mindmap_mermaid"]
 
         # Quick generate with "in_class_practice" (随堂练习) & "sync_practice" (同步练习)
-        for pid in ("in_class_practice", "sync_practice"):
+        # 历史 preset id 会归一化到三个场景预设，这里按归一化后的结果校验
+        for legacy_pid, expected_scenario in (
+            ("in_class_practice", "A_beginner"),
+            ("sync_practice", "B_consolidate"),
+        ):
             qgen = client.post(
                 f"/api/projects/{project_id}/quick-generate",
-                json={"preset_id": pid, "stream": False},
+                json={"preset_id": legacy_pid, "stream": False},
             )
             assert qgen.status_code == 200
             qpkg = qgen.json()
-            assert qpkg["blueprint_used"]["preset_id"] == pid
+            assert qpkg["blueprint_used"]["preset_id"] == expected_scenario
+            assert qpkg["blueprint_used"]["scenario_type"] == expected_scenario
             assert len(qpkg["quiz_paper"]["questions"]) >= 5
     finally:
         client.delete(f"/api/projects/{project_id}")
@@ -339,7 +359,7 @@ def test_math_normalization_study_guide_examples_and_pdf_exports():
         assert abs(doc_a4[0].rect.width - 595) < 5
         a4_text = "\n".join(p.get_text() for p in doc_a4)
         assert "单项选择题" in a4_text
-        assert "参考答案与教材溯源解析" in a4_text
+        assert "参考答案与解析" in a4_text
         doc_a4.close()
 
         # 2. Quiz A3 two-column sealed PDF with answers
@@ -353,7 +373,7 @@ def test_math_normalization_study_guide_examples_and_pdf_exports():
         assert abs(doc_a3[0].rect.height - 842) < 5
         a3_text = "\n".join(p.get_text() for p in doc_a3)
         assert "第 1 栏" in a3_text
-        assert "参考答案与教材溯源解析" in a3_text
+        assert "参考答案与解析" in a3_text
         doc_a3.close()
 
         # 3. Self-study guide PDF (A4 printable booklet with examples & solutions)
@@ -418,39 +438,47 @@ def test_global_quality_audit_activation_rule():
     from app.router.routing_engine import ModelRouter
     from app.schemas import ProviderSelection, RouterSettings
 
-    # 1. Pure heuristic mode -> global_quality_audit MUST be disabled
-    s_heur = RouterSettings(routing_mode="single", active_provider="heuristic", enable_quality_audit=True)
-    r_heur = ModelRouter(s_heur)
-    assert r_heur.is_non_heuristic_active() is False
-    assert r_heur.resolve_quality_audit_provider() is None
+    # 1. 质检总开关关闭 -> 不做全局验收
+    s_off = RouterSettings(routing_mode="single", active_provider="harness", enable_quality_audit=False)
+    assert ModelRouter(s_off).resolve_quality_audit_provider() is None
 
-    # 2. Smart stage with all generation stages set to heuristic -> disabled even if global_quality_audit is harness
-    s_smart_heur = RouterSettings(
-        routing_mode="smart_stage",
-        active_provider="heuristic",
-        enable_quality_audit=True,
-        stage_mapping={
-            "vision_ocr": ProviderSelection(provider="heuristic"),
-            "requirement_negotiation": ProviderSelection(provider="heuristic"),
-            "notes_and_cheatsheet": ProviderSelection(provider="heuristic"),
-            "quiz_generation": ProviderSelection(provider="heuristic"),
-            "mindmap_generation": ProviderSelection(provider="heuristic"),
-            "global_quality_audit": ProviderSelection(provider="heuristic"),
-        },
-    )
-    r_smart_heur = ModelRouter(s_smart_heur)
-    assert r_smart_heur.is_non_heuristic_active() is False
-    assert r_smart_heur.resolve_quality_audit_provider() is None
-
-    # 3. Non-heuristic single provider (e.g. cloud / harness / local) -> enabled when switch is True, disabled when False
+    # 2. single 模式：质检跟随 active_provider
     s_cloud = RouterSettings(routing_mode="single", active_provider="cloud", enable_quality_audit=True)
     r_cloud = ModelRouter(s_cloud)
-    assert r_cloud.is_non_heuristic_active() is True
     resolved = r_cloud.resolve_quality_audit_provider()
     assert resolved is not None and resolved.provider == "cloud"
+    assert r_cloud.is_non_heuristic_active() is True
 
-    s_cloud_off = s_cloud.model_copy(update={"enable_quality_audit": False})
-    assert ModelRouter(s_cloud_off).resolve_quality_audit_provider() is None
+    # 3. smart_stage：优先使用 stage_mapping 里显式配置的质检通道
+    r_smart = ModelRouter(
+        RouterSettings(
+            routing_mode="smart_stage",
+            active_provider="harness",
+            enable_quality_audit=True,
+            stage_mapping={
+                "requirement_negotiation": ProviderSelection(provider="harness"),
+                "notes_and_cheatsheet": ProviderSelection(provider="harness"),
+                "quiz_generation": ProviderSelection(provider="harness"),
+                "mindmap_generation": ProviderSelection(provider="harness"),
+                "global_quality_audit": ProviderSelection(provider="cloud"),
+            },
+        )
+    )
+    assert r_smart.resolve_quality_audit_provider().provider == "cloud"
+
+    # 4. smart_stage 未显式配置质检 -> 回退到任一已配置的生成阶段，而不是 harness 兜底
+    r_fallback = ModelRouter(
+        RouterSettings(
+            routing_mode="smart_stage",
+            active_provider="harness",
+            enable_quality_audit=True,
+            stage_mapping={"notes_and_cheatsheet": ProviderSelection(provider="cloud")},
+        )
+    )
+    assert r_fallback.resolve_quality_audit_provider().provider == "cloud"
+    # 质检 stage 与生成 stage 走同一套解析
+    assert r_fallback.resolve_stage("global_quality_audit").provider == "cloud"
+    assert r_fallback.resolve_stage("quiz_generation").provider == "harness"
 
 
 
@@ -684,9 +712,12 @@ def test_refined_quiz_and_cli_prompts_and_latex_json_parsing():
 
     quiz_sys, quiz_user = build_quiz_prompts(doc_ir, chapters, bp, "正文内容")
     assert "基础达标" in quiz_sys and "能力提升" in quiz_sys and "拓展探究" in quiz_sys
-    assert "干扰项" in quiz_sys and "真实高频误区" in quiz_sys
+    # 命题铁律 + JSON 结构契约（干扰项策略在 Mode B 的 B1 任务书里，A 模式走通用铁律）
+    assert "严禁低质送分题" in quiz_sys and "4 个选项" in quiz_sys
+    assert "卷首信息栏" in quiz_sys
     assert "【考点定位】" in quiz_sys and "【详解与推导】" in quiz_sys and "【易错点拨】" in quiz_sys
-    assert "\\\\frac" in quiz_sys and "\\\\theta" in quiz_sys
+    # JSON 字符串内的 LaTeX 反斜杠必须双写（提示词里给了 `\\frac` 的正例）
+    assert "\\\\frac" in quiz_sys and "$$" in quiz_sys
     assert "[ch_1] 《梯度下降与反向传播》" in quiz_user and "P1-8" in quiz_user
     assert "[ch_2] 《正则化与泛化边界》" in quiz_user and "P9-16" in quiz_user
     assert "单选题 4 道" in quiz_user and "填空题 2 道" in quiz_user and "简答/分析题 2 道" in quiz_user
@@ -694,8 +725,12 @@ def test_refined_quiz_and_cli_prompts_and_latex_json_parsing():
     assert "基础达标约" in quiz_user and "拓展探究约" in quiz_user
 
     notes_sys, notes_user = build_notes_prompts(doc_ir, chapters, bp, "正文内容")
-    for tag in ("【题目】", "【命题意图】", "【思路引导】", "【详细解答】", "【易错点拨与变式】"):
+    for tag in ("【题目】", "【破题眼", "【规范作答步骤", "【新手避坑指南】"):
         assert tag in notes_sys
+    # 全局协议：分页标记受支持，其它 HTML 标签禁止（导出器会原样印出文字）
+    assert '<div class="page-break"></div>' in notes_sys
+    assert "禁止输出任何其它 HTML 标签" in notes_sys
+    assert "__________" in notes_sys
     assert "[ch_1]" in notes_user and "[ch_2]" in notes_user
 
     cli_wrapped = _build_cli_prompt(quiz_sys, quiz_user)

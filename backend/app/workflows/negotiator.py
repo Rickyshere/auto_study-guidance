@@ -97,11 +97,23 @@ async def negotiate_study_blueprint(
 
     raw_deliv = dict(data.get("deliverables") or base_bp.deliverables.model_dump())
     raw_deliv["scenario_type"] = preset.scenario_type
-    if base_bp.deliverables.selected_items:
-        # Preserve user's explicit deliverable checkboxes unless negotiate specifically updates them reasonably
-        valid_item_ids = {o.item_id for o in SCENARIO_ITEMS_MAP.get(preset.scenario_type, [])}
-        returned_items = [x for x in (raw_deliv.get("selected_items") or []) if x in valid_item_ids]
-        raw_deliv["selected_items"] = returned_items or list(base_bp.deliverables.selected_items)
+    # 切换场景时不能沿用旧场景的勾选项：A 的 deliverable id 在 B 里可能一个都不合法，
+    # 过滤后只剩 cheatsheet/mindmap，会把题库和讲义静默关掉。此时以新场景的默认勾选为基线。
+    scenario_changed = (base_bp.scenario_type or "") != preset.scenario_type
+    base_items: List[str] = list(
+        preset.default_deliverables.selected_items
+        if scenario_changed
+        else (base_bp.deliverables.selected_items or [])
+    )
+    # 用户勾选是显式意图，AI 只能补充、不能静默删除（否则「出 5 道选择题」的需求会被
+    # 一个只返回 cheatsheet/mindmap 的方案悄悄吃掉）。取并集，去重后交给 sync_* 统一排序。
+    valid_item_ids = {o.item_id for o in SCENARIO_ITEMS_MAP.get(preset.scenario_type, [])}
+    returned_items = [x for x in (raw_deliv.get("selected_items") or []) if x in valid_item_ids]
+    merged_items = list(dict.fromkeys([x for x in base_items if x in valid_item_ids] + returned_items))
+    if merged_items:
+        raw_deliv["selected_items"] = merged_items
+    elif raw_deliv.get("selected_items"):
+        raw_deliv["selected_items"] = returned_items
 
     try:
         deliverables = sync_deliverable_flags_with_items(DeliverableConfig.model_validate(raw_deliv))

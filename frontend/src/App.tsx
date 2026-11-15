@@ -498,6 +498,31 @@ export function App() {
     await refreshProjects();
   };
 
+  /** 回到初始界面，准备新建另一份资料 */
+  const handleNewWorkspace = () => {
+    setErrorMsg(null);
+    setOcrProgress(null);
+    setExamProgress(null);
+    setDocumentIr(null);
+    setBlueprint(null);
+    setStudyPackage(null);
+    setWorkflowStep(1);
+    setActiveMainView('workflow');
+    setUploadMode('courseware');
+  };
+
+  const handleRenameProject = async (projectId: string, title: string) => {
+    try {
+      await api.renameProject(projectId, title);
+      if (documentIr?.project_id === projectId) {
+        setDocumentIr({ ...documentIr, workspace_title: title });
+      }
+      await refreshProjects();
+    } catch (e: any) {
+      setErrorMsg(e?.message || '重命名工作区失败');
+    }
+  };
+
   const handleToggleChapter = (chapterId: string) => {
     if (!blueprint) return;
     const exists = blueprint.selected_chapter_ids.includes(chapterId);
@@ -860,7 +885,7 @@ export function App() {
                   className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
                   style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  v1.1.0
+                  v1.2.0
                 </span>
               </div>
               <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
@@ -1015,16 +1040,11 @@ export function App() {
                 selectedChapterIds={blueprint?.selected_chapter_ids || []}
                 onToggleChapter={handleToggleChapter}
                 onSelectAllChapters={handleSelectAllChapters}
-                onUploadFile={handleUploadFile}
-                onLoadDemo={handleLoadDemo}
-                onUploadExamFile={handleUploadExamFile}
-                onLoadDemoExam={handleLoadDemoExam}
-                uploadMode={uploadMode}
-                onChangeUploadMode={setUploadMode}
-                uploading={uploading}
                 projects={projects}
                 onOpenProject={handleOpenProject}
                 onDeleteProject={handleDeleteProject}
+                onNewWorkspace={handleNewWorkspace}
+                onRenameProject={handleRenameProject}
                 hasStudyPackage={Boolean(studyPackage)}
                 isWorkflowActive={activeMainView === 'workflow'}
                 onReconfigureGenerate={() => {
@@ -1054,7 +1074,7 @@ export function App() {
                       className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.1.0
+                      v1.2.0
                     </span>
                   </div>
                   <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: 'var(--text-secondary)' }}>

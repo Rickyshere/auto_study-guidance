@@ -179,6 +179,8 @@ class DocumentIR(BaseModel):
     project_id: str
     project_type: ProjectType = "courseware"
     filename: str
+    # 用户在「工作区」里自定义的显示名；为空时回退到 filename。
+    workspace_title: str = ""
     file_type: str
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     total_pages_or_slides: int = 0
@@ -407,6 +409,7 @@ class ProjectSummary(BaseModel):
     project_id: str
     project_type: ProjectType = "courseware"
     filename: str
+    workspace_title: str = ""
     file_type: str
     created_at: str
     total_pages_or_slides: int

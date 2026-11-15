@@ -161,6 +161,8 @@ export interface DocumentIR {
   project_id: string;
   project_type?: ProjectType;
   filename: string;
+  /** 用户自定义的工作区名称；为空时回退到 filename */
+  workspace_title?: string;
   file_type: string;
   created_at: string;
   total_pages_or_slides: number;
@@ -364,6 +366,8 @@ export interface ProjectSummary {
   project_id: string;
   project_type?: ProjectType;
   filename: string;
+  /** 用户自定义的工作区名称；为空时回退到 filename */
+  workspace_title?: string;
   file_type: string;
   created_at: string;
   total_pages_or_slides: number;

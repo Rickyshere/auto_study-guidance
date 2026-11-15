@@ -20,6 +20,7 @@ from app.workflows.presets import sync_deliverable_flags_with_items
 from app.workflows.souls import (
     build_courseware_deliverable_soul,
     get_courseware_soul_label,
+    get_deliverable_soul_filename,
 )
 
 ProgressCallback = Optional[Callable[[str, int, str], Awaitable[None]]]
@@ -568,7 +569,8 @@ def build_quiz_prompts(
         "JSON 结构契约：\n"
         "{\n"
         '  "title": "试卷/练习标题",\n'
-        '  "instructions": "作答说明（含题型题量、总分、建议用时及打印答题说明）",\n'
+        '  "instructions": "卷首信息栏 + 作答说明（试卷标题、适用章节、题型题量、总分、建议用时、姓名/日期/得分填写栏）",'
+        "\n"
         '  "questions": [\n'
         "    {\n"
         '      "id": "q_1",\n'
@@ -878,7 +880,7 @@ async def _run_generate_study_package(
         await progress_cb(
             "soul_mount",
             12,
-            f"已挂载《{soul_label}》与全球打印规范，正在并发启动 {max(1, total_tasks)} 个交付物子 Agent...",
+            f"已加载《{soul_label}》与 protocols.md 全局协议（作为 system 消息下发），正在并发启动 {max(1, total_tasks)} 个交付物子 Agent...",
         )
 
     study_notes_md = ""
@@ -886,20 +888,22 @@ async def _run_generate_study_package(
     papers_by_pid: Dict[str, QuizPaper] = {}
     mindmap_mermaid = ""
 
+    details_id = "key_knowledge_extraction" if ("key_knowledge_extraction" in items_set or d.scenario_type == "C_sprint") else "detailed_study_guide"
+
     async def _task_notes() -> None:
         nonlocal study_notes_md
         async with sem:
             router.check_cancelled()
             notes_label = (
                 "重要知识提取 (C1)"
-                if ("key_knowledge_extraction" in items_set or d.scenario_type == "C_sprint")
+                if details_id == "key_knowledge_extraction"
                 else "详细自学案（附带例题）(A1)"
             )
             if progress_cb:
                 await progress_cb(
                     "notes",
                     current_stage_state["percent"],
-                    f"正在生成【{notes_label}】（已随任务上传 {soul_label}）...",
+                    f"正在生成【{notes_label}】（挂载 {get_deliverable_soul_filename(d.scenario_type, details_id)} 任务书）...",
                 )
             notes_sys, notes_user = build_notes_prompts(
                 document_ir, selected_chapters, blueprint, context_text
@@ -918,7 +922,7 @@ async def _run_generate_study_package(
                 await progress_cb(
                     "cheatsheet",
                     current_stage_state["percent"],
-                    f"正在浓缩【考前速记表】（已随任务上传 {soul_label}）...",
+                    f"正在浓缩【考前速记表】（挂载 {get_deliverable_soul_filename(d.scenario_type, 'cheatsheet')} 任务书）...",
                 )
             cs_sys, cs_user = build_cheatsheet_prompts(
                 document_ir, selected_chapters, blueprint, context_text
@@ -937,7 +941,7 @@ async def _run_generate_study_package(
                 await progress_cb(
                     "quiz",
                     current_stage_state["percent"],
-                    f"正在命制《{paper_name}》（已随任务上传 {soul_label}）...",
+                    f"正在命制《{paper_name}》（挂载 {get_deliverable_soul_filename(d.scenario_type, pid)} 任务书）...",
                 )
             paper = await _generate_single_quiz_paper(
                 document_ir, selected_chapters, blueprint, context_text, pid, router
@@ -953,7 +957,7 @@ async def _run_generate_study_package(
                 await progress_cb(
                     "mindmap",
                     current_stage_state["percent"],
-                    f"正在构建 Mermaid 知识图谱 MindMap（已随任务上传 {soul_label}）...",
+                    f"正在构建 Mermaid 知识图谱 MindMap（挂载 {get_deliverable_soul_filename(d.scenario_type, 'mindmap')} 任务书）...",
                 )
             mm_sys, mm_user = build_mindmap_prompts(document_ir, selected_chapters, blueprint)
             res_mm, _ = await router.execute_text("mindmap_generation", mm_sys, mm_user)

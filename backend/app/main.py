@@ -91,7 +91,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 ALLOWED_ORIGINS = [
@@ -374,6 +374,7 @@ async def list_projects() -> List[ProjectSummary]:
                     project_id=ir.project_id,
                     project_type=ir.project_type,
                     filename=ir.filename,
+                    workspace_title=ir.workspace_title,
                     file_type=ir.file_type,
                     created_at=ir.created_at,
                     total_pages_or_slides=ir.total_pages_or_slides,
@@ -640,6 +641,23 @@ async def delete_project(project_id: str) -> Dict[str, str]:
         raise HTTPException(status_code=404, detail="项目不存在")
     shutil.rmtree(pdir, ignore_errors=True)
     return {"status": "deleted", "project_id": project_id}
+
+
+@app.post("/api/projects/{project_id}/rename")
+async def rename_project(project_id: str, payload: Dict[str, Any]) -> Dict[str, str]:
+    """Rename a workspace (display name only; the uploaded file keeps its own name)."""
+    title = str(payload.get("title") or "").strip()
+    if len(title) > 60:
+        raise HTTPException(status_code=400, detail="工作区名称最长 60 个字符")
+    doc_ir = _load_project_ir(project_id)
+    updated = doc_ir.model_copy(update={"workspace_title": title})
+    _save_project_ir(updated)
+    return {
+        "status": "renamed",
+        "project_id": project_id,
+        "workspace_title": title,
+        "display_name": title or doc_ir.filename,
+    }
 
 
 @app.delete("/api/projects/{project_id}/package")

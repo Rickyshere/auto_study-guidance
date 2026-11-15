@@ -1,3 +1,12 @@
+<!--
+  设计稿 / Design Document —— 不参与运行时。
+
+  运行时真正下发的 prompt 文本存放在 backend/app/workflows/souls/courseware/*.md
+  （见 backend/app/workflows/souls/README.md）。本文件保留最初的方案叙事，
+  其中部分条款已被有意废弃，废弃清单见 README 的「已明确废弃的旧条款」一节。
+  改这个文件不会改变任何生成结果。
+-->
+
 # 教材/课件（PDF/PPTX）多模态教辅生成引擎 - `soul.md`
 
 > **核心定位**：将用户上传的静态教材（PDF）或课堂课件（PPTX）解析为结构化知识图谱，并根据用户所处的学习阶段（A/B/C），动态切换 AI 的“教学人格（Persona）”、“知识颗粒度”与“交付物渲染引擎”，直接输出**达到出版与打印级标准（Print-Ready）**的教辅资料。

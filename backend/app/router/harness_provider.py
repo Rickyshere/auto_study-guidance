@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import queue
@@ -1214,26 +1215,63 @@ async def _run_cli_attempt(
     return out_text
 
 
+_EXECUTION_CONTRACT = (
+    "[Execution Mode & Output Contract]\n"
+    "You are running inside an automated non-interactive study-material generation pipeline.\n"
+    "1. Rely strictly on the document context and instructions below. Do NOT invoke filesystem search, shell commands, git, or web tools, and do NOT ask follow-up questions.\n"
+    "2. Output ONLY the final deliverable in the exact requested format (pure valid JSON when JSON is requested, or clean Markdown when Markdown is requested), with zero conversational preamble or closing remarks.\n"
+    "3. Prioritize high academic rigor: multi-step reasoning, misconception-grounded distractors, complete step-by-step explanations, and strict LaTeX formatting (`$...$` / `$$...$$`; double-escape all backslashes inside JSON strings)."
+)
+
+
 def _build_cli_prompt(
-    system_prompt: str,
-    user_prompt: str,
-    soul_file_path: Optional[Path] = None,
+    system_prompt: str = "",
+    user_prompt: str = "",
+    include_system: bool = True,
+    include_contract: bool = True,
 ) -> str:
-    """Wrap system and task prompts for non-interactive local CLI agents with strict format & quality rules."""
-    soul_header = ""
+    """Wrap system and task prompts for non-interactive local CLI agents.
+
+    When the CLI can carry a real `system` role (dsh via `--soul-file` / `DSH_SOUL_FILE`),
+    the caller passes `include_system=False, include_contract=False` and only the task is
+    inlined here — otherwise the same instructions would be sent twice (system + user).
+    """
+    blocks: List[str] = []
+    if include_contract:
+        blocks.append(_EXECUTION_CONTRACT)
+    if include_system and (system_prompt or "").strip():
+        blocks.append(f"[System Instructions]\n{system_prompt}")
+    blocks.append(f"[Task]\n{user_prompt}")
+    return "\n\n".join(blocks)
+
+
+def _compose_system_text(system_prompt: str, soul_file_path: Optional[Path]) -> str:
+    """Merge an optional soul.md file with the stage system prompt, de-duplicating overlaps."""
+    parts: List[str] = []
     if soul_file_path and soul_file_path.is_file():
         soul_raw = soul_file_path.read_text(encoding="utf-8", errors="replace").strip()
-        soul_header = f"[Uploaded Soul File: {soul_file_path.name}]\n{soul_raw}\n\n"
-    return (
-        "[Execution Mode & Output Contract]\n"
-        "You are running inside an automated non-interactive study-material generation pipeline.\n"
-        "1. Rely strictly on the document context and instructions below. Do NOT invoke filesystem search, shell commands, git, or web tools, and do NOT ask follow-up questions.\n"
-        "2. Output ONLY the final deliverable in the exact requested format (pure valid JSON when JSON is requested, or clean Markdown when Markdown is requested), with zero conversational preamble or closing remarks.\n"
-        "3. Prioritize high academic rigor: multi-step reasoning, misconception-grounded distractors, complete step-by-step explanations, and strict LaTeX formatting (`$...$` / `$$...$$`; double-escape all backslashes inside JSON strings).\n\n"
-        f"{soul_header}"
-        f"[System Instructions]\n{system_prompt}\n\n"
-        f"[Task]\n{user_prompt}"
-    )
+        if soul_raw:
+            parts.append(soul_raw)
+    stage_sys = (system_prompt or "").strip()
+    if stage_sys and not any(stage_sys in part for part in parts):
+        parts.append(stage_sys)
+    return "\n\n".join(parts).strip()
+
+
+def _materialize_system_soul(system_text: str) -> Optional[Path]:
+    """Write the composed system prompt to a content-addressed temp file so dsh can send it
+    as a real `system` message. Content-hashed, so repeated generations reuse one file."""
+    text = (system_text or "").strip()
+    if not text:
+        return None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    soul_dir = Path(tempfile.gettempdir()) / "asg_souls"
+    soul_dir.mkdir(parents=True, exist_ok=True)
+    path = soul_dir / f"soul_{digest}.md"
+    if not path.is_file():
+        path.write_text(text, encoding="utf-8")
+    return path
+
 
 
 async def run_cli_harness(
@@ -1245,11 +1283,15 @@ async def run_cli_harness(
     free_ai_auth: Optional[FreeAiAuthConfig] = None,
     soul_file_path: Optional[Path] = None,
 ) -> str:
-    """Invoke a local CLI Agent Harness with stream-json progress, cancellation, strict exit validation, and auto-retry."""
+    """Invoke a local CLI Agent Harness with stream-json progress, cancellation, strict exit validation, and auto-retry.
+
+    Role split: the composed system prompt (soul + stage instructions) is delivered as a real
+    `system` message when the CLI supports it (`dsh --soul-file` / `DSH_SOUL_FILE`), and the
+    user message carries only the task. CLIs without a system channel get everything inlined.
+    """
     if cancel_token:
         cancel_token.raise_if_cancelled()
 
-    combined_prompt = _build_cli_prompt(system_prompt, user_prompt, soul_file_path=soul_file_path)
     detected = {item.name: item for item in detect_installed_harnesses()}
     if free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
         preferred = "dsh"
@@ -1263,8 +1305,22 @@ async def run_cli_harness(
                 preferred = candidate  # type: ignore
                 break
 
+    system_text = _compose_system_text(system_prompt, soul_file_path)
+    soul_as_system_message = preferred == "dsh"
+    system_soul_path: Optional[Path] = None
+    if soul_as_system_message:
+        system_soul_path = _materialize_system_soul(f"{_EXECUTION_CONTRACT}\n\n{system_text}".strip())
+    if system_soul_path is not None:
+        # dsh 走 system role：用户消息里只留任务，避免同一段指令下发两次。
+        combined_prompt = _build_cli_prompt(user_prompt=user_prompt, include_system=False, include_contract=False)
+    else:
+        # 其它 CLI / 自定义命令没有 system 通道，整段内联。
+        combined_prompt = _build_cli_prompt(system_text, user_prompt)
+
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    if soul_file_path and soul_file_path.is_file():
+    if system_soul_path is not None:
+        env["DSH_SOUL_FILE"] = str(system_soul_path)
+    elif soul_file_path and soul_file_path.is_file():
         env["DSH_SOUL_FILE"] = str(soul_file_path)
     if preferred == "dsh" and free_ai_auth is not None and free_ai_auth.preferred_proxy_mode == "magpie_dsh":
         env["DSH_BASE_URL"] = (free_ai_auth.magpie_gateway_url or "http://127.0.0.1:3425/v1").strip()
@@ -1302,7 +1358,7 @@ async def run_cli_harness(
         if not item or not item.available or not item.executable_path:
             raise RuntimeError(f"本机未检测到 {preferred} CLI 可执行文件，请在设置中点击“一键安装”")
         cmd, expect_stream_json = _build_cli_command(
-            preferred, item.executable_path, soul_file_path=soul_file_path
+            preferred, item.executable_path, soul_file_path=system_soul_path or soul_file_path
         )
 
     try:

@@ -403,9 +403,8 @@ async def _run_original_exam_to_bank(
 
     data, label = await router.execute_json(
         "quiz_generation",
-        "你是高精准原卷题库结构化主编，请严格按 Uploaded Soul File 规范输出合法 JSON 对象。",
+        "你是高精准原卷题库结构化主编，请严格按任务书（soul_original_bank.md 渲染版）规范输出合法 JSON 对象。",
         prompt,
-        soul_file_path=soul_path,
     )
     if not isinstance(data, dict):
         raise RuntimeError(f"{label} 未返回有效的原卷题库 JSON 对象")
@@ -575,9 +574,8 @@ async def _run_four_agent_similar_paper(
     )
     raw_a, label_a = await router.execute_json(
         "requirement_negotiation",
-        "你是 Agent A 风格鉴赏师，请严格按照随任务上传的 soul_a.md 要求输出合法 JSON 对象。",
+        "你是 Agent A 风格鉴赏师，请严格按任务书（soul_a.md 渲染版）要求输出合法 JSON 对象。",
         prompt_a,
-        soul_file_path=soul_a_path,
     )
     style_profile = _coerce_style_profile(raw_a, user_requirements)
     style_json_str = style_profile.model_dump_json(indent=2)
@@ -615,9 +613,8 @@ async def _run_four_agent_similar_paper(
     )
     raw_b, label_b = await router.execute_json(
         "notes_and_cheatsheet",
-        "你是 Agent B 命题架构师，请严格按照随任务上传的 soul_b.md 要求输出合法 JSON 数组。",
+        "你是 Agent B 命题架构师，请严格按任务书（soul_b.md 渲染版）要求输出合法 JSON 数组。",
         prompt_b,
-        soul_file_path=soul_b_path,
     )
     blueprints = _coerce_blueprints(raw_b)
     if not blueprints:
@@ -704,9 +701,8 @@ async def _run_four_agent_similar_paper(
                 )
                 raw_c, _label_c = await router.execute_json(
                     "quiz_generation",
-                    "你是 Agent C 逆向命题专家，必须严格遵循 soul_c.md 的 Execution Steps 顺序输出合法 JSON。",
+                    "你是 Agent C 逆向命题专家，必须严格遵循任务书（soul_c.md 渲染版）的 Execution Steps 顺序输出合法 JSON。",
                     prompt_c,
-                    soul_file_path=soul_c_path,
                 )
                 if not isinstance(raw_c, dict):
                     defects_by_idx[idx] = (
@@ -857,9 +853,8 @@ async def _run_four_agent_similar_paper(
                 )
                 raw_d, _label_d = await router.execute_json(
                     "global_quality_audit",
-                    "你是 Agent D 盲测审题专家，仅依据题干与选项独立推导答案并严格按 soul_d.md 输出 JSON。",
+                    "你是 Agent D 盲测审题专家，仅依据题干与选项独立推导答案并严格按任务书（soul_d.md 渲染版）输出 JSON。",
                     prompt_d,
-                    soul_file_path=soul_d_path,
                 )
 
                 if not isinstance(raw_d, dict):
@@ -1230,7 +1225,6 @@ async def _run_exam_knowledge_notes_generation(
                     "严禁罗列命题流水账、严禁提及任何 Agent 名称或按题号抄答案。"
                 ),
                 prompt,
-                soul_file_path=soul_path,
             )
             cleaned = _strip_outer_markdown_fence(raw_md or "")
             if len(cleaned) >= 120:

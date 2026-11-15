@@ -1,17 +1,17 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   BookOpen,
+  Check,
   CheckSquare,
   FileText,
   FolderOpen,
-  Loader2,
+  Pencil,
+  Plus,
   RotateCcw,
-  ShieldCheck,
-  Sparkles,
   Square,
   Trash2,
-  UploadCloud,
+  X,
 } from 'lucide-react';
 import { DocumentIR, ProjectSummary } from '../types';
 import { SpringButton } from '../utils/springPhysics';
@@ -21,16 +21,13 @@ interface Props {
   selectedChapterIds: string[];
   onToggleChapter: (chapterId: string) => void;
   onSelectAllChapters: (all: boolean) => void;
-  onUploadFile: (file: File) => Promise<void>;
-  onLoadDemo: () => Promise<void>;
-  onUploadExamFile?: (file: File) => Promise<void>;
-  onLoadDemoExam?: () => Promise<void>;
-  uploadMode?: 'courseware' | 'exam_paper';
-  onChangeUploadMode?: (mode: 'courseware' | 'exam_paper') => void;
-  uploading: boolean;
   projects: ProjectSummary[];
   onOpenProject: (projectId: string) => void;
   onDeleteProject: (projectId: string, e: React.MouseEvent) => void;
+  /** 回到初始界面，新建另一份资料 */
+  onNewWorkspace: () => void;
+  /** 修改工作区显示名（空字符串表示回退为文件名） */
+  onRenameProject: (projectId: string, title: string) => void | Promise<void>;
   hasStudyPackage?: boolean;
   isWorkflowActive?: boolean;
   onReconfigureGenerate?: () => void;
@@ -42,201 +39,47 @@ export const UploadAndTocPanel: React.FC<Props> = ({
   selectedChapterIds,
   onToggleChapter,
   onSelectAllChapters,
-  onUploadFile,
-  onLoadDemo,
-  onUploadExamFile,
-  onLoadDemoExam,
-  uploadMode,
-  onChangeUploadMode,
-  uploading,
   projects,
   onOpenProject,
   onDeleteProject,
+  onNewWorkspace,
+  onRenameProject,
   hasStudyPackage,
   isWorkflowActive,
   onReconfigureGenerate,
   onBackToStudio,
 }) => {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const [localUploadMode, setLocalUploadMode] = useState<'courseware' | 'exam_paper'>('courseware');
-  const effectiveUploadMode = uploadMode ?? localUploadMode;
 
-  const setMode = (mode: 'courseware' | 'exam_paper') => {
-    setLocalUploadMode(mode);
-    onChangeUploadMode?.(mode);
+  useEffect(() => {
+    if (renamingId) inputRef.current?.focus();
+  }, [renamingId]);
+
+  const startRename = (project: ProjectSummary, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingId(project.project_id);
+    setRenameValue(project.workspace_title || project.filename);
   };
 
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    if (effectiveUploadMode === 'exam_paper' && onUploadExamFile) {
-      await onUploadExamFile(files[0]);
-      return;
-    }
-    await onUploadFile(files[0]);
+  const commitRename = async (projectId: string) => {
+    const next = renameValue.trim();
+    setRenamingId(null);
+    await onRenameProject(projectId, next);
   };
+
+  const cancelRename = () => setRenamingId(null);
 
   return (
     <div className="space-y-4">
-      {/* Step 1 Upload Dropzone */}
-      <div
-        data-glass-panel="true"
-        className="asg-card p-3.5 space-y-3"
-        style={{
-          borderColor: dragActive ? '#3B5BDB' : 'var(--border-default)',
-          backgroundColor: dragActive ? 'var(--brand-tint)' : 'var(--bg-surface)',
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragActive(true);
-        }}
-        onDragLeave={() => setDragActive(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragActive(false);
-          handleFiles(e.dataTransfer.files);
-        }}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-bold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
-            <UploadCloud className="w-4 h-4 text-[#3B5BDB]" />
-            {effectiveUploadMode === 'exam_paper' ? '上传试卷' : '资料上传'}
-          </span>
-          <span
-            className="text-[10.5px] px-2 py-0.5 rounded-full font-semibold"
-            style={{
-              backgroundColor: effectiveUploadMode === 'exam_paper' ? 'var(--brand-tint)' : 'var(--bg-subtle)',
-              color: effectiveUploadMode === 'exam_paper' ? '#3B5BDB' : 'var(--text-secondary)',
-            }}
-          >
-            {effectiveUploadMode === 'exam_paper' ? '强制 OXR' : 'PDF / PPTX / 图片'}
-          </span>
-        </div>
-
-        {/* Peer Entry Mode Switcher */}
-        <div
-          className="grid grid-cols-2 gap-1 p-1 rounded-xl border"
-          style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
-        >
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => setMode('courseware')}
-            className="px-2 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1"
-            style={{
-              backgroundColor: effectiveUploadMode === 'courseware' ? 'var(--bg-surface)' : 'transparent',
-              color: effectiveUploadMode === 'courseware' ? '#3B5BDB' : 'var(--text-secondary)',
-              boxShadow: effectiveUploadMode === 'courseware' ? '0 1px 2px rgba(15,23,42,0.06)' : 'none',
-              cursor: uploading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <BookOpen className="w-3 h-3" />
-            <span>上传课件</span>
-          </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => setMode('exam_paper')}
-            className="px-2 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1"
-            style={{
-              backgroundColor: effectiveUploadMode === 'exam_paper' ? 'var(--bg-surface)' : 'transparent',
-              color: effectiveUploadMode === 'exam_paper' ? '#3B5BDB' : 'var(--text-secondary)',
-              boxShadow: effectiveUploadMode === 'exam_paper' ? '0 1px 2px rgba(15,23,42,0.06)' : 'none',
-              cursor: uploading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <ShieldCheck className="w-3 h-3" />
-            <span>上传试卷</span>
-          </button>
-        </div>
-
-        <input
-          ref={inputRef}
-          type="file"
-          className="hidden"
-          accept={
-            effectiveUploadMode === 'exam_paper'
-              ? '.pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff'
-              : '.pdf,.pptx,.docx,.epub,.md,.txt,.png,.jpg,.jpeg,.webp'
-          }
-          onChange={(e) => {
-            handleFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
-
-        <SpringButton
-          springLabel={effectiveUploadMode === 'exam_paper' ? '上传试卷原卷' : '上传教材或课件'}
-          disabled={uploading}
-          onClick={() => inputRef.current?.click()}
-          className="w-full py-2.5 px-3 rounded-xl border border-dashed text-xs font-semibold flex items-center justify-center gap-1.5"
-          style={{
-            borderColor: '#3B5BDB',
-            color: '#3B5BDB',
-            backgroundColor: 'var(--brand-tint)',
-            cursor: uploading ? 'wait' : 'pointer',
-          }}
-        >
-          {uploading ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : effectiveUploadMode === 'exam_paper' ? (
-            <ShieldCheck className="w-3.5 h-3.5" />
-          ) : (
-            <UploadCloud className="w-3.5 h-3.5" />
-          )}
-          <span>
-            {uploading
-              ? effectiveUploadMode === 'exam_paper'
-                ? '正在执行强制 OXR 扫描...'
-                : '正在执行 OCR 与切片...'
-              : effectiveUploadMode === 'exam_paper'
-              ? '选择或拖拽试卷上传 (优先本地 OXR)'
-              : '选择或拖拽课件文件上传'}
-          </span>
-        </SpringButton>
-
-        {effectiveUploadMode === 'exam_paper' && onLoadDemoExam ? (
-          <SpringButton
-            springLabel="载入示例试卷"
-            disabled={uploading}
-            onClick={onLoadDemoExam}
-            className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-primary)',
-              cursor: uploading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
-            <span>载入示例试卷 (生理学期中卷)</span>
-          </SpringButton>
-        ) : (
-          <SpringButton
-            springLabel="加载示例PPTX"
-            disabled={uploading}
-            onClick={onLoadDemo}
-            className="w-full py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-primary)',
-              cursor: uploading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-[#3B5BDB]" />
-            <span>载入示例课件 (梯度下降讲义)</span>
-          </SpringButton>
-        )}
-      </div>
-
       {/* Chapter Scope Checklist */}
       {documentIr && (
         <div data-glass-panel="true" className="asg-card p-3.5 space-y-2.5">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="text-xs font-bold truncate" title={documentIr.filename}>
-                {documentIr.filename}
+                {documentIr.workspace_title || documentIr.filename}
               </div>
               <div className="text-[11px] mt-0.5 flex flex-wrap items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
                 <span>{documentIr.total_pages_or_slides} 页/张</span>
@@ -346,20 +189,46 @@ export const UploadAndTocPanel: React.FC<Props> = ({
         </div>
       )}
 
-      {/* History Projects */}
-      {projects.length > 0 && (
-        <div data-glass-panel="true" className="asg-card p-3.5 space-y-2">
-          <div className="text-[11px] font-bold flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+      {/* Workspaces */}
+      <div data-glass-panel="true" className="asg-card p-3.5 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
             <FolderOpen className="w-3.5 h-3.5 text-[#3B5BDB]" />
-            最近工作区 ({projects.length})
-          </div>
+            工作区
+            {projects.length > 0 && <span style={{ color: 'var(--text-muted)' }}>({projects.length})</span>}
+          </span>
+          <button
+            type="button"
+            onClick={onNewWorkspace}
+            title="新建工作区"
+            aria-label="新建工作区"
+            className="w-6 h-6 rounded-lg border flex items-center justify-center transition hover:opacity-80"
+            style={{ borderColor: '#3B5BDB', color: '#3B5BDB', backgroundColor: 'var(--brand-tint)' }}
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {projects.length === 0 ? (
+          <button
+            type="button"
+            onClick={onNewWorkspace}
+            className="w-full py-2.5 rounded-lg border border-dashed text-[11px] font-medium transition hover:opacity-80"
+            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+          >
+            还没有工作区，点击新建一份资料
+          </button>
+        ) : (
           <div className="space-y-1.5 max-h-48 overflow-y-auto">
             {projects.map((p) => {
               const isCurrent = documentIr?.project_id === p.project_id;
+              const isRenaming = renamingId === p.project_id;
               return (
                 <div
                   key={p.project_id}
-                  onClick={() => onOpenProject(p.project_id)}
+                  onClick={() => {
+                    if (!isRenaming) onOpenProject(p.project_id);
+                  }}
                   className="p-2 rounded-lg border cursor-pointer flex items-center justify-between gap-2 transition"
                   style={{
                     borderColor: isCurrent ? '#3B5BDB' : 'var(--border-default)',
@@ -367,37 +236,96 @@ export const UploadAndTocPanel: React.FC<Props> = ({
                   }}
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11.5px] font-semibold truncate flex items-center gap-1">
-                      <FileText className="w-3 h-3 shrink-0 text-[#3B5BDB]" />
-                      <span className="truncate">{p.filename}</span>
-                      {p.project_type === 'exam_paper' && (
-                        <span
-                          className="text-[9.5px] px-1 py-0.2 rounded font-bold shrink-0"
-                          style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                    {isRenaming ? (
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          ref={inputRef}
+                          value={renameValue}
+                          maxLength={60}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename(p.project_id);
+                            if (e.key === 'Escape') cancelRename();
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="min-w-0 flex-1 px-1.5 py-0.5 rounded border text-[11.5px] font-semibold outline-none"
+                          style={{
+                            borderColor: '#3B5BDB',
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          title="保存"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            commitRename(p.project_id);
+                          }}
+                          className="p-1 rounded hover:bg-[#3B5BDB]/10 text-[#3B5BDB]"
                         >
-                          试卷
+                          <Check className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          title="取消"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            cancelRename();
+                          }}
+                          className="p-1 rounded hover:bg-black/5"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[11.5px] font-semibold truncate flex items-center gap-1">
+                        <FileText className="w-3 h-3 shrink-0 text-[#3B5BDB]" />
+                        <span className="truncate" title={p.workspace_title ? `${p.workspace_title}（${p.filename}）` : p.filename}>
+                          {p.workspace_title || p.filename}
                         </span>
-                      )}
-                    </div>
-                    <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                        {p.project_type === 'exam_paper' && (
+                          <span
+                            className="text-[9.5px] px-1 py-0.2 rounded font-bold shrink-0"
+                            style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
+                          >
+                            试卷
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
                       {p.project_type === 'exam_paper' ? 'OXR 试卷 · ' : ''}
                       {p.chapter_count} 章 · {p.has_package ? '已生成资料' : '待生成'}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => onDeleteProject(p.project_id, e)}
-                    className="p-1 rounded hover:bg-rose-500/10 text-rose-500"
-                    title="删除项目"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
+                  {!isRenaming && (
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => startRename(p, e)}
+                        className="p-1 rounded hover:bg-[#3B5BDB]/10 text-[#3B5BDB]"
+                        title="重命名工作区"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => onDeleteProject(p.project_id, e)}
+                        className="p-1 rounded hover:bg-rose-500/10 text-rose-500"
+                        title="删除项目"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
