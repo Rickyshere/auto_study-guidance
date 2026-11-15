@@ -22,6 +22,7 @@ import { BlueprintNegotiator } from './components/BlueprintNegotiator';
 import { ExamPaperWorkbench, ExamProgressState } from './components/ExamPaperWorkbench';
 import { LiquidGlassCanvas, LiquidGlassOptics } from './components/LiquidGlassCanvas';
 import { OnboardingGuideModal } from './components/OnboardingGuideModal';
+import { OcrResultReview } from './components/OcrResultReview';
 import { DEFAULT_LIQUID_OPTICS, RouterConfigModal } from './components/RouterConfigModal';
 import { StudioTabKey, StudyStudio } from './components/StudyStudio';
 import { UpdatePushModal } from './components/UpdatePushModal';
@@ -132,6 +133,8 @@ export function App() {
   } | null>(null);
   const [examProgress, setExamProgress] = useState<ExamProgressState | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // OCR 结束后的「识别结果确认」步骤：上传完成就弹出，确认前不放行到生成
+  const [ocrReviewOpen, setOcrReviewOpen] = useState(false);
 
   // Free AI Proxy Authorization & Cloud Missing Prompt Modals
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -310,6 +313,8 @@ export function App() {
         prev ? { ...prev, active: false, percent: 100, message: `识别完成！共 ${detail.document_ir.chapters.length} 章节` } : null
       );
       setWorkflowStep(2);
+      // OCR 一结束就把识别原文交给用户核对，确认后才允许继续
+      setOcrReviewOpen(true);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -404,6 +409,7 @@ export function App() {
             }
           : null
       );
+      setOcrReviewOpen(true);
       await refreshProjects();
     } catch (e: any) {
       setOcrProgress(null);
@@ -473,6 +479,10 @@ export function App() {
       setUploadMode(detail.document_ir.project_type === 'exam_paper' ? 'exam_paper' : 'courseware');
       setBlueprint(detail.blueprint || null);
       setStudyPackage(detail.study_package || null);
+      // 上次没核对完就离开的项目，重新打开时继续把识别原文摆出来（老项目没有该字段，不打扰）
+      if (detail.document_ir.ocr_confirmed === false) {
+        setOcrReviewOpen(true);
+      }
       if (detail.study_package) {
         autoSwitchTabForPackage(detail.study_package);
       } else {
@@ -509,6 +519,7 @@ export function App() {
     setWorkflowStep(1);
     setActiveMainView('workflow');
     setUploadMode('courseware');
+    setOcrReviewOpen(false);
   };
 
   const handleRenameProject = async (projectId: string, title: string) => {
@@ -886,7 +897,7 @@ export function App() {
                   className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-full font-semibold shrink-0"
                   style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                 >
-                  v1.2.2
+                  v1.2.3
                 </span>
               </div>
               <div className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
@@ -1055,6 +1066,7 @@ export function App() {
                 onBackToStudio={() => {
                   if (studyPackage) autoSwitchTabForPackage(studyPackage);
                 }}
+                onOpenOcrReview={documentIr ? () => setOcrReviewOpen(true) : undefined}
               />
             </aside>
           )}
@@ -1075,7 +1087,7 @@ export function App() {
                       className="text-xs font-mono px-2 py-0.5 rounded-full font-bold"
                       style={{ backgroundColor: 'var(--brand-tint)', color: '#3B5BDB' }}
                     >
-                      v1.2.2
+                      v1.2.3
                     </span>
                   </div>
                   <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
@@ -1381,6 +1393,20 @@ export function App() {
             </div>
           </div>
         )}
+
+        <OcrResultReview
+          open={ocrReviewOpen && Boolean(documentIr)}
+          documentIr={documentIr}
+          onDocumentChanged={(ir) => setDocumentIr(ir)}
+          onConfirmed={(ir) => {
+            setDocumentIr(ir);
+            setOcrReviewOpen(false);
+          }}
+          onRequestReupload={() => {
+            setOcrReviewOpen(false);
+            handleNewWorkspace();
+          }}
+        />
 
         <RouterConfigModal
           open={configOpen}

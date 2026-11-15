@@ -199,6 +199,9 @@ export interface DocumentIR {
   raw_exam_text?: string;
   chapters: ChapterNode[];
   all_assets: AssetItem[];
+  /** OCR/解析结果是否已被用户人工核对确认（未确认时不允许进入生成） */
+  ocr_confirmed?: boolean;
+  ocr_confirmed_at?: string;
 }
 
 export interface DeliverableConfig {

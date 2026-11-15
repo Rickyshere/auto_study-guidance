@@ -12,6 +12,7 @@ from app.schemas import (
     QuizPaper,
     QuizQuestion,
     StudyBlueprint,
+    difficulty_label,
 )
 
 
@@ -172,7 +173,7 @@ class HeuristicStudyEngine:
         lines: List[str] = [
             f"# {document_ir.filename} · {doc_heading}",
             "",
-            f"> **生成模式**：`{blueprint.preset_name}` | **难度定位**：`{blueprint.target_difficulty}` | **覆盖章节**：{len(selected_chapters)} 章",
+            f"> **生成模式**：`{blueprint.preset_name}` | **难度定位**：`{difficulty_label(blueprint.target_difficulty)}` | **覆盖章节**：{len(selected_chapters)} 章",
             "",
         ]
         if blueprint.focus_topics:

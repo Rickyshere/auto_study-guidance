@@ -47,6 +47,7 @@ from app.router import (
     uninstall_cli_harness,
 )
 from app.schemas import (
+    ChapterTextUpdate,
     CloudConfig,
     DocumentIR,
     ExamGenerateRequest,
@@ -77,6 +78,7 @@ from app.workflows import (
     negotiate_study_blueprint,
 )
 from app.workflows.demo_project import create_demo_courseware_project
+from app.parsers.pdf_parser import extract_key_terms
 from app.workflows.generator import normalize_markdown_math, strip_document_images
 from app.workflows.section_practice import (
     extract_note_sections,
@@ -99,7 +101,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.2.2",
+    version="1.2.3",
 )
 
 ALLOWED_ORIGINS = [
@@ -135,6 +137,27 @@ def _load_project_ir(project_id: str) -> DocumentIR:
 def _save_project_ir(doc_ir: DocumentIR) -> None:
     pdir = get_project_dir(doc_ir.project_id)
     (pdir / "document_ir.json").write_text(doc_ir.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _refresh_document_index(doc_ir: DocumentIR) -> None:
+    """章节正文被人工订正后，重算字数/预览/关键术语与全文索引。
+
+    exam_paper 的 `raw_exam_text` 是试卷生成链路真正读取的正文，必须跟着重建，
+    否则用户改完文字、生成的卷子仍是旧文本。
+    """
+    for chapter in doc_ir.chapters:
+        chapter.char_count = len(chapter.content_text)
+        chapter.summary_preview = chapter.content_text[:180].replace("\n", " ")
+        chapter.key_terms = extract_key_terms(chapter.content_text)
+    if doc_ir.project_type == "exam_paper":
+        doc_ir.raw_exam_text = "\n\n".join(
+            f"[试卷第 {chapter.start_page} 页]\n{chapter.content_text}"
+            for chapter in doc_ir.chapters
+            if chapter.content_text.strip()
+        ).strip()
+        doc_ir.total_chars = len(doc_ir.raw_exam_text)
+    else:
+        doc_ir.total_chars = sum(chapter.char_count for chapter in doc_ir.chapters)
 
 
 def _load_blueprint(project_id: str) -> Optional[StudyBlueprint]:
@@ -670,6 +693,32 @@ async def rename_project(project_id: str, payload: Dict[str, Any]) -> Dict[str, 
         "workspace_title": title,
         "display_name": title or doc_ir.filename,
     }
+
+
+@app.patch("/api/projects/{project_id}/document/chapters/{chapter_id}", response_model=DocumentIR)
+async def update_chapter_text(project_id: str, chapter_id: str, payload: ChapterTextUpdate) -> DocumentIR:
+    """在「识别结果确认」里订正某一节正文（OCR 把公式/中英文认错时的人工修补口）。"""
+    doc_ir = _load_project_ir(project_id)
+    target = next((c for c in doc_ir.chapters if c.chapter_id == chapter_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"章节 {chapter_id} 不存在")
+    target.content_text = (payload.content_text or "").replace("\r\n", "\n").strip()
+    # 正文变了就必须重新确认，否则「我确认过的」和实际用于生成的文字对不上。
+    doc_ir.ocr_confirmed = False
+    doc_ir.ocr_confirmed_at = None
+    _refresh_document_index(doc_ir)
+    _save_project_ir(doc_ir)
+    return doc_ir
+
+
+@app.post("/api/projects/{project_id}/document/confirm", response_model=DocumentIR)
+async def confirm_document_ocr(project_id: str) -> DocumentIR:
+    """用户核对完 OCR 结果，确认无误后才允许继续生成资料。"""
+    doc_ir = _load_project_ir(project_id)
+    doc_ir.ocr_confirmed = True
+    doc_ir.ocr_confirmed_at = datetime.now().isoformat(timespec="seconds")
+    _save_project_ir(doc_ir)
+    return doc_ir
 
 
 @app.delete("/api/projects/{project_id}/package")

@@ -1,5 +1,6 @@
 import {
   CloudConfig,
+  DocumentIR,
   ExamDirectionType,
   ExamSoulSpec,
   FreeAiAuthConfig,
@@ -266,6 +267,22 @@ export const api = {
   deleteProject: (projectId: string) =>
     requestJson<{ status: string }>(`/api/projects/${projectId}`, { method: 'DELETE' }),
 
+  /** 「识别结果确认」里人工订正某一节正文（会重置确认状态） */
+  updateChapterText: (projectId: string, chapterId: string, contentText: string) =>
+    requestJson<DocumentIR>(
+      `/api/projects/${encodeURIComponent(projectId)}/document/chapters/${encodeURIComponent(chapterId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_text: contentText }),
+      }
+    ),
+
+  /** 用户确认 OCR/解析结果无误 */
+  confirmDocumentOcr: (projectId: string) =>
+    requestJson<DocumentIR>(`/api/projects/${encodeURIComponent(projectId)}/document/confirm`, {
+      method: 'POST',
+    }),
   renameProject: (projectId: string, title: string) =>
     requestJson<{ status: string; workspace_title: string; display_name: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/rename`,

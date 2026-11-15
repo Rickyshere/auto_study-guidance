@@ -33,6 +33,19 @@ OcrEngineType = Literal[
 ]
 VramTier = Literal["le_8gb", "gt_8_lt_48gb", "ge_48gb"]
 
+# 难度枚举的中文说法：打印件/正文里绝不能露出 exam_sprint 这种内部标识
+DIFFICULTY_LABELS: Dict[str, str] = {
+    "beginner": "入门",
+    "intermediate": "进阶",
+    "advanced": "拔高",
+    "exam_sprint": "考前冲刺",
+}
+
+
+def difficulty_label(value: str) -> str:
+    key = (value or "").strip()
+    return DIFFICULTY_LABELS.get(key, key)
+
 
 class CloudConfig(BaseModel):
     provider_label: str = "OpenAI 兼容接口"
@@ -199,6 +212,16 @@ class DocumentIR(BaseModel):
     raw_exam_text: str = ""
     chapters: List[ChapterNode] = Field(default_factory=list)
     all_assets: List[AssetItem] = Field(default_factory=list)
+    # OCR/解析结果是否已被用户人工核对确认。确认前前端不会放行到生成阶段，
+    # 避免用户拿到一份自己没看过、可能有识别错误的资料包。
+    ocr_confirmed: bool = False
+    ocr_confirmed_at: Optional[str] = None
+
+
+class ChapterTextUpdate(BaseModel):
+    """用户在「识别结果确认」里手动订正某一节的正文。"""
+
+    content_text: str = ""
 
 
 class DeliverableConfig(BaseModel):

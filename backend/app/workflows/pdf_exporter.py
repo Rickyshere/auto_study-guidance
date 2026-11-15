@@ -8,7 +8,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import pymupdf
 
-from app.schemas import DocumentIR, QuizQuestion, StudyPackage
+from app.schemas import DocumentIR, QuizQuestion, StudyPackage, difficulty_label
 from app.workflows.generator import (
     PAGE_BREAK_TOKEN,
     normalize_markdown_math,
@@ -953,7 +953,7 @@ def _build_quiz_exam_html(
     q_global_num = 0
 
     def _render_question_block(q: QuizQuestion, num: int) -> str:
-        prefix = f'<span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {html.escape(q.tier)}]</span> '
+        prefix = f'<span class="q-num">{num}.</span> <span class="q-meta">[{q.score}分 · {_format_inline_text(q.tier, None)}]</span> '
         if q.type == "mcq":
             # Add right-hand parenthesis if question lacks one
             paren_tail = (
@@ -1060,7 +1060,7 @@ def _build_quiz_answers_html(
     parts: List[str] = [
         f"""
         <div class="ans-header">
-          <div class="ans-header-title">{html.escape(quiz.title)} · 参考答案与教材溯源解析</div>
+          <div class="ans-header-title">{_format_inline_text(quiz.title, assets_dir)} · 参考答案与教材溯源解析</div>
           <div class="exam-subtitle">满分 {quiz.total_score} 分 ｜ 共 {len(ordered_qs)} 题 ｜ 供阅卷与自查核对使用</div>
         </div>
         """
@@ -1070,7 +1070,7 @@ def _build_quiz_answers_html(
     mcqs_indexed = [(i + 1, q) for i, q in enumerate(ordered_qs) if q.type == "mcq"]
     if mcqs_indexed:
         ths = "".join(f"<th>第{num}题</th>" for num, _ in mcqs_indexed)
-        tds = "".join(f"<td><strong>{html.escape(q.answer)}</strong></td>" for _, q in mcqs_indexed)
+        tds = "".join(f"<td><strong>{_format_inline_text(q.answer, assets_dir)}</strong></td>" for _, q in mcqs_indexed)
         parts.append(
             f"""
             <div class="part-title">选择题快速对答案总览</div>
@@ -1092,8 +1092,8 @@ def _build_quiz_answers_html(
         parts.append(
             f"""
             <div class="ans-item">
-              <div><strong>第 {idx} 题（{type_cn} · {q.score}分 · {html.escape(q.tier)}）</strong>
-                <span style="color:#475569;"> — 来源：{html.escape(q.source_chapter)} {html.escape(q.source_page)}</span>
+              <div><strong>第 {idx} 题（{type_cn} · {q.score}分 · {_format_inline_text(q.tier, assets_dir)}）</strong>
+                <span style="color:#475569;"> — 来源：{_format_inline_text(q.source_chapter, assets_dir)} {_format_inline_text(q.source_page, assets_dir)}</span>
               </div>
               <div style="margin-top:2pt;"><strong>参考答案：</strong>{_format_inline_text(q.answer, assets_dir)}</div>
               <div style="margin-top:2pt;"><strong>详细解析：</strong>{exp_html}</div>
@@ -1179,14 +1179,14 @@ def _build_study_guide_companion_examples_html(
         parts.append(
             f"""
             <div class="example-stem-box">
-              <strong>【配套演练 {idx}｜{type_cn} · {html.escape(q.tier)} · {q.score}分】</strong>
+              <strong>【配套演练 {idx}｜{type_cn} · {_format_inline_text(q.tier, assets_dir)} · {q.score}分】</strong>
               {_format_inline_text(q.question, assets_dir)}
               {opts_html}
             </div>
             <div class="example-sol-box">
               <div><strong>参考答案：</strong>{_format_inline_text(q.answer, assets_dir)}</div>
               <div style="margin-top:2pt;"><strong>思路与详细解析：</strong>{_format_inline_text(q.explanation, assets_dir)}
-                <span style="color:#64748b;">（溯源：{html.escape(q.source_chapter)} {html.escape(q.source_page)}）</span>
+                <span style="color:#64748b;">（溯源：{_format_inline_text(q.source_chapter, assets_dir)} {_format_inline_text(q.source_page, assets_dir)}）</span>
               </div>
             </div>
             """
@@ -1211,16 +1211,16 @@ def export_study_guide_pdf_bytes(
     masthead = f"""
     <div class="guide-masthead">
       <div class="guide-badge">AUTO STUDY GUIDANCE · 正式印刷版自主导学讲义（{"A3 双栏版" if paper_size == "a3" else "A4 讲义版"}）</div>
-      <div class="guide-title">{html.escape(bp.blueprint_title)}</div>
+      <div class="guide-title">{_format_inline_text(bp.blueprint_title, assets_dir)}</div>
     </div>
     <table class="guide-meta-table">
       <tr>
         <td><strong>原始教材</strong>：{html.escape(doc_ir.filename)}</td>
-        <td><strong>模板类型</strong>：{html.escape(bp.preset_name)}（难度：{html.escape(bp.target_difficulty)}）</td>
+        <td><strong>模板类型</strong>：{_format_inline_text(bp.preset_name, assets_dir)}（难度：{_format_inline_text(difficulty_label(bp.target_difficulty), assets_dir)}）</td>
       </tr>
       <tr>
-        <td><strong>覆盖章节</strong>：{html.escape(chap_str)}（共 {len(sel_chapters)} 章）</td>
-        <td><strong>核心聚焦</strong>：{html.escape(focus_str)}</td>
+        <td><strong>覆盖章节</strong>：{_format_inline_text(chap_str, assets_dir)}（共 {len(sel_chapters)} 章）</td>
+        <td><strong>核心聚焦</strong>：{_format_inline_text(focus_str, assets_dir)}</td>
       </tr>
     </table>
     """

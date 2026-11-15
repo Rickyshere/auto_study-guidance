@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  ScanText,
   Square,
   Trash2,
   X,
@@ -32,6 +33,8 @@ interface Props {
   isWorkflowActive?: boolean;
   onReconfigureGenerate?: () => void;
   onBackToStudio?: () => void;
+  /** 打开「识别结果确认」，让用户随时回看/订正 OCR 原文 */
+  onOpenOcrReview?: () => void;
 }
 
 export const UploadAndTocPanel: React.FC<Props> = ({
@@ -48,6 +51,7 @@ export const UploadAndTocPanel: React.FC<Props> = ({
   isWorkflowActive,
   onReconfigureGenerate,
   onBackToStudio,
+  onOpenOcrReview,
 }) => {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -101,10 +105,28 @@ export const UploadAndTocPanel: React.FC<Props> = ({
                     {documentIr.oxr_engine_used ? `${documentIr.oxr_engine_used} 已识别` : 'OCR 已识别'}
                   </span>
                 )}
+                {documentIr.ocr_confirmed === false && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                    style={{ backgroundColor: '#FEF3C7', color: '#B45309' }}
+                  >
+                    文字待确认
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
+          {onOpenOcrReview && (
+            <button
+              onClick={onOpenOcrReview}
+              className="w-full py-1.5 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1"
+              style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
+            >
+              <ScanText className="w-3 h-3" />
+              {documentIr.ocr_confirmed === false ? '核对识别文字（待确认）' : '查看 / 订正识别文字'}
+            </button>
+          )}
           {hasStudyPackage && (
             <div className="pt-1 border-t" style={{ borderColor: 'var(--border-default)' }}>
               {isWorkflowActive && onBackToStudio ? (
