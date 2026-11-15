@@ -392,6 +392,14 @@ export interface IncomingCommitItem {
 
 export interface UpdateStatusResponse {
   repo_available?: boolean;
+  /** false = 离线副本/无 Git 信息，无法热更新，界面需给出明确指引 */
+  can_hot_update?: boolean;
+  offline_reason?: string;
+  install_root?: string;
+  /** 前端 dist 过期或 exe 比源码旧：即使已是最新提交，也需要补齐构建 */
+  artifacts_stale?: boolean;
+  /** 远端改动涉及的补做项：pip / npm / exe */
+  pending_deps?: string[];
   supported?: boolean;
   branch?: string;
   current_branch?: string;

@@ -1,4 +1,4 @@
-"""v1.2.0 契约测试：soul 只从 md 文件读取，且 prompt 不再重复下发。
+"""v1.2.x 契约测试：soul 只从 md 文件读取，且 prompt 不再重复下发。
 
 这两条是「soul.md 到底有没有准确发给 agent」的回归护栏：
 * 若有人把 prompt 文本又硬编码回 Python，`test_soul_prompts_come_from_markdown_files` 会红；

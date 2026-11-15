@@ -268,14 +268,26 @@ export const api = {
 
   pullUpdateStream: (
     rebuildFrontend: boolean,
-    onProgress: (evt: StreamProgressEvent) => void
+    onProgress: (evt: StreamProgressEvent) => void,
+    options?: { installDeps?: boolean; rebuildDesktop?: boolean }
   ) =>
     postSseStream<{
       ok: boolean;
       updated?: boolean;
       message: string;
       status?: UpdateStatusResponse;
-    }>('/api/system/pull-update', { rebuild_frontend: rebuildFrontend }, onProgress),
+      steps?: { name: string; ok: boolean; detail: string }[];
+      needs_restart?: boolean;
+      exe_rebuild?: string;
+    }>(
+      '/api/system/pull-update',
+      {
+        rebuild_frontend: rebuildFrontend,
+        install_deps: options?.installDeps ?? true,
+        rebuild_desktop: options?.rebuildDesktop ?? true,
+      },
+      onProgress
+    ),
 
   negotiateBlueprint: (
     projectId: string,

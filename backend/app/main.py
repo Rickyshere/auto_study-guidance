@@ -91,7 +91,7 @@ from app.workflows.updater import (
 app = FastAPI(
     title="Auto Study Guidance API",
     description="智能课本/课件与试卷分析学习资料生成系统后端服务",
-    version="1.2.0",
+    version="1.2.1",
 )
 
 ALLOWED_ORIGINS = [
@@ -1105,14 +1105,24 @@ async def system_update_status(fetch: bool = Query(False)) -> Dict[str, Any]:
 async def system_pull_update(payload: Optional[Dict[str, Any]] = None) -> Any:
     body = payload or {}
     rebuild_frontend = bool(body.get("rebuild_frontend", True))
+    install_deps = bool(body.get("install_deps", True))
+    rebuild_desktop = bool(body.get("rebuild_desktop", True))
     stream = bool(body.get("stream", True))
     if stream:
         return StreamingResponse(
-            pull_and_apply_update_stream(rebuild_frontend=rebuild_frontend),
+            pull_and_apply_update_stream(
+                rebuild_frontend=rebuild_frontend,
+                install_deps=install_deps,
+                rebuild_desktop=rebuild_desktop,
+            ),
             media_type="text/event-stream",
         )
     last_result: Dict[str, Any] = {"ok": False}
-    async for chunk in pull_and_apply_update_stream(rebuild_frontend=rebuild_frontend):
+    async for chunk in pull_and_apply_update_stream(
+        rebuild_frontend=rebuild_frontend,
+        install_deps=install_deps,
+        rebuild_desktop=rebuild_desktop,
+    ):
         if chunk.startswith("data:"):
             try:
                 evt = json.loads(chunk.replace("data:", "", 1).strip())

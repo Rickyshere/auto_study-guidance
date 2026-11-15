@@ -32,15 +32,25 @@ export const UpdatePushModal: React.FC<Props> = ({
 }) => {
   const [pulling, setPulling] = useState(false);
   const [rebuildFrontend, setRebuildFrontend] = useState(true);
+  const [installDeps, setInstallDeps] = useState(true);
+  const [rebuildDesktop, setRebuildDesktop] = useState(true);
   const [progress, setProgress] = useState<{
     percent: number;
     stage: string;
     message: string;
   } | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [resultMsg, setResultMsg] = useState<{ ok: boolean; text: string; updated?: boolean } | null>(null);
+  const [resultMsg, setResultMsg] = useState<{
+    ok: boolean;
+    text: string;
+    updated?: boolean;
+    steps?: { name: string; ok: boolean; detail: string }[];
+    needsRestart?: boolean;
+  } | null>(null);
 
   if (!open) return null;
+
+  const hotUpdateDisabled = updateStatus?.can_hot_update === false;
 
   const handlePullNow = async () => {
     setPulling(true);
@@ -48,20 +58,26 @@ export const UpdatePushModal: React.FC<Props> = ({
     setLogs([]);
     setProgress({ percent: 5, stage: '准备连接远端', message: '正在检查并接收最新 Push...' });
     try {
-      const res = await api.pullUpdateStream(rebuildFrontend, (evt) => {
-        setProgress({
-          percent: evt.percent ?? 50,
-          stage: evt.stage || '执行中',
-          message: evt.message || '正在拉取新版本...',
-        });
-        if (evt.log_line) {
-          setLogs((prev) => [...prev, evt.log_line!]);
-        }
-      });
+      const res = await api.pullUpdateStream(
+        rebuildFrontend,
+        (evt) => {
+          setProgress({
+            percent: evt.percent ?? 50,
+            stage: evt.stage || '执行中',
+            message: evt.message || '正在拉取新版本...',
+          });
+          if (evt.log_line) {
+            setLogs((prev) => [...prev, evt.log_line!]);
+          }
+        },
+        { installDeps, rebuildDesktop }
+      );
       setResultMsg({
         ok: Boolean(res.ok),
         text: res.message,
         updated: res.updated,
+        steps: res.steps,
+        needsRestart: res.needs_restart,
       });
       await onRefreshStatus(false);
     } catch (e: any) {
@@ -140,6 +156,29 @@ export const UpdatePushModal: React.FC<Props> = ({
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Offline copy warning: no git repo -> hot update impossible, say it out loud */}
+          {hotUpdateDisabled && (
+            <div
+              style={{
+                borderRadius: '12px',
+                border: '1.5px solid #FCA5A5',
+                backgroundColor: '#FEF2F2',
+                padding: '12px 14px',
+                fontSize: '12px',
+                color: '#B91C1C',
+                lineHeight: 1.65,
+              }}
+            >
+              <strong>当前安装无法热更新</strong>
+              <div style={{ marginTop: '4px' }}>
+                {updateStatus?.offline_reason || '该目录不是 Git 仓库，无法从远端拉取更新。'}
+              </div>
+              <div style={{ marginTop: '4px', color: '#7F1D1D' }}>
+                请重新下载最新安装包覆盖安装，或改用 <code>git clone</code> 得到的目录再启动。
+              </div>
+            </div>
+          )}
+
           {/* Current vs Remote Status Card */}
           <div
             style={{
@@ -162,8 +201,12 @@ export const UpdatePushModal: React.FC<Props> = ({
                   color: updateStatus?.has_update ? '#15803D' : '#0F172A',
                 }}
               >
-                {updateStatus?.has_update
+                {updateStatus?.can_hot_update === false
+                  ? '⚠ 离线副本：无法从远端同步'
+                  : updateStatus?.has_update
                   ? `✨ 发现 ${updateStatus.behind_count} 条远端新 Push 提交可立即接收`
+                  : updateStatus?.artifacts_stale
+                  ? '✓ 代码已是最新，但构建产物需要补齐'
                   : '✓ 当前本地已与远端最新提交同步'}
               </span>
               <SpringButton
@@ -293,6 +336,40 @@ export const UpdatePushModal: React.FC<Props> = ({
               />
               <span>拉取新 Push 后自动编译前端 bundle（使桌面端 / 8000 端口立即生效）</span>
             </label>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                color: '#334155',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={installDeps}
+                onChange={(e) => setInstallDeps(e.target.checked)}
+              />
+              <span>依赖清单有变化时自动安装（pip / npm），否则新代码可能缺模块</span>
+            </label>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                color: '#334155',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={rebuildDesktop}
+                onChange={(e) => setRebuildDesktop(e.target.checked)}
+              />
+              <span>重建桌面外壳 exe（正在运行时会在关闭窗口后自动完成，新版本号需要它）</span>
+            </label>
           </div>
 
           {/* SSE Progress & Logs */}
@@ -378,6 +455,37 @@ export const UpdatePushModal: React.FC<Props> = ({
               )}
             </div>
           )}
+          {resultMsg?.steps && resultMsg.steps.length > 0 && (
+            <div
+              style={{
+                borderRadius: '12px',
+                border: '1px solid rgba(60, 60, 67, 0.12)',
+                backgroundColor: '#FFFFFF',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px',
+              }}
+            >
+              <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#0F172A' }}>更新步骤明细</div>
+              {resultMsg.steps.map((s, i) => (
+                <div
+                  key={`${s.name}-${i}`}
+                  style={{
+                    fontSize: '11.5px',
+                    display: 'flex',
+                    gap: '6px',
+                    alignItems: 'flex-start',
+                    color: s.ok ? '#047857' : '#B45309',
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>{s.ok ? '✓' : '⚠'}</span>
+                  <span style={{ fontWeight: 600, flexShrink: 0 }}>{s.name}</span>
+                  <span style={{ color: '#475569' }}>{s.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div
@@ -392,13 +500,13 @@ export const UpdatePushModal: React.FC<Props> = ({
         >
           <SpringButton
             springLabel="一键接收新Push"
-            disabled={pulling}
+            disabled={pulling || hotUpdateDisabled}
             onClick={handlePullNow}
             maxShift={5}
             style={{
               borderRadius: '999px',
               border: 'none',
-              backgroundColor: updateStatus?.has_update ? '#16A34A' : '#007AFF',
+              backgroundColor: hotUpdateDisabled ? '#94A3B8' : updateStatus?.has_update ? '#16A34A' : '#007AFF',
               color: '#FFFFFF',
               padding: '8px 18px',
               fontSize: '12.5px',
@@ -406,11 +514,17 @@ export const UpdatePushModal: React.FC<Props> = ({
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              cursor: pulling ? 'wait' : 'pointer',
+              cursor: pulling ? 'wait' : hotUpdateDisabled ? 'not-allowed' : 'pointer',
             }}
           >
             <DownloadCloud className="w-4 h-4" />
-            <span>{pulling ? '正在拉取并应用更新...' : '一键接收最新 Push 并热更新'}</span>
+            <span>
+              {pulling
+                ? '正在拉取并应用更新...'
+                : hotUpdateDisabled
+                ? '离线副本不支持热更新'
+                : '一键接收最新 Push 并完整热更新'}
+            </span>
           </SpringButton>
         </div>
       </div>
