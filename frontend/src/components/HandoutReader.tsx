@@ -21,6 +21,8 @@ interface Props {
   documentTitle: string;
   /** 打印模式：clean 纯净讲义 / cornell 带页边批注 */
   printMode: 'clean' | 'cornell';
+  /** 把当前批注条数回传给外层，用来决定「带笔记」相关按钮要不要出现 */
+  onAnnotationsChange?: (count: number) => void;
 }
 
 interface PillState {
@@ -138,6 +140,7 @@ export const HandoutReader: React.FC<Props> = ({
   studyMode,
   documentTitle,
   printMode,
+  onAnnotationsChange,
 }) => {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -154,6 +157,10 @@ export const HandoutReader: React.FC<Props> = ({
     () => `${projectId || 'p'}:${blockScope}:${markdown.length}`,
     [projectId, blockScope, markdown.length]
   );
+
+  useEffect(() => {
+    onAnnotationsChange?.(annotations.length);
+  }, [annotations.length, onAnnotationsChange]);
 
   // 1) 载入既有批注
   useEffect(() => {
@@ -481,100 +488,104 @@ export const HandoutReader: React.FC<Props> = ({
     setStatus('已取消这条高亮，可以重新划选');
   };
 
+  const hasSideContent = pinnedCards.length > 0 || liveCards.length > 0 || Boolean(busyAction);
+
   return (
     <div
       ref={wrapRef}
-      className={`handout-workspace ${printMode === 'cornell' ? 'print-mode-cornell' : 'print-mode-clean'}`}
+      className={`handout-workspace ${hasSideContent ? '' : 'no-cards'} ${printMode === 'cornell' ? 'print-mode-cornell' : 'print-mode-clean'}`}
     >
       <div className="handout-main" onMouseUp={handleSelection} onTouchEnd={handleSelection} onClick={handleBodyClick}>
+        <div className="handout-status-row no-print">
+          {!hasSideContent && (
+            <span className="handout-inline-hint">
+              <Sparkles className="w-3.5 h-3.5" />
+              划选正文任意一句，可以高亮、讲懂它、举栗子或当场考你一下。
+            </span>
+          )}
+          {status && <span className="handout-inline-status">{status}</span>}
+        </div>
         <div className="asg-academic-prose handout-body" ref={bodyRef}>
           <MathMarkdown>{markdown}</MathMarkdown>
         </div>
       </div>
 
-      <aside className="margin-sidecar-column no-print" aria-label="页边批注栏">
-        {pinnedCards.map((ann) => (
-          <div
-            key={ann.annotation_id}
-            className="margin-note-card is-pinned"
-            style={{ top: `${topFor(ann.annotation_id)}px` }}
-            onLoad={(e) => {
-              const h = (e.currentTarget as HTMLElement).offsetHeight;
-              setSideHeights((prev) => (prev[ann.annotation_id] === h ? prev : { ...prev, [ann.annotation_id]: h }));
-            }}
-          >
-            <div className="margin-card-head">
-              <span className="margin-card-title">{ann.margin_card.card_title || '页边批注'}</span>
-              <button type="button" className="margin-card-x" onClick={() => removeAnnotation(ann.annotation_id)} title="删除批注">
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-            {ann.anchor.exact_quote && <div className="margin-quote">「{ann.anchor.exact_quote.slice(0, 60)}」</div>}
-            <div className="margin-body">
-              <MathMarkdown inline>{ann.margin_card.ai_response_markdown || ''}</MathMarkdown>
-            </div>
-          </div>
-        ))}
-
-        {liveCards.map((card) => (
-          <div
-            key={card.id}
-            className="margin-note-card"
-            style={{ top: `${topFor(card.id)}px` }}
-            ref={(el) => {
-              if (!el) return;
-              const h = el.offsetHeight;
-              setSideHeights((prev) => (prev[card.id] === h ? prev : { ...prev, [card.id]: h }));
-            }}
-          >
-            <div className="margin-card-head">
-              <span className="margin-card-title">{card.title}</span>
-              <div className="margin-card-actions">
-                <button type="button" onClick={() => pinCard(card)} title="钉在页边（导出带笔记版时打印）">
-                  <Pin className="w-3 h-3" />
-                </button>
-                <button type="button" onClick={() => setLiveCards((prev) => prev.filter((c) => c.id !== card.id))} title="收起">
-                  <X className="w-3 h-3" />
+      {hasSideContent && (
+        <aside className="margin-sidecar-column no-print" aria-label="页边批注栏">
+          {pinnedCards.map((ann) => (
+            <div
+              key={ann.annotation_id}
+              className="margin-note-card is-pinned"
+              style={{ top: `${topFor(ann.annotation_id)}px` }}
+              onLoad={(e) => {
+                const h = (e.currentTarget as HTMLElement).offsetHeight;
+                setSideHeights((prev) => (prev[ann.annotation_id] === h ? prev : { ...prev, [ann.annotation_id]: h }));
+              }}
+            >
+              <div className="margin-card-head">
+                <span className="margin-card-title">{ann.margin_card.card_title || '页边批注'}</span>
+                <button type="button" className="margin-card-x" onClick={() => removeAnnotation(ann.annotation_id)} title="删除批注">
+                  <Trash2 className="w-3 h-3" />
                 </button>
               </div>
-            </div>
-            <div className="margin-body">
-              <MathMarkdown inline>{card.body}</MathMarkdown>
-            </div>
-            {card.quiz && (
-              <div className="margin-quiz">
-                <div className="margin-quiz-q">⚡ {card.quiz.question}</div>
-                {Object.entries(card.quiz.options || {}).map(([key, val]) => (
-                  <div key={key} className="margin-quiz-opt">
-                    <strong>{key}.</strong> {val}
-                  </div>
-                ))}
-                <div className="margin-quiz-a">答案：{card.quiz.answer}</div>
+              {ann.anchor.exact_quote && <div className="margin-quote">「{ann.anchor.exact_quote.slice(0, 60)}」</div>}
+              <div className="margin-body">
+                <MathMarkdown inline>{ann.margin_card.ai_response_markdown || ''}</MathMarkdown>
               </div>
-            )}
-          </div>
-        ))}
-
-        {busyAction && (
-          <div className="margin-note-card" style={{ top: '0px' }}>
-            <div className="margin-card-head">
-              <span className="margin-card-title">
-                <Loader2 className="w-3 h-3 animate-spin inline mr-1" />
-                Agent 5 正在写页边批注…
-              </span>
             </div>
-          </div>
-        )}
+          ))}
 
-        {status && <div className="margin-status">{status}</div>}
-        {pinnedCards.length === 0 && liveCards.length === 0 && !busyAction && (
-          <div className="margin-hint">
-            <Sparkles className="w-3.5 h-3.5" />
-            划选正文任意一句，可以高亮、讲懂它、举栗子或当场考你一下。
-          </div>
-        )}
-      </aside>
+          {liveCards.map((card) => (
+            <div
+              key={card.id}
+              className="margin-note-card"
+              style={{ top: `${topFor(card.id)}px` }}
+              ref={(el) => {
+                if (!el) return;
+                const h = el.offsetHeight;
+                setSideHeights((prev) => (prev[card.id] === h ? prev : { ...prev, [card.id]: h }));
+              }}
+            >
+              <div className="margin-card-head">
+                <span className="margin-card-title">{card.title}</span>
+                <div className="margin-card-actions">
+                  <button type="button" onClick={() => pinCard(card)} title="钉在页边（导出带笔记版时打印）">
+                    <Pin className="w-3 h-3" />
+                  </button>
+                  <button type="button" onClick={() => setLiveCards((prev) => prev.filter((c) => c.id !== card.id))} title="收起">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="margin-body">
+                <MathMarkdown inline>{card.body}</MathMarkdown>
+              </div>
+              {card.quiz && (
+                <div className="margin-quiz">
+                  <div className="margin-quiz-q">⚡ {card.quiz.question}</div>
+                  {Object.entries(card.quiz.options || {}).map(([key, val]) => (
+                    <div key={key} className="margin-quiz-opt">
+                      <strong>{key}.</strong> {val}
+                    </div>
+                  ))}
+                  <div className="margin-quiz-a">答案：{card.quiz.answer}</div>
+                </div>
+              )}
+            </div>
+          ))}
 
+          {busyAction && (
+            <div className="margin-note-card" style={{ top: '0px' }}>
+              <div className="margin-card-head">
+                <span className="margin-card-title">
+                  <Loader2 className="w-3 h-3 animate-spin inline mr-1" />
+                  Agent 5 正在写页边批注…
+                </span>
+              </div>
+            </div>
+          )}
+        </aside>
+      )}
       {pill && (
         <div className="selection-action-pill" style={{ left: `${pill.left}px`, top: `${pill.top}px` }}>
           <button type="button" title="黄色荧光笔" onClick={() => applyHighlight('AMBER_YELLOW', 'EXPLAIN_SIMPLE')}>

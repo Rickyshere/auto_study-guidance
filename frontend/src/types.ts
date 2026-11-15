@@ -416,6 +416,10 @@ export interface NoteSectionItem {
   markdown?: string;
   /** 是否强制「做完本节练习」才放行下一节；导览类小节为 false */
   practice_required?: boolean;
+  /** 后台生成还没结束 */
+  practice_pending?: boolean;
+  /** 后台生成失败的原因（模型额度等），前端提示「点此重试」 */
+  practice_error?: string | null;
   has_practice: boolean;
 }
 

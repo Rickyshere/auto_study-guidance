@@ -29,7 +29,8 @@ _SECTION_MARK_RE = re.compile(r"第\s*[0-9一二三四五六七八九十百]+\s*
 # 这类小节只用来导览/速查，读完就该放行，不该卡练习
 _OPTIONAL_TITLE_RE = re.compile(
     r"(学习地图|知识地图|思维导图|导览|导读|导学|学习目标|学习路线|使用说明|讲义说明|"
-    r"前言|引言|序言|绪论|目录|速查|公式表|知识清单|考点清单)"
+    r"前言|引言|序言|绪论|目录|速查|公式表|知识清单|考点清单|一页纸|"
+    r"例题|同步练习|随堂练习|课堂练习|习题|练习题|例题与训练)"
 )
 
 
@@ -55,8 +56,59 @@ _SKIP_TITLE_WORDS = (
 )
 
 
+def _sections_at_level(
+    lines: List[str], headings: List[Tuple[int, int, str]], level: int
+) -> List[Dict[str, Any]]:
+    """只按指定层级的标题切节，其它层级一律当正文。"""
+    nodes = [h for h in headings if h[0] == level]
+    out: List[Dict[str, Any]] = []
+    for order, (lvl, line_no, title) in enumerate(nodes):
+        if any(w in title for w in _SKIP_TITLE_WORDS):
+            continue
+        end_line = nodes[order + 1][1] if order + 1 < len(nodes) else len(lines)
+        body = "\n".join(lines[line_no + 1 : end_line])
+        body = re.sub(r"@@ASG_PAGE_BREAK@@", "", body).strip()
+        if len(body) < MIN_SECTION_CHARS:
+            continue
+        full = re.sub(r"@@ASG_PAGE_BREAK@@", "", "\n".join(lines[line_no:end_line])).strip()
+        out.append(
+            {
+                "title": title,
+                "level": lvl,
+                "markdown": full,
+                "excerpt": body[:EXCERPT_LIMIT],
+                "char_count": len(body),
+            }
+        )
+    return out
+
+
+def _choose_split_level(
+    lines: List[str], headings: List[Tuple[int, int, str]]
+) -> Tuple[List[Dict[str, Any]], int]:
+    """挑一个「像单元」的标题层级。
+
+    从最粗的层级往下试：切不出两节、或者切出来某一节独吞全文（说明这一层只有一个
+    大标题，讲义是按更低层级组织的，比如 C 模式把整章写成一个 H1 再用 H2 分块），
+    就再往下一层。这样 A 模式落在「第 N 节」，C 模式落在「考点 / 模块」那一层。
+    """
+    levels = sorted({h[0] for h in headings})
+    total_chars = max(1, sum(len(line) for line in lines))
+    fallback: Tuple[List[Dict[str, Any]], int] = ([], levels[0] if levels else 1)
+    for level in levels:
+        candidate = _sections_at_level(lines, headings, level)
+        if len(candidate) < 2:
+            continue
+        biggest = max(s["char_count"] for s in candidate)
+        if len(fallback[0]) < len(candidate):
+            fallback = (candidate, level)
+        if biggest / total_chars <= 0.7:
+            return candidate, level
+    return fallback
+
+
 def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
-    """把讲义 Markdown 切成「节」：优先 H1，其次 H2；忽略"参考答案"等尾部结构。
+    """把讲义 Markdown 切成「节」：自动挑层级，忽略"参考答案"等尾部结构。
 
     每一节同时带 `markdown`（标题 + 正文，前端按节渲染就用这一段，保证和分节练习
     一一对应）和 `practice_required`（导览类小节读完即可，不强制做题）。
@@ -82,32 +134,13 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
     if not headings:
         return []
 
-    min_level = min(h[0] for h in headings)
-    top = [h for h in headings if h[0] == min_level]
-    if len(top) < 2:
-        # 只有一两个 H1 时退化到 H2，让分节更有意义
-        top = [h for h in headings if h[0] <= min_level + 1]
+    raw_sections, _level = _choose_split_level(lines, headings)
 
     sections: List[Dict[str, Any]] = []
-    for order, (level, line_no, title) in enumerate(top):
-        if any(w in title for w in _SKIP_TITLE_WORDS):
-            continue
-        end_line = top[order + 1][1] if order + 1 < len(top) else len(lines)
-        body = "\n".join(lines[line_no + 1 : end_line])
-        body = re.sub(r"@@ASG_PAGE_BREAK@@", "", body).strip()
-        if len(body) < MIN_SECTION_CHARS:
-            continue
-        full = re.sub(r"@@ASG_PAGE_BREAK@@", "", "\n".join(lines[line_no:end_line])).strip()
-        sections.append(
-            {
-                "section_id": _slugify(title, len(sections)),
-                "title": title,
-                "level": level,
-                "markdown": full,
-                "excerpt": body[:EXCERPT_LIMIT],
-                "char_count": len(body),
-            }
-        )
+    for item in raw_sections:
+        item = dict(item)
+        item["section_id"] = _slugify(item["title"], len(sections))
+        sections.append(item)
         if len(sections) >= MAX_SECTIONS:
             break
 
@@ -122,14 +155,16 @@ def extract_note_sections(markdown: str) -> List[Dict[str, Any]]:
     rest_are_sections = sum(1 for s in rest if _SECTION_MARK_RE.search(s["title"])) >= max(
         1, len(rest) // 2
     )
-    doc_title_like = bool(re.search(r"第\s*[0-9一二三四五六七八九十百]+\s*[章篇部]", first["title"]))
+    doc_title_like = bool(
+        re.search(r"第\s*[0-9一二三四五六七八九十百]+\s*[章篇部]", first["title"])
+    ) and bool(re.search(r"(自学案|讲义|笔记|浓缩|梳理|总结|提取|解析)", first["title"]))
     if rest_are_sections and not _SECTION_MARK_RE.search(first["title"]) and doc_title_like:
         sections = rest
 
     has_section_marks = any(_SECTION_MARK_RE.search(s["title"]) for s in sections)
     for s in sections:
         if _OPTIONAL_TITLE_RE.search(s["title"]):
-            # 导学 / 知识地图 / 速查这类小节：读完就放行，不强制做题
+            # 导学 / 地图 / 速查 / 例题 / 同步练习：读完就放行，不强制做题
             s["practice_required"] = False
         elif has_section_marks:
             # 结构清晰的讲义：只给「第 N 节」正文出题

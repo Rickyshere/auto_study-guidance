@@ -67,6 +67,73 @@ def test_markdown_without_headings_yields_no_sections():
     assert extract_note_sections("只有一段没有标题的正文内容，长度随便多少都行。") == []
 
 
+C_MODE_NOTES = """# 第05章 分子荧光分析法 · 考前80/20必考核心浓缩
+
+## 0. 考前3分钟：底层原理一条线
+
+荧光就是分子吃光掉到最低跳板再发光跳下的过程，先记住这条线。
+
+## 1. 必考核心考点 Top 10
+
+### 考点1 荧光与磷光的产生
+
+单重态到三重态要经过体系间跨越，这一步是判断荧光还是磷光的分水岭。
+
+### 考点2 两种特征光谱
+
+激发光谱与发射光谱互为镜像，镜像关系来自振动能级结构相似。
+
+## 2. 必考母图挖空预警
+
+图5-1 基态与激发态示意图，考试常让你填箭头方向和能量高低。
+
+## 3. 全书核心公式一页纸汇总
+
+F = Kc，线性范围由吸光度上限决定，超过 0.05 就偏离。
+
+## 4. 零基础典型例题
+
+例题1：简述荧光与磷光的区别，答题要点是先说跃迁类型再说寿命。
+
+## 5. 同步练习（循序渐进）
+
+一、填空题：荧光效率的符号是 __________。
+
+## 6. 单元检测卷（30分钟，100分）
+
+一、填空（每空2分）：荧光猝灭的常见原因有 __________。
+
+# 参考答案与采分点
+
+## 同步练习答案
+
+A 组：1. φ_f 2. 磷光
+"""
+
+
+def test_c_mode_handout_splits_by_its_own_blocks_not_one_giant_section():
+    """C 模式讲义是「1. 考点块 / 2. 母图 / 3. 一页纸 …」而不是「第 N 节」，
+    以前整篇会被当成一节，现在要按它自己的分块切开。"""
+    sections = extract_note_sections(C_MODE_NOTES)
+    titles = [s["title"] for s in sections]
+    assert len(sections) >= 5
+    assert titles[0].startswith("0. 考前3分钟")
+    assert "1. 必考核心考点 Top 10" in titles
+    assert not any("参考答案" in t for t in titles)
+    # 每一节只带自己的正文，不把别的块吞进来
+    top10 = next(s for s in sections if s["title"].startswith("1. 必考核心考点"))
+    assert "考点1" in top10["markdown"] and "考点2" in top10["markdown"]
+    assert "母图挖空" not in top10["markdown"]
+
+
+def test_c_mode_read_only_blocks_do_not_force_practice():
+    sections = {s["title"]: s for s in extract_note_sections(C_MODE_NOTES)}
+    assert sections["3. 全书核心公式一页纸汇总"]["practice_required"] is False
+    assert sections["4. 零基础典型例题"]["practice_required"] is False
+    assert sections["5. 同步练习（循序渐进）"]["practice_required"] is False
+    assert sections["1. 必考核心考点 Top 10"]["practice_required"] is True
+
+
 # --------------------------------------------------------------- 分节练习预热
 
 

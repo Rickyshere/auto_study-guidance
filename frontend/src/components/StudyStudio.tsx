@@ -396,6 +396,8 @@ export const StudyStudio: React.FC<Props> = ({
   const [noteUnlocked, setNoteUnlocked] = useState(1);
   // 讲义打印形态：纯净版 / 带页边批注的康奈尔版
   const [handoutPrintMode, setHandoutPrintMode] = useState<'clean' | 'cornell'>('clean');
+  // 当前讲义已有的批注条数：没有批注就没有「带笔记」可言，顶部不放这个按钮
+  const [annotationCount, setAnnotationCount] = useState(0);
 
   // 逐节学习：节划分以后端切分结果为准（与分节练习共用 section_id，避免前后端各切一次对不上）
   const [noteSectionsReady, setNoteSectionsReady] = useState(false);
@@ -540,6 +542,9 @@ export const StudyStudio: React.FC<Props> = ({
         noteSections.find((s) => s.section_id === currentNoteSectionId)?.has_practice)
   );
   const currentPracticeDone = isSectionPracticeDone(currentNoteSectionId);
+  const currentPracticeError = currentNoteSectionId
+    ? noteSections.find((s) => s.section_id === currentNoteSectionId)?.practice_error || null
+    : null;
   const currentSectionReady =
     Boolean(noteReadAck[noteStepIdx]) && (!currentPracticeRequired || currentPracticeDone);
 
@@ -573,7 +578,10 @@ export const StudyStudio: React.FC<Props> = ({
 
   /** 还有需要出题的小节没拿到练习 → 后台正在准备，前端轮询等它 */
   const practicePending = useMemo(
-    () => noteSections.some((s) => s.practice_required !== false && !s.has_practice),
+    () =>
+      noteSections.some(
+        (s) => s.practice_required !== false && !s.has_practice && !s.practice_error
+      ),
     [noteSections]
   );
 
@@ -633,7 +641,7 @@ export const StudyStudio: React.FC<Props> = ({
     setCurrentCardIdx(0);
     if (sectionPapers[sectionId]) return;
     const meta = noteSections.find((s) => s.section_id === sectionId);
-    if (meta && !meta.has_practice) {
+    if (meta && !meta.has_practice && !meta.practice_error) {
       // 练习是后台预生成的，这里只等它准备好，不再让用户点一次「生成」
       setSectionBusyId(sectionId);
       return;
@@ -1171,7 +1179,8 @@ export const StudyStudio: React.FC<Props> = ({
                       margin: 0,
                     }}
                   >
-                    {isExamMode ? '知识点提取与讲解' : scenarioMeta.notesTitle} · {studyPackage.blueprint_used.blueprint_title}
+                    {isExamMode ? '知识点提取与讲解' : scenarioMeta.notesTitle} ·{' '}
+                    {documentIr?.filename || studyPackage.blueprint_used.blueprint_title}
                   </h2>
                 </div>
 
@@ -1197,27 +1206,31 @@ export const StudyStudio: React.FC<Props> = ({
                     <Download className="w-3.5 h-3.5" />
                     <span>{exportingPdfKey?.startsWith('study_guide-a4') ? '生成中...' : '导出 A4 PDF'}</span>
                   </SpringButton>
-                  <button
-                    type="button"
-                    onClick={() => setHandoutPrintMode(handoutPrintMode === 'clean' ? 'cornell' : 'clean')}
-                    style={secondaryToolbarBtnStyle}
-                    title="切换打印形态：纯净版 / 带页边批注的康奈尔版"
-                  >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>{handoutPrintMode === 'clean' ? '纯净版' : '康奈尔版'}</span>
-                  </button>
-                  <SpringButton
-                    springLabel="导出带笔记讲义PDF"
-                    disabled={Boolean(exportingPdfKey)}
-                    onClick={() => handleExportPdf('study_guide', 'a4', true, undefined, 'cornell')}
-                    className="asg-btn-spring"
-                    style={secondaryToolbarBtnStyle}
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>
-                      {exportingPdfKey?.startsWith('study_guide-a4-main-cornell') ? '生成中...' : '带笔记 PDF'}
-                    </span>
-                  </SpringButton>
+                  {annotationCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setHandoutPrintMode(handoutPrintMode === 'clean' ? 'cornell' : 'clean')}
+                      style={secondaryToolbarBtnStyle}
+                      title="切换打印形态：纯净版 / 带页边批注的康奈尔版"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>{handoutPrintMode === 'clean' ? '纯净版' : '康奈尔版'}</span>
+                    </button>
+                  )}
+                  {annotationCount > 0 && (
+                    <SpringButton
+                      springLabel="导出带笔记讲义PDF"
+                      disabled={Boolean(exportingPdfKey)}
+                      onClick={() => handleExportPdf('study_guide', 'a4', true, undefined, 'cornell')}
+                      className="asg-btn-spring"
+                      style={secondaryToolbarBtnStyle}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>
+                        {exportingPdfKey?.startsWith('study_guide-a4-main-cornell') ? '生成中...' : '带笔记 PDF'}
+                      </span>
+                    </SpringButton>
+                  )}
                   <SpringButton
                     springLabel="导出A3讲义"
                     disabled={Boolean(exportingPdfKey)}
@@ -1307,6 +1320,7 @@ export const StudyStudio: React.FC<Props> = ({
                         const secId = s.sectionId;
                         const secMeta = secId ? noteSections.find((x) => x.section_id === secId) : undefined;
                         const secReady = Boolean(secMeta?.has_practice || (secId && sectionPapers[secId]));
+                        const secFailed = Boolean(secMeta?.practice_error) && !secReady;
                         const isDone =
                           Boolean(noteReadAck[i]) && (!s.practiceRequired || isSectionPracticeDone(secId));
                         return (
@@ -1349,7 +1363,7 @@ export const StudyStudio: React.FC<Props> = ({
                             {!locked && s.practiceRequired && (
                               <button
                                 type="button"
-                                disabled={!secId || !secReady || sectionBusyId === secId}
+                                disabled={!secId || sectionBusyId === secId || (!secReady && !secFailed)}
                                 onClick={() => {
                                   if (!secId) return;
                                   onChangeTab('section_practice');
@@ -1364,19 +1378,22 @@ export const StudyStudio: React.FC<Props> = ({
                                   color: 'var(--asg-brand-primary)',
                                   fontSize: '11.5px',
                                   fontWeight: 700,
-                                  cursor: !secId || !secReady ? 'not-allowed' : 'pointer',
-                                  opacity: secReady ? 1 : 0.6,
+                                  cursor: !secId || (!secReady && !secFailed) ? 'not-allowed' : 'pointer',
+                                  opacity: secReady || secFailed ? 1 : 0.6,
                                 }}
+                                title={secFailed ? `练习没生成成功：${secMeta?.practice_error || ''}` : undefined}
                               >
                                 {!secId
                                   ? '无对应练习'
-                                  : !secReady
-                                    ? '准备中…'
-                                    : sectionBusyId === secId
-                                      ? '打开中…'
-                                      : isDone
-                                        ? '再做一次'
-                                        : '练本节'}
+                                  : secFailed
+                                    ? '重试生成'
+                                    : !secReady
+                                      ? '准备中…'
+                                      : sectionBusyId === secId
+                                        ? '打开中…'
+                                        : isDone
+                                          ? '再做一次'
+                                          : '练本节'}
                               </button>
                             )}
                           </div>
@@ -1390,13 +1407,14 @@ export const StudyStudio: React.FC<Props> = ({
               <div
                 className="asg-academic-prose"
                 ref={notesBodyRef}
-                style={{ maxWidth: '760px', margin: '0 auto' }}
+                style={{ maxWidth: '1180px', margin: '0 auto' }}
               >
                 {notesMode === 'full' ? (
                   <HandoutReader
                     markdown={studyPackage.study_notes_markdown || ''}
                     blockScope="full"
                     projectId={documentIr?.project_id}
+                    onAnnotationsChange={setAnnotationCount}
                     studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
                     documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
                     printMode={handoutPrintMode}
@@ -1411,6 +1429,7 @@ export const StudyStudio: React.FC<Props> = ({
                       markdown={currentNoteSection?.body || ''}
                       blockScope={currentNoteSectionId || `step-${noteStepIdx}`}
                       projectId={documentIr?.project_id}
+                      onAnnotationsChange={setAnnotationCount}
                       studyMode={studyPackage.blueprint_used?.scenario_type || 'A_beginner'}
                       documentTitle={documentIr?.workspace_title || documentIr?.filename || '讲义'}
                       printMode={handoutPrintMode}
@@ -1455,8 +1474,8 @@ export const StudyStudio: React.FC<Props> = ({
                             type="button"
                             disabled={
                               !currentNoteSectionId ||
-                              !currentSectionPaperReady ||
-                              sectionBusyId === currentNoteSectionId
+                              sectionBusyId === currentNoteSectionId ||
+                              (!currentSectionPaperReady && !currentPracticeError)
                             }
                             onClick={() => {
                               if (!currentNoteSectionId) return;
@@ -1468,18 +1487,23 @@ export const StudyStudio: React.FC<Props> = ({
                               borderRadius: '9999px',
                               fontSize: '12px',
                               fontWeight: 700,
-                              cursor: currentNoteSectionId && currentSectionPaperReady ? 'pointer' : 'not-allowed',
+                              cursor:
+                                currentNoteSectionId && (currentSectionPaperReady || currentPracticeError)
+                                  ? 'pointer'
+                                  : 'not-allowed',
                               border: '1px solid var(--asg-brand-primary)',
                               backgroundColor: 'var(--asg-brand-tint)',
                               color: 'var(--asg-brand-primary)',
-                              opacity: currentSectionPaperReady ? 1 : 0.6,
+                              opacity: currentSectionPaperReady || currentPracticeError ? 1 : 0.6,
                             }}
                           >
-                            {!currentSectionPaperReady
-                              ? '练习准备中…'
-                              : currentPracticeDone
+                            {currentSectionPaperReady
+                              ? currentPracticeDone
                                 ? '✓ 本节练习已完成'
-                                : '去做本节练习'}
+                                : '去做本节练习'
+                              : currentPracticeError
+                                ? '重试生成练习'
+                                : '练习准备中…'}
                           </button>
                         )}
                         <button
@@ -1512,7 +1536,9 @@ export const StudyStudio: React.FC<Props> = ({
                       {!currentSectionReady && (
                         <div style={{ fontSize: '11.5px', color: 'var(--asg-text-muted)' }}>
                           {currentPracticeRequired
-                            ? '读完并做完本节练习后，「进入下一节」会自动解锁；想先整体通读可切到「整份预览」。'
+                            ? currentPracticeError
+                              ? `本节练习没生成成功：${currentPracticeError}。可点「重试生成练习」，或先切到「整份预览」继续读。`
+                              : '读完后，本节练习会自动准备好，做完即可进入下一节；想先整体通读可切到「整份预览」。'
                             : '标记本节已读完后，「进入下一节」就会解锁；想先整体通读可切到「整份预览」。'}
                         </div>
                       )}
@@ -1541,7 +1567,11 @@ export const StudyStudio: React.FC<Props> = ({
                 </span>
                 <span style={{ fontSize: '12px', color: 'var(--asg-text-muted)' }}>
                   共 {practiceSections.length} 节
-                  {practicePending ? ' · 后台还在准备练习，就绪的节可以先做' : ' · 全部已就绪'}
+                  {practicePending
+                    ? ' · 后台还在准备练习，就绪的节可以先做'
+                    : practiceSections.some((s) => s.practice_error && !s.has_practice)
+                      ? ' · 有节没生成成功，可点该节点重试'
+                      : ' · 全部已就绪'}
                 </span>
               </div>
               {practiceSections.length === 0 ? (
@@ -1554,11 +1584,12 @@ export const StudyStudio: React.FC<Props> = ({
                     const isCur = s.section_id === activeSectionId;
                     const isBusy = sectionBusyId === s.section_id;
                     const ready = s.has_practice || Boolean(sectionPapers[s.section_id]);
+                    const failed = Boolean(s.practice_error) && !ready;
                     return (
                       <button
                         key={s.section_id}
                         type="button"
-                        disabled={isBusy || !ready}
+                        disabled={isBusy || (!ready && !failed)}
                         onClick={() => void openSectionPractice(s.section_id)}
                         style={{
                           padding: '6px 12px',
@@ -1568,12 +1599,20 @@ export const StudyStudio: React.FC<Props> = ({
                           color: isCur ? '#FFFFFF' : 'var(--asg-text-secondary)',
                           fontSize: '12px',
                           fontWeight: 600,
-                          cursor: !ready ? 'progress' : isBusy ? 'wait' : 'pointer',
-                          opacity: ready ? 1 : 0.6,
+                          cursor: !ready && !failed ? 'progress' : isBusy ? 'wait' : 'pointer',
+                          opacity: ready || failed ? 1 : 0.6,
                         }}
-                        title={ready ? '练习已就绪，点击直接开始' : '练习正在后台生成，稍等几秒'}
+                        title={
+                          ready
+                            ? '练习已就绪，点击直接开始'
+                            : failed
+                              ? `没生成成功：${s.practice_error}（点一下重试）`
+                              : '练习正在后台生成，稍等几秒'
+                        }
                       >
-                        {isBusy ? '打开中…' : `${i + 1}. ${s.title}${ready ? '' : ' · 准备中'}`}
+                        {isBusy
+                          ? '打开中…'
+                          : `${i + 1}. ${s.title}${ready ? '' : failed ? ' · 重试' : ' · 准备中'}`}
                       </button>
                     );
                   })}

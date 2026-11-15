@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 import json
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -912,6 +913,12 @@ async def ai_fill_blueprint_params(project_id: str, req: NegotiateRequest) -> St
 # 同一节只允许一个生成任务在跑；前端永远不用点「生成」，直接读缓存
 _SECTION_PRACTICE_JOBS: Dict[str, "asyncio.Task"] = {}
 _SECTION_PRACTICE_LOCKS: Dict[str, asyncio.Lock] = {}
+# 生成失败的原因（模型额度用完等）：留在列表里让前端提示「点此重试」，而不是假装还在准备
+_SECTION_PRACTICE_ERRORS: Dict[str, str] = {}
+# 失败后冷却，避免每 4 秒轮询一次就把额度打光
+_SECTION_PRACTICE_FAILED_AT: Dict[str, float] = {}
+# 失败后多久才允许后台自动重试（秒）；用户手动点重试不受限制
+SECTION_PRACTICE_RETRY_COOLDOWN = 180
 
 
 def _section_job_key(project_id: str, section_id: str) -> str:
@@ -973,11 +980,17 @@ async def _produce_section_practice(project_id: str, section_id: str) -> Dict[st
 
 
 async def _run_section_practice_job(project_id: str, section_id: str) -> Optional[Dict[str, Any]]:
+    key = _section_job_key(project_id, section_id)
     try:
-        return await _produce_section_practice(project_id, section_id)
+        paper = await _produce_section_practice(project_id, section_id)
+        _SECTION_PRACTICE_ERRORS.pop(key, None)
+        _SECTION_PRACTICE_FAILED_AT.pop(key, None)
+        return paper
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # 后台预热失败不影响讲义阅读
+        _SECTION_PRACTICE_ERRORS[key] = str(exc)[:240]
+        _SECTION_PRACTICE_FAILED_AT[key] = time.time()
         print(f"[section-practice] {project_id}/{section_id} 生成失败：{exc}", flush=True)
         return None
 
@@ -1003,7 +1016,16 @@ def prewarm_section_practices(project_id: str) -> int:
         sections, _fingerprint, cached = _section_practice_plan(project_id)
     except Exception:
         return 0
-    pending = [s["section_id"] for s in sections if s["section_id"] not in cached]
+    now = time.time()
+    pending = []
+    for s in sections:
+        if s["section_id"] in cached:
+            continue
+        key = _section_job_key(project_id, s["section_id"])
+        failed_at = _SECTION_PRACTICE_FAILED_AT.get(key)
+        if failed_at is not None and now - failed_at < SECTION_PRACTICE_RETRY_COOLDOWN:
+            continue  # 刚刚失败过（多半是模型额度），别在轮询里反复重试
+        pending.append(s["section_id"])
     for section_id in pending:
         _start_section_practice_job(project_id, section_id)
     return len(pending)
@@ -1030,6 +1052,8 @@ async def create_section_practice(project_id: str, payload: Dict[str, Any]) -> A
         return {"paper": cached[section_id], "cached": True}
 
     task = _start_section_practice_job(project_id, section_id)
+    # 用户手动重试不受冷却限制
+    _SECTION_PRACTICE_FAILED_AT.pop(_section_job_key(project_id, section_id), None)
     try:
         paper = await task
     except Exception as exc:
@@ -1064,6 +1088,9 @@ async def list_note_sections(project_id: str) -> Dict[str, Any]:
                 "has_practice": s["section_id"] in cached,
                 "practice_pending": s["section_id"] not in cached
                 and _section_job_running(project_id, s["section_id"]),
+                "practice_error": _SECTION_PRACTICE_ERRORS.get(
+                    _section_job_key(project_id, s["section_id"])
+                ),
             }
             for s in sections
         ],

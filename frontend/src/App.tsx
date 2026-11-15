@@ -819,6 +819,10 @@ export function App() {
     const isExamMode =
       documentIr.project_type === 'exam_paper' || Boolean(studyPackage.exam_pipeline_metadata);
 
+    // 讲义里至少有两个标题才谈得上「分节练习」
+    const sectionCount = ((studyPackage.study_notes_markdown || '').match(/^#{1,3}\s+\S/gm) || [])
+      .length;
+
     if (isExamMode) {
       const opts: SegmentedOption<MainViewKey>[] = [
         { value: 'notes', label: '知识点提取与讲解' },
@@ -846,8 +850,38 @@ export function App() {
       { value: 'flashcards', label: '知识点闪卡' },
       { value: 'cheatsheet', label: '考前速记' },
       { value: 'mindmap', label: 'MindMap' },
-    ];
+    ].filter((opt) => {
+      // 只保留真的有内容的一栏：没生成闪卡 / 速记 / 思维导图就不显示入口
+      switch (opt.value) {
+        case 'section_practice':
+          return sectionCount >= 2;
+        case 'quiz':
+          return [
+            studyPackage.quiz_paper,
+            ...(studyPackage.extra_quiz_papers || []),
+          ].some((p) => (p?.questions?.length || 0) > 0);
+        case 'flashcards':
+          return (
+            (studyPackage.flashcards?.length || 0) > 0 ||
+            (studyPackage.exam_pipeline_metadata?.question_blueprints?.length || 0) > 0
+          );
+        case 'cheatsheet':
+          return (studyPackage.cheatsheet_markdown || '').trim().length > 0;
+        case 'mindmap':
+          return (studyPackage.mindmap_mermaid || '').trim().length > 0;
+        default:
+          return true;
+      }
+    }) as SegmentedOption<MainViewKey>[];
   }, [documentIr, studyPackage, workflowStep, uploadMode]);
+
+  // 当前停留的那一栏如果因为没内容被隐藏了，自动回到讲义
+  useEffect(() => {
+    if (activeMainView === 'workflow') return;
+    if (!topbarOptions.some((opt) => opt.value === activeMainView)) {
+      setActiveMainView(topbarOptions[0]?.value || 'notes');
+    }
+  }, [topbarOptions, activeMainView]);
 
   const activeEngineText = () => {
     const s = providerStatus?.settings;

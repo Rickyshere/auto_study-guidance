@@ -28,3 +28,6 @@ WebView2Loader.dll
 backend/blobs/
 backend/data/cache/
 backend/tools/mineru_uploads/
+
+# pytest 临时目录（含测试截图，不入库）
+backend/.pytest_tmp/
